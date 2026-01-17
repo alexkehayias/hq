@@ -349,15 +349,16 @@ async fn main() -> Result<()> {
                 match readline {
                     Ok(line) => {
                         history.push(Message::new(Role::User, line.as_str()));
-                        let _ = chat(
+                        let resp = chat(
                             &tools,
                             &history,
                             &openai_api_hostname,
                             &openai_api_key,
                             &openai_model,
                         )
-                        .await;
-                        println!("{}", history.last().unwrap().content.clone().unwrap());
+                            .await?;
+                        let msg = resp.last().unwrap();
+                        println!("{}", msg.content.clone().unwrap());
                     }
                     Err(ReadlineError::Interrupted) => break,
                     Err(ReadlineError::Eof) => break,
