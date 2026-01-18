@@ -57,11 +57,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!metricsByName[event.name]) {
         metricsByName[event.name] = [];
       }
+      // Assume UTC time so we don't get off by one dates
+      const [year, month, day] = event.timestamp.split('-').map(Number);
+      const jsIsStupidMonth = month - 1;
+      const utcMidnight = new Date(year, jsIsStupidMonth, day);
       metricsByName[event.name].push({
-        timestamp: new Date(event.timestamp),
+        timestamp: utcMidnight,
         value: event.value,
       });
     }
+    console.log(metricsByName);
 
     // Sort each metric's events by timestamp
     for (const name in metricsByName) {
