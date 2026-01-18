@@ -284,21 +284,34 @@ pub async fn completion_stream(
     let mut content_buf = String::from("");
     let mut reasoning_buf: String = String::from("");
     let mut tool_calls: HashMap<usize, ToolCallFinal> = HashMap::new();
+    let mut buffer = String::new();
 
     'outer: while let Some(chunk) = stream.next().await {
         let chunk = chunk.expect("Invalid chunk");
-        let chunk_str = std::str::from_utf8(&chunk)?.trim();
+        let chunk_str = std::str::from_utf8(&chunk)?;
 
-        // Parse SSE events
-        if !chunk_str.starts_with("data: ") {
-            continue;
-        }
+        // Append new data to buffer. This is necessary to handle SSE
+        // fragmentation over HTTP/2 frames.
+        buffer.push_str(chunk_str);
 
-        // Sometimes there are multiple json rows within the same chunk
-        let rows: Vec<&str> = chunk_str.split("data: ").collect();
+        // Process all complete SSE events from the buffer
+        while let Some(event_end) = buffer.find("\n\n") {
+            let event_data = buffer[..event_end].to_string();
+            buffer = buffer[event_end + 2..].to_string();
 
-        for data_str in rows.into_iter() {
-            let data = data_str.trim();
+            // Skip empty events
+            let event_data = event_data.trim();
+            if event_data.is_empty() {
+                continue;
+            }
+
+            // Parse SSE events
+            if !event_data.starts_with("data: ") {
+                continue;
+            }
+
+            // Extract the JSON payload (after "data: ")
+            let data = event_data[6..].trim();
 
             // Data can sometimes be empty. Not sure why.
             if data.is_empty() {
