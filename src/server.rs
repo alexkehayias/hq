@@ -399,8 +399,8 @@ async fn index_notes(State(state): State<SharedState>) -> Result<Json<Value>, pu
         )
     };
     tokio::spawn(async move {
-        maybe_pull_and_reset_repo(&deploy_key_path, &notes_path);
-        let diff = diff_last_commit_files(&deploy_key_path, &notes_path);
+        maybe_pull_and_reset_repo(&deploy_key_path, &notes_path).await;
+        let diff = diff_last_commit_files(&deploy_key_path, &notes_path).await;
         let paths: Vec<PathBuf> = diff
             .iter()
             .map(|f| PathBuf::from(format!("{}/{}", &notes_path, f)))

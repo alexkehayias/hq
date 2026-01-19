@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
                 let repo_url = env::var("INDEXER_NOTES_REPO_URL")
                     .expect("Missing env var INDEXER_NOTES_REPO_URL");
                 println!("Cloning notes repo from git...");
-                maybe_clone_repo(&deploy_key_path, &repo_url, &notes_path);
+                maybe_clone_repo(&deploy_key_path, &repo_url, &notes_path).await;
                 println!("Finished cloning and resetting notes from git");
             }
         }
@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
             // Clone the notes repo
             let deploy_key_path = env::var("INDEXER_NOTES_DEPLOY_KEY_PATH")
                 .expect("Missing env var INDEXER_NOTES_REPO_URL");
-            maybe_pull_and_reset_repo(&deploy_key_path, &notes_path);
+            maybe_pull_and_reset_repo(&deploy_key_path, &notes_path).await;
 
             let db = indexer::db::async_db(&vec_db_path)
                 .await
