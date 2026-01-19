@@ -722,15 +722,17 @@ async fn record_metric(
 
     // Use serde serialization to convert the enum back into a string
     // to save to the database while still enforcing metric names can
-    // only be a `MetricName` variant
-    let name = json!(payload.name).to_string();
+    // only be a `MetricName` variant.
+    let name = serde_json::to_string(&payload.name)?;
+    // HACK: If you don't do this, the string will be double quoted!
+    let name_as_str: String = serde_json::from_str(&name)?;
     let value = payload.value;
 
     // Insert the metric event into the database
     db.call(move |conn| {
         conn.execute(
             "INSERT INTO metric_event (name, value) VALUES (?, ?)",
-            tokio_rusqlite::params![&name, &value],
+            tokio_rusqlite::params![&name_as_str, &value],
         )?;
         Ok(())
     })
@@ -763,20 +765,15 @@ async fn get_metrics(
             "#,
         )?;
 
-        let rows = stmt.query_map([limit_days as i64], |row| {
+        let events = stmt.query_map([limit_days], |row| {
             Ok(public::MetricEvent {
                 name: row.get(0)?,
                 timestamp: row.get(1)?,
                 value: row.get(2)?,
             })
-        })?;
-
-        let mut events = Vec::new();
-        for row in rows {
-            if let Ok(event) = row {
-                events.push(event);
-            }
-        }
+        })?
+            .filter_map(Result::ok)
+            .collect::<Vec<public::MetricEvent>>();
 
         Ok(events)
     })
