@@ -720,19 +720,14 @@ async fn record_metric(
 ) -> Result<StatusCode, public::ApiError> {
     let db = state.read().unwrap().db.clone();
 
-    // Use serde serialization to convert the enum back into a string
-    // to save to the database while still enforcing metric names can
-    // only be a `MetricName` variant.
-    let name = serde_json::to_string(&payload.name)?;
-    // HACK: If you don't do this, the string will be double quoted!
-    let name_as_str: String = serde_json::from_str(&name)?;
+    let name = payload.name;
     let value = payload.value;
 
     // Insert the metric event into the database
     db.call(move |conn| {
         conn.execute(
             "INSERT INTO metric_event (name, value) VALUES (?, ?)",
-            tokio_rusqlite::params![&name_as_str, &value],
+            tokio_rusqlite::params![&name, &value],
         )?;
         Ok(())
     })
