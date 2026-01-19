@@ -8,11 +8,11 @@ use crate::source::{note_filter, notes};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
-use std::fs;
 use std::hash::DefaultHasher;
 use tantivy::schema::*;
 use tantivy::{Index, IndexWriter, doc};
 use text_splitter::{ChunkConfig, TextSplitter};
+use tokio::fs;
 use tiktoken_rs::{CoreBPE, cl100k_base};
 use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
@@ -564,8 +564,9 @@ pub async fn index_all(
         // Arc the shared items so that it can be safely passed to the
         // async closure.
         let file_name = Arc::new(p.file_name().unwrap().to_str().unwrap().to_owned());
-        let content =
-            fs::read_to_string(p).unwrap_or_else(|err| panic!("Error {} file: {:?}", err, p));
+        let content = fs::read_to_string(&p)
+            .await
+            .unwrap_or_else(|err| panic!("Error {} file: {:?}", err, p));
         let note = Arc::new(parse_note(&content));
 
         let embeddings_model = Arc::clone(&embeddings_model);
