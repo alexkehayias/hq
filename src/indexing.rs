@@ -397,47 +397,49 @@ fn index_note_full_text(
     Ok(())
 }
 
-/// Index the embeddings for the note
+/// Generate embeddings for the note body chunks.
 /// Target model has N tokens or roughly a M sized context window
 ///
 /// Algorithm:
 /// 1. If the note text is less than N tokens, embed the whole thing
 /// 2. Otherwise, split the text into N tokens
 /// 3. Calculate the embeddings for each chunk
-/// 4. Store the embedding vector in the sqlite database
-/// 5. Include metadata about the source of the chunk for further
-///    retrieval and to avoid duplicating rows
-fn index_note_vector(
-    db: &mut rusqlite::Connection,
+fn generate_embeddings(
     embeddings_model: &TextEmbedding,
     splitter: &TextSplitter<CoreBPE>,
-    note: &Note,
+    note_body: &str,
+) -> Vec<Vec<f32>> {
+    splitter
+        .chunks(note_body)
+        .flat_map(|chunk| {
+            embeddings_model
+                .embed(vec![chunk], None)
+                .expect("Failed to generate embeddings")
+        })
+        .collect()
+}
+
+/// Store the embedding vector in the sqlite database.
+///
+/// Upserts are not currently supported by sqlite for virtual tables
+/// like the vector embeddings table so this attempts to insert a new
+/// row and then falls back to an update statement.
+fn store_embeddings_in_db(
+    db: &mut rusqlite::Connection,
+    note_id: &str,
+    embeddings: Vec<Vec<f32>>,
 ) -> Result<()> {
-    // Generate embeddings and store it in the DB
     let mut embedding_stmt =
         db.prepare("INSERT OR REPLACE INTO vec_items(note_meta_id, embedding) VALUES (?, ?)")?;
     let mut embedding_update_stmt =
         db.prepare("UPDATE vec_items set embedding = ? WHERE note_meta_id = ?")?;
 
-    let embeddings: Vec<Vec<Vec<f32>>> = splitter
-        .chunks(&note.body)
-        .map(|chunk| {
-            embeddings_model
-                .embed(vec![chunk], None)
-                .expect("Failed to generate embeddings")
-        })
-        .collect();
-
-    for embedding in embeddings.concat() {
-        // Upserts are not currently supported by sqlite for
-        // virtual tables like the vector embeddings table so this
-        // attempts to insert a new row and then falls back to an
-        // update statement.
+    for embedding in embeddings {
         embedding_stmt
-            .execute(tokio_rusqlite::params![note.id, embedding.as_bytes()])
+            .execute(tokio_rusqlite::params![note_id, embedding.as_bytes()])
             .unwrap_or_else(|_| {
                 embedding_update_stmt
-                    .execute(tokio_rusqlite::params![embedding.as_bytes(), note.id])
+                    .execute(tokio_rusqlite::params![embedding.as_bytes(), note_id])
                     .expect("Update failed")
             });
     }
@@ -568,24 +570,45 @@ pub async fn index_all(
             .await
             .unwrap_or_else(|err| panic!("Error {} file: {:?}", err, p));
         let note = Arc::new(parse_note(&content));
-
+        let note_id = note.id.clone();
+        let note_body = note.body.clone();
         let embeddings_model = Arc::clone(&embeddings_model);
         let splitter = Arc::clone(&splitter);
         let note_inner = Arc::clone(&note);
         let file_name_inner = Arc::clone(&file_name);
 
+        // First, store the note meta in the database
         db.call(move |conn| {
             index_note_meta(conn, &file_name_inner, &note_inner)
                 .expect("Upserting note meta failed");
-
-            if index_vector {
-                index_note_vector(conn, &embeddings_model, &splitter, &note_inner)
-                    .expect("Upserting note vector failed");
-            }
             Ok(())
         })
         .await
         .expect("DB work failed");
+
+        // If vector indexing is enabled, generate embeddings asynchronously
+        // and then store them in the database
+        if index_vector {
+            // Spawn a blocking task for the CPU-intensive embedding generation
+            let embeddings = tokio::task::spawn_blocking(move || {
+                generate_embeddings(
+                    &embeddings_model,
+                    &splitter,
+                    &note_body,
+                )
+            })
+            .await
+            .expect("Embedding generation task failed");
+
+            // Store the pre-generated embeddings in the database
+            db.call(move |conn| {
+                store_embeddings_in_db(conn, &note_id, embeddings)
+                    .expect("Storing embeddings in DB failed");
+                Ok(())
+            })
+            .await
+            .expect("DB work failed for embeddings");
+        }
 
         if index_full_text {
             index_note_full_text(&mut index_writer, &schema, &file_name, &note)
