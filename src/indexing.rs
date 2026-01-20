@@ -560,6 +560,9 @@ pub async fn index_all(
         .writer(50_000_000)
         .expect("Index writer failed to initialize");
 
+    // Collect all notes for full-text indexing (done in a single blocking task later)
+    let mut full_text_notes: Vec<(String, Note)> = Vec::new();
+
     for p in note_paths.iter() {
         tracing::debug!("Indexing note: {:?}", p);
 
@@ -610,15 +613,31 @@ pub async fn index_all(
             .expect("DB work failed for embeddings");
         }
 
+        // Collect note for batch full-text indexing later
         if index_full_text {
-            index_note_full_text(&mut index_writer, &schema, &file_name, &note)
-                .expect("Updating full text search failed");
+            full_text_notes.push(((*file_name).clone(), (*note).clone()));
         }
     }
 
-    index_writer
-        .commit()
-        .expect("Full text search index failed to commit");
+    // Perform all full-text indexing in a single blocking task
+    if index_full_text {
+        tokio::task::spawn_blocking(move || {
+            for (file_name, note) in full_text_notes.iter() {
+                index_note_full_text(
+                    &mut index_writer,
+                    &schema,
+                    file_name,
+                    note,
+                )
+                .expect("Updating full text search failed");
+            }
+
+            // Commit the index writer
+            index_writer.commit().expect("Full text search index failed to commit");
+        })
+        .await
+        .expect("Full-text indexing task failed");
+    }
 
     Ok(())
 }
