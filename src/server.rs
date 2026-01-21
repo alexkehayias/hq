@@ -40,12 +40,12 @@ use crate::config::AppConfig;
 use crate::google_search;
 use crate::gcal::list_events;
 use crate::indexing::index_all;
-use crate::jobs::{GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job};
+use crate::jobs::{DailyAgenda, GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job};
 use crate::notification::find_all_notification_subscriptions;
 use crate::openai::{BoxedToolCall, Message, Role};
 use crate::public::{self};
 use crate::tools::{
-    CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchTool, WebsiteViewTool
+    CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchTool, WebsiteViewTool, TasksDueTodayTool, TasksScheduledTodayTool
 };
 use crate::utils::DetectDisconnect;
 
@@ -155,6 +155,8 @@ async fn chat_handler(
         email_unread_tool,
         calendar_tool,
         website_view_tool,
+        tasks_due_today_tool,
+        tasks_scheduled_today_tool,
         openai_api_hostname,
         openai_api_key,
         openai_model,
@@ -175,6 +177,8 @@ async fn chat_handler(
             EmailUnreadTool::new(note_search_api_url),
             CalendarTool::new(note_search_api_url),
             WebsiteViewTool::new(),
+            TasksDueTodayTool::new(note_search_api_url),
+            TasksScheduledTodayTool::new(note_search_api_url),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
             openai_model.clone(),
@@ -188,6 +192,8 @@ async fn chat_handler(
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
         Box::new(website_view_tool),
+        Box::new(tasks_due_today_tool),
+        Box::new(tasks_scheduled_today_tool),
     ]);
     let user_msg = Message::new(Role::User, &payload.message);
 
@@ -905,6 +911,7 @@ pub async fn serve(
 
     // Run background jobs. Each job is spawned in it's own tokio task
     // in a loop.
+    spawn_periodic_job(app_config.clone(), db.clone(), DailyAgenda);
     spawn_periodic_job(app_config.clone(), db.clone(), ResearchMeetingAttendees);
     spawn_periodic_job(app_config, db, GenerateSessionTitles);
 

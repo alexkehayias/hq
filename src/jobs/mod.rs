@@ -3,6 +3,8 @@ use std::time::Duration;
 use tokio_rusqlite::Connection;
 
 use crate::config::AppConfig;
+pub mod daily_agenda;
+pub use daily_agenda::DailyAgenda;
 pub mod process_email;
 pub use process_email::ProcessEmail;
 pub mod research_meeting_attendees;
