@@ -10,6 +10,7 @@ use crate::{
     notification::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
+    agents::agenda,
 };
 
 #[derive(Debug)]
@@ -33,12 +34,12 @@ impl PeriodicJob for DailyAgenda {
             ..
         } = config;
 
+        let session_id = Uuid::new_v4().to_string();
+
         let Some(calendar_email) = calendar_email else {
-            tracing::warn!("calendar_email not configured, skipping daily agenda job");
+            tracing::error!("Calendar email isn't configured...");
             return;
         };
-
-        let session_id = Uuid::new_v4().to_string();
 
         // Create the session with an "agenda" tag
         if let Err(e) = get_or_create_session(db, &session_id, &["agenda"]).await {
@@ -46,7 +47,7 @@ impl PeriodicJob for DailyAgenda {
             return;
         }
 
-        let history = crate::agents::agenda::daily_agenda_response(
+        let history = agenda::daily_agenda_response(
             note_search_api_url,
             calendar_email,
             openai_api_hostname,

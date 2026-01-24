@@ -14,7 +14,7 @@ use indexer::db::{async_db, initialize_db, migrate_db};
 use indexer::fts::utils::recreate_index;
 use indexer::git::{maybe_clone_repo, maybe_pull_and_reset_repo};
 use indexer::indexing::index_all;
-use indexer::jobs::{GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees};
+use indexer::jobs::{GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees, DailyAgenda};
 use indexer::openai::{Message, Role, ToolCall};
 use indexer::search::search_notes;
 use indexer::server;
@@ -30,6 +30,7 @@ enum JobId {
     ProcessEmail,
     ResearchMeetingAttendees,
     GenerateSessionTitles,
+    DailyAgenda,
 }
 
 impl ServiceKind {
@@ -494,6 +495,7 @@ async fn main() -> Result<()> {
                 JobId::ProcessEmail => Box::new(ProcessEmail),
                 JobId::ResearchMeetingAttendees => Box::new(ResearchMeetingAttendees),
                 JobId::GenerateSessionTitles => Box::new(GenerateSessionTitles),
+                JobId::DailyAgenda => Box::new(DailyAgenda),
             };
 
             println!("Running job: {:?}", id);
