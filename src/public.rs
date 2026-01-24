@@ -15,6 +15,10 @@ pub struct ApiError(anyhow::Error);
 /// Convert `AppError` into an Axum compatible response.
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Always log the error
+        tracing::error!("{}", self.0);
+
+        // Respond with an error status
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Something went wrong: {}", self.0),

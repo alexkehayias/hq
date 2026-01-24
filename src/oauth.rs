@@ -71,7 +71,7 @@ pub async fn refresh_access_token(
     let status = res.status();
     let text = res.text().await.unwrap_or_default();
     if !status.is_success() {
-        anyhow::bail!("Token refresh failed: {} ({})", status, text);
+        return Err(anyhow::anyhow!("Token refresh failed: {} ({})", status, text));
     }
 
     let mut token: TokenResponse = serde_json::from_str(&text)?;
