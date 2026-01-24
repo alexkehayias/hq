@@ -194,31 +194,8 @@ async fn main() -> Result<()> {
             }
         }
         Some(Command::Serve { host, port }) => {
-            let note_search_api_url = env::var("INDEXER_NOTE_SEARCH_API_URL")
-                .unwrap_or(format!("http://{}:{}", host, port));
-            let searxng_api_url = env::var("INDEXER_SEARXNG_API_URL")
-                .unwrap_or(format!("http://{}:{}", host, "8080"));
-            let gmail_api_client_id =
-                std::env::var("INDEXER_GMAIL_CLIENT_ID").expect("Missing INDEXER_GMAIL_CLIENT_ID");
-            let gmail_api_client_secret = std::env::var("INDEXER_GMAIL_CLIENT_SECRET")
-                .expect("Missing INDEXER_GMAIL_CLIENT_SECRET");
-            let calendar_email = std::env::var("INDEXER_CALENDAR_EMAIL").ok();
-
-            server::serve(
-                host.clone(),
-                port,
-                notes_path.clone(),
-                index_path,
-                vec_db_path,
-                deploy_key_path,
-                vapid_key_path,
-                note_search_api_url,
-                searxng_api_url,
-                gmail_api_client_id,
-                gmail_api_client_secret,
-                calendar_email,
-            )
-            .await;
+            let config = AppConfig::default();
+            server::serve(host, port, config).await;
         }
         Some(Command::Index {
             all,
@@ -459,37 +436,10 @@ async fn main() -> Result<()> {
                 .with(tracing_subscriber::fmt::layer())
                 .init();
 
-            let db = async_db(&vec_db_path)
+            let config = AppConfig::default();
+            let db = async_db(&config.vec_db_path)
                 .await
                 .expect("Failed to connect to db");
-
-            let note_search_api_url = env::var("INDEXER_NOTE_SEARCH_API_URL")
-                .unwrap_or(format!("http://127.0.0.1:2222"));
-            let searxng_api_url = env::var("INDEXER_SEARXNG_API_URL")
-                .unwrap_or("http://127.0.0.1:8080".to_string());
-
-            let config = AppConfig {
-                notes_path,
-                index_path,
-                deploy_key_path: env::var("INDEXER_NOTES_DEPLOY_KEY_PATH")
-                    .expect("Missing INDEXER_NOTES_DEPLOY_KEY_PATH"),
-                vapid_key_path: env::var("INDEXER_VAPID_KEY_PATH")
-                    .expect("Missing INDEXER_VAPID_KEY_PATH"),
-                note_search_api_url,
-                searxng_api_url,
-                gmail_api_client_id: env::var("INDEXER_GMAIL_CLIENT_ID")
-                    .expect("Missing INDEXER_GMAIL_CLIENT_ID"),
-                gmail_api_client_secret: env::var("INDEXER_GMAIL_CLIENT_SECRET")
-                    .expect("Missing INDEXER_GMAIL_CLIENT_SECRET"),
-                openai_model: env::var("INDEXER_LOCAL_LLM_MODEL")
-                    .unwrap_or_else(|_| "gpt-4.1-mini".to_string()),
-                openai_api_hostname: env::var("INDEXER_LOCAL_LLM_HOST")
-                    .unwrap_or_else(|_| "https://api.openai.com".to_string()),
-                openai_api_key: env::var("OPENAI_API_KEY")
-                    .unwrap_or_else(|_| "thiswontworkforopenai".to_string()),
-                system_message: String::new(),
-                calendar_email: env::var("INDEXER_CALENDAR_EMAIL").ok(),
-            };
 
             let job: Box<dyn PeriodicJob> = match id {
                 JobId::ProcessEmail => Box::new(ProcessEmail),

@@ -688,11 +688,19 @@ async fn calendar_handler(
 }
 
 async fn web_search(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Query(params): Query<public::WebSearchParams>,
 ) -> Result<Json<public::WebSearchResponse>, public::ApiError> {
-    let api_key = std::env::var("INDEXER_GOOGLE_SEARCH_API_KEY")?;
-    let cx_id = std::env::var("INDEXER_GOOGLE_SEARCH_CX_ID")?;
+
+    let (api_key, cx_id) = {
+        let shared_state = state.read().expect("Unable to read share state");
+        let AppConfig {
+            google_search_api_key,
+            google_search_cx_id,
+            ..
+        } = &shared_state.config;
+        (google_search_api_key.clone(), google_search_cx_id.clone())
+    };
 
     let items = google_search::search_google(
         &params.query,
@@ -840,16 +848,7 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
 pub async fn serve(
     host: String,
     port: String,
-    notes_path: String,
-    index_path: String,
-    vec_db_path: String,
-    deploy_key_path: String,
-    vapid_key_path: String,
-    note_search_api_url: String,
-    searxng_api_url: String,
-    gmail_api_client_id: String,
-    gmail_api_client_secret: String,
-    calendar_email: Option<String>,
+    config: AppConfig,
 ) {
     tracing_subscriber::registry()
         .with(
@@ -866,37 +865,11 @@ pub async fn serve(
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let db = async_db(&vec_db_path)
+    let db = async_db(&config.vec_db_path)
         .await
         .expect("Failed to connect to async db");
 
-    // Get OpenAI API configuration from environment variables or use defaults
-    let openai_api_hostname =
-        env::var("INDEXER_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
-    let openai_api_key =
-        env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
-    let openai_model =
-        env::var("INDEXER_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
-
-    let system_message = env::var("INDEXER_SYSTEM_MESSAGE")
-        .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
-
-    let app_config = AppConfig {
-        notes_path,
-        index_path,
-        deploy_key_path,
-        vapid_key_path,
-        note_search_api_url: note_search_api_url.clone(),
-        searxng_api_url,
-        gmail_api_client_id,
-        gmail_api_client_secret,
-        openai_api_hostname,
-        openai_api_key,
-        openai_model,
-        system_message,
-        calendar_email,
-    };
-    let app_state = AppState::new(db.clone(), app_config.clone());
+    let app_state = AppState::new(db.clone(), config.clone());
     let shared_state = Arc::new(RwLock::new(app_state));
     let app = app(Arc::clone(&shared_state));
 
@@ -911,9 +884,9 @@ pub async fn serve(
 
     // Run background jobs. Each job is spawned in it's own tokio task
     // in a loop.
-    spawn_periodic_job(app_config.clone(), db.clone(), DailyAgenda);
-    spawn_periodic_job(app_config.clone(), db.clone(), ResearchMeetingAttendees);
-    spawn_periodic_job(app_config, db, GenerateSessionTitles);
+    spawn_periodic_job(config.clone(), db.clone(), DailyAgenda);
+    spawn_periodic_job(config.clone(), db.clone(), ResearchMeetingAttendees);
+    spawn_periodic_job(config, db, GenerateSessionTitles);
 
     axum::serve(listener, app).await.unwrap();
 }
