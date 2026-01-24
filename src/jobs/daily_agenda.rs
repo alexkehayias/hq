@@ -5,12 +5,12 @@ use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
+    agents::agenda,
     chat::{get_or_create_session, insert_chat_message},
     config::AppConfig,
     notification::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    agents::agenda,
 };
 
 #[derive(Debug)]

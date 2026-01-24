@@ -37,7 +37,8 @@ impl ToolCall for WebSearchTool {
                 ("query", &fn_args.query),
                 ("limit", &fn_args.limit.to_string()),
             ],
-        ).expect("Invalid URL");
+        )
+        .expect("Invalid URL");
 
         let resp: Value = reqwest::Client::new()
             .get(url.as_str())
@@ -61,7 +62,7 @@ impl WebSearchTool {
         let function = Function {
             name: String::from("web_search"),
             description: String::from(
-                "Search the web for a term and return up to `limit` results."
+                "Search the web for a term and return up to `limit` results.",
             ),
             parameters: Parameters {
                 r#type: String::from("object"),
@@ -73,7 +74,7 @@ impl WebSearchTool {
                     limit: Property {
                         r#type: String::from("integer"),
                         description: String::from(
-                            "Maximum number of results to return (default 10)."
+                            "Maximum number of results to return (default 10).",
                         ),
                     },
                 },

@@ -1,10 +1,10 @@
+use axum::response::sse::Event;
+use futures_util::Stream;
 use std::{
     convert::Infallible,
     pin::Pin,
     task::{Context, Poll},
 };
-use futures_util::Stream;
-use axum::response::sse::Event;
 
 use tokio::sync::broadcast;
 

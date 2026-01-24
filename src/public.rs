@@ -1,11 +1,14 @@
 //! Public API types
 
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use crate::openai::Message;
 use axum::response::{IntoResponse, Response};
 use http::StatusCode;
-use rusqlite::{types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef}, ToSql};
+use rusqlite::{
+    ToSql,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
+};
 use serde::{Deserialize, Serialize};
 
 // Errors
@@ -214,7 +217,9 @@ pub struct WebSearchParams {
     pub limit: u8,
 }
 
-fn default_web_limit() -> u8 { 3 }
+fn default_web_limit() -> u8 {
+    3
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct WebSearchResult {
@@ -241,7 +246,7 @@ pub struct ChatSession {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MetricName {
     #[serde(rename = "token-count")]
-    TokenCount
+    TokenCount,
 }
 
 impl ToSql for MetricName {

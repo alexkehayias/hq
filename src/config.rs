@@ -28,29 +28,31 @@ impl Default for AppConfig {
         let index_path = format!("{}/index", storage_path);
         let notes_path = format!("{}/notes", storage_path);
         let vec_db_path = format!("{}/db", storage_path);
-        let deploy_key_path =
-            env::var("INDEXER_NOTES_DEPLOY_KEY_PATH").expect("Missing env var INDEXER_NOTES_REPO_URL");
+        let deploy_key_path = env::var("INDEXER_NOTES_DEPLOY_KEY_PATH")
+            .expect("Missing env var INDEXER_NOTES_REPO_URL");
         let vapid_key_path =
             env::var("INDEXER_VAPID_KEY_PATH").expect("Missing env var INDEXER_VAPID_KEY_PATH");
-        let note_search_api_url = env::var("INDEXER_NOTE_SEARCH_API_URL")
-            .unwrap_or(format!("http://{}:{}", host, port));
-        let searxng_api_url = env::var("INDEXER_SEARXNG_API_URL")
-            .unwrap_or(format!("http://{}:{}", host, "8080"));
+        let note_search_api_url =
+            env::var("INDEXER_NOTE_SEARCH_API_URL").unwrap_or(format!("http://{}:{}", host, port));
+        let searxng_api_url =
+            env::var("INDEXER_SEARXNG_API_URL").unwrap_or(format!("http://{}:{}", host, "8080"));
         let gmail_api_client_id =
             std::env::var("INDEXER_GMAIL_CLIENT_ID").expect("Missing INDEXER_GMAIL_CLIENT_ID");
         let gmail_api_client_secret = std::env::var("INDEXER_GMAIL_CLIENT_SECRET")
             .expect("Missing INDEXER_GMAIL_CLIENT_SECRET");
         let calendar_email = std::env::var("INDEXER_CALENDAR_EMAIL").ok();
-        let openai_api_hostname =
-            env::var("INDEXER_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+        let openai_api_hostname = env::var("INDEXER_LOCAL_LLM_HOST")
+            .unwrap_or_else(|_| "https://api.openai.com".to_string());
         let openai_api_key =
             env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
         let openai_model =
             env::var("INDEXER_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
         let system_message = env::var("INDEXER_SYSTEM_MESSAGE")
             .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
-        let google_search_api_key = std::env::var("INDEXER_GOOGLE_SEARCH_API_KEY").expect("Missing env var INDEXER_GOOGLE_SEARCH_API_KEY");
-        let google_search_cx_id = std::env::var("INDEXER_GOOGLE_SEARCH_CX_ID").expect("Missing env var INDEXER_GOOGLE_SEARCH_CX_ID");
+        let google_search_api_key = std::env::var("INDEXER_GOOGLE_SEARCH_API_KEY")
+            .expect("Missing env var INDEXER_GOOGLE_SEARCH_API_KEY");
+        let google_search_cx_id = std::env::var("INDEXER_GOOGLE_SEARCH_CX_ID")
+            .expect("Missing env var INDEXER_GOOGLE_SEARCH_CX_ID");
 
         Self {
             notes_path: notes_path.clone(),

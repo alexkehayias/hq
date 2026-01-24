@@ -12,8 +12,8 @@ use std::hash::DefaultHasher;
 use tantivy::schema::*;
 use tantivy::{Index, IndexWriter, doc};
 use text_splitter::{ChunkConfig, TextSplitter};
-use tokio::fs;
 use tiktoken_rs::{CoreBPE, cl100k_base};
+use tokio::fs;
 use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
@@ -594,11 +594,7 @@ pub async fn index_all(
         if index_vector {
             // Spawn a blocking task for the CPU-intensive embedding generation
             let embeddings = tokio::task::spawn_blocking(move || {
-                generate_embeddings(
-                    &embeddings_model,
-                    &splitter,
-                    &note_body,
-                )
+                generate_embeddings(&embeddings_model, &splitter, &note_body)
             })
             .await
             .expect("Embedding generation task failed");
@@ -623,17 +619,14 @@ pub async fn index_all(
     if index_full_text {
         tokio::task::spawn_blocking(move || {
             for (file_name, note) in full_text_notes.iter() {
-                index_note_full_text(
-                    &mut index_writer,
-                    &schema,
-                    file_name,
-                    note,
-                )
-                .expect("Updating full text search failed");
+                index_note_full_text(&mut index_writer, &schema, file_name, note)
+                    .expect("Updating full text search failed");
             }
 
             // Commit the index writer
-            index_writer.commit().expect("Full text search index failed to commit");
+            index_writer
+                .commit()
+                .expect("Full text search index failed to commit");
         })
         .await
         .expect("Full-text indexing task failed");

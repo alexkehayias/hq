@@ -14,7 +14,9 @@ use indexer::db::{async_db, initialize_db, migrate_db};
 use indexer::fts::utils::recreate_index;
 use indexer::git::{maybe_clone_repo, maybe_pull_and_reset_repo};
 use indexer::indexing::index_all;
-use indexer::jobs::{GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees, DailyAgenda};
+use indexer::jobs::{
+    DailyAgenda, GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees,
+};
 use indexer::openai::{Message, Role, ToolCall};
 use indexer::search::search_notes;
 use indexer::server;
@@ -348,7 +350,7 @@ async fn main() -> Result<()> {
                             &openai_api_key,
                             &openai_model,
                         )
-                            .await?;
+                        .await?;
                         let msg = resp.last().unwrap();
                         println!("{}", msg.content.clone().unwrap());
                     }

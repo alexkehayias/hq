@@ -4,7 +4,6 @@ use std::sync::{Arc, RwLock};
 
 // Use axum-extra to get HTML form style query param parsing needed
 // for arrays like tags
-use axum_extra::extract::Query;
 use axum::middleware;
 use axum::{
     Router,
@@ -14,6 +13,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::{get, post},
 };
+use axum_extra::extract::Query;
 use http::{HeaderValue, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -37,15 +37,18 @@ use crate::chat::{
     get_or_create_session, insert_chat_message,
 };
 use crate::config::AppConfig;
-use crate::google_search;
 use crate::gcal::list_events;
+use crate::google_search;
 use crate::indexing::index_all;
-use crate::jobs::{DailyAgenda, GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job};
+use crate::jobs::{
+    DailyAgenda, GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job,
+};
 use crate::notification::find_all_notification_subscriptions;
 use crate::openai::{BoxedToolCall, Message, Role};
 use crate::public::{self};
 use crate::tools::{
-    CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchTool, WebsiteViewTool, TasksDueTodayTool, TasksScheduledTodayTool
+    CalendarTool, EmailUnreadTool, NoteSearchTool, TasksDueTodayTool, TasksScheduledTodayTool,
+    WebSearchTool, WebsiteViewTool,
 };
 use crate::utils::DetectDisconnect;
 
@@ -113,7 +116,8 @@ async fn chat_list(
     let include_tags = params.tags.unwrap_or(vec![]);
     let exclude_tags = params.exclude_tags.unwrap_or(vec![]);
     let total_sessions = chat_session_count(&db, &include_tags, &exclude_tags).await?;
-    let paged_sessions = chat_session_list(&db, &include_tags, &exclude_tags, limit, offset).await?;
+    let paged_sessions =
+        chat_session_list(&db, &include_tags, &exclude_tags, limit, offset).await?;
     let total_pages = (total_sessions as f64 / limit as f64).ceil() as i64;
 
     Ok(Json(public::ChatSessionsResponse {
@@ -247,19 +251,29 @@ async fn chat_handler(
                 if tx.is_closed() {
                     // The client disconnects when the SSE stream
                     // completes OR if the user closes their browser
-                    let _ = disconnect_receiver.recv().await.map(async |()| {
-                        tracing::info!("Sending notification!");
-                        // Broadcast push notification to all subscribers, using a new read lock for DB/config each time
-                        let payload = PushNotificationPayload::new(
-                            "New chat response",
-                            "New response after you disconnected.",
-                            Some(&format!("/chat/?session_id={session_id}")),
-                            None,
-                            None,
-                        );
-                        let subscriptions = find_all_notification_subscriptions(&db).await.unwrap();
-                        broadcast_push_notification(subscriptions, vapid_key_path.to_string(), payload).await;
-                    })?.await;
+                    let _ = disconnect_receiver
+                        .recv()
+                        .await
+                        .map(async |()| {
+                            tracing::info!("Sending notification!");
+                            // Broadcast push notification to all subscribers, using a new read lock for DB/config each time
+                            let payload = PushNotificationPayload::new(
+                                "New chat response",
+                                "New response after you disconnected.",
+                                Some(&format!("/chat/?session_id={session_id}")),
+                                None,
+                                None,
+                            );
+                            let subscriptions =
+                                find_all_notification_subscriptions(&db).await.unwrap();
+                            broadcast_push_notification(
+                                subscriptions,
+                                vapid_key_path.to_string(),
+                                payload,
+                            )
+                            .await;
+                        })?
+                        .await;
                 };
             }
             Err(e) => {
@@ -691,7 +705,6 @@ async fn web_search(
     State(state): State<SharedState>,
     Query(params): Query<public::WebSearchParams>,
 ) -> Result<Json<public::WebSearchResponse>, public::ApiError> {
-
     let (api_key, cx_id) = {
         let shared_state = state.read().expect("Unable to read share state");
         let AppConfig {
@@ -702,14 +715,9 @@ async fn web_search(
         (google_search_api_key.clone(), google_search_cx_id.clone())
     };
 
-    let items = google_search::search_google(
-        &params.query,
-        &api_key,
-        &cx_id,
-        Some(params.limit),
-        None,
-    )
-    .await?;
+    let items =
+        google_search::search_google(&params.query, &api_key, &cx_id, Some(params.limit), None)
+            .await?;
 
     let results: Vec<public::WebSearchResult> = items
         .into_iter()
@@ -761,9 +769,10 @@ async fn get_metrics(
     let limit_days = params.limit_days.unwrap_or(30);
 
     // Build SQL query to fetch metrics with grouping by name and timestamp
-    let results = db.call(move |conn| {
-        let mut stmt = conn.prepare(
-            r#"
+    let results = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare(
+                r#"
             SELECT name,
             DATE(timestamp) AS day,
             SUM(value) AS daily_total
@@ -772,21 +781,22 @@ async fn get_metrics(
             GROUP BY name, day
             ORDER BY name, day DESC
             "#,
-        )?;
+            )?;
 
-        let events = stmt.query_map([limit_days], |row| {
-            Ok(public::MetricEvent {
-                name: row.get(0)?,
-                timestamp: row.get(1)?,
-                value: row.get(2)?,
-            })
-        })?
-            .filter_map(Result::ok)
-            .collect::<Vec<public::MetricEvent>>();
+            let events = stmt
+                .query_map([limit_days], |row| {
+                    Ok(public::MetricEvent {
+                        name: row.get(0)?,
+                        timestamp: row.get(1)?,
+                        value: row.get(2)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect::<Vec<public::MetricEvent>>();
 
-        Ok(events)
-    })
-    .await?;
+            Ok(events)
+        })
+        .await?;
 
     Ok(Json(public::MetricsResponse { events: results }))
 }
@@ -845,11 +855,7 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
 
 // Run the server
 #[allow(clippy::too_many_arguments)]
-pub async fn serve(
-    host: String,
-    port: String,
-    config: AppConfig,
-) {
+pub async fn serve(host: String, port: String, config: AppConfig) {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {

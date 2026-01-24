@@ -98,16 +98,25 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
             let field = schema.get_field(field).unwrap();
             let value = parse_date_to_timestamp(value);
             let (lower_bound, upper_bound) = match op {
-                RangeOp::Lt => (Bound::Unbounded, Bound::Excluded(Term::from_field_u64(field, value))),
-                RangeOp::Lte => (Bound::Unbounded, Bound::Included(Term::from_field_u64(field, value))),
-                RangeOp::Gt => (Bound::Excluded(Term::from_field_u64(field, value)), Bound::Unbounded),
-                RangeOp::Gte => (Bound::Included(Term::from_field_u64(field, value)), Bound::Unbounded),
+                RangeOp::Lt => (
+                    Bound::Unbounded,
+                    Bound::Excluded(Term::from_field_u64(field, value)),
+                ),
+                RangeOp::Lte => (
+                    Bound::Unbounded,
+                    Bound::Included(Term::from_field_u64(field, value)),
+                ),
+                RangeOp::Gt => (
+                    Bound::Excluded(Term::from_field_u64(field, value)),
+                    Bound::Unbounded,
+                ),
+                RangeOp::Gte => (
+                    Bound::Included(Term::from_field_u64(field, value)),
+                    Bound::Unbounded,
+                ),
             };
 
-            let range_query = tantivy::query::RangeQuery::new(
-                lower_bound,
-                upper_bound,
-            );
+            let range_query = tantivy::query::RangeQuery::new(lower_bound, upper_bound);
 
             if *negated {
                 Some(Box::new(BooleanQuery::from(vec![(

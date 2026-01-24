@@ -53,10 +53,7 @@ impl ToolCall for WebsiteViewTool {
         // params?
 
         // Fetch the HTML content from the URL
-        let response = reqwest::Client::new()
-            .get(&clean_url)
-            .send()
-            .await;
+        let response = reqwest::Client::new().get(&clean_url).send().await;
 
         // Handle request errors like timeouts
         let content = match response {
@@ -76,7 +73,7 @@ impl ToolCall for WebsiteViewTool {
                     i if i.is_timeout() => {
                         tracing::warn!("Website view failed due to timeout.");
                         String::from("Request timed out.")
-                    },
+                    }
                     i if i.is_request() => {
                         tracing::warn!("Website view failed due to request sending error.");
                         String::from("Request was not able to be sent. Do not retry.")
@@ -89,11 +86,18 @@ impl ToolCall for WebsiteViewTool {
                                     String::from("Website view failed due to bad request.")
                                 }
                                 StatusCode::NOT_FOUND => {
-                                    tracing::warn!("Website view failed because the page was not found.");
-                                    String::from("Website view failed because the page was not found.")
+                                    tracing::warn!(
+                                        "Website view failed because the page was not found."
+                                    );
+                                    String::from(
+                                        "Website view failed because the page was not found.",
+                                    )
                                 }
                                 _ => {
-                                    tracing::warn!("Website view failed with HTTP status code {}.", status);
+                                    tracing::warn!(
+                                        "Website view failed with HTTP status code {}.",
+                                        status
+                                    );
                                     format!("Website view failed with HTTP status code {}", status)
                                 }
                             }
@@ -103,8 +107,8 @@ impl ToolCall for WebsiteViewTool {
                             // make the compiler happy
                             anyhow::bail!("Website view failed: {}", i)
                         }
-                    },
-                    _ => anyhow::bail!("Website view failed: {}", e)
+                    }
+                    _ => anyhow::bail!("Website view failed: {}", e),
                 }
             }
         };

@@ -25,10 +25,7 @@ impl ToolCall for TasksDueTodayTool {
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
         // Build query: deadline:<TODAY> -status:done -status:canceled -title:journal
-        let query = format!(
-            "deadline:<={} -status:done -status:canceled",
-            today
-        );
+        let query = format!("deadline:<={} -status:done -status:canceled", today);
 
         let mut url = reqwest::Url::parse(&format!("{}/notes/search", self.api_base_url))
             .expect("Invalid URL");
@@ -110,10 +107,7 @@ impl ToolCall for TasksScheduledTodayTool {
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
         // Build query: scheduled:<TODAY> -status:done -status:canceled -title:journal
-        let query = format!(
-            "scheduled:<={} -status:done -status:canceled",
-            today
-        );
+        let query = format!("scheduled:<={} -status:done -status:canceled", today);
 
         let mut url = reqwest::Url::parse(&format!("{}/notes/search", self.api_base_url))
             .expect("Invalid URL");

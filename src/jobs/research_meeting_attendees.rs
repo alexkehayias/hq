@@ -8,7 +8,7 @@ use crate::{
     chat::{chat, get_or_create_session, insert_chat_message},
     config::AppConfig,
     notification::{
-        broadcast_push_notification, find_all_notification_subscriptions, PushNotificationPayload
+        PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
     openai::{BoxedToolCall, Message, Role},
     tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
@@ -96,7 +96,9 @@ Frank is the VP of People at Acme. He was previously HR Manager at Acme and befo
         .expect("Chat session failed");
 
         let session_id = Uuid::new_v4().to_string();
-        get_or_create_session(db, &session_id, &["background"]).await.unwrap();
+        get_or_create_session(db, &session_id, &["background"])
+            .await
+            .unwrap();
 
         // Store the chat messages so the session can be picked up later
         for m in &messages {

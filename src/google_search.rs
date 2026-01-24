@@ -2,7 +2,6 @@ use anyhow::{Error, Result};
 use reqwest;
 use serde::Deserialize;
 
-
 #[derive(Deserialize)]
 struct GoogleSearchResponse {
     // When there are no results, Google responds without the
@@ -22,7 +21,7 @@ pub async fn search_google(
     api_key: &str,
     cx_id: &str,
     num_results: Option<u8>,
-    base_url: Option<&str>
+    base_url: Option<&str>,
 ) -> Result<Vec<SearchItem>, Error> {
     let desired = num_results.unwrap_or(10) as usize;
     let mut collected: Vec<SearchItem> = Vec::new();
@@ -48,7 +47,7 @@ pub async fn search_google(
 
         collected.extend(items);
 
-       // Move to next page if there is one
+        // Move to next page if there is one
         if count < per_page as usize {
             break;
         }
@@ -84,19 +83,24 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_resp)
-            .create_async().await;
+            .create_async()
+            .await;
 
-        let result = search_google("test query", "test_key", "test_cx", Some(10), Some(&base_url)).await?;
+        let result = search_google(
+            "test query",
+            "test_key",
+            "test_cx",
+            Some(10),
+            Some(&base_url),
+        )
+        .await?;
 
         // Sanity check
         mock.assert_async().await;
 
         // The mock data contains 7 items
         assert_eq!(result.len(), 7);
-        assert_eq!(
-            result[0].title,
-            "Top Rows Alternatives in 2025"
-        );
+        assert_eq!(result[0].title, "Top Rows Alternatives in 2025");
         assert_eq!(
             result[0].link,
             "https://slashdot.org/software/p/Rows/alternatives"
