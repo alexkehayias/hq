@@ -22,7 +22,7 @@
   "name": "Indexer",
   "short_name": "Indexer",
   "start_url": "/index.html",
-  "scope": "/index.html",
+  "scope": "/",
   "description": "Search and chat with your notes.",
   "id": "/index.html"
 }
