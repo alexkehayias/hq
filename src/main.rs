@@ -9,10 +9,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use indexer::aql;
 use indexer::chat::chat;
+use indexer::config::AppConfig;
 use indexer::db::{async_db, initialize_db, migrate_db};
 use indexer::fts::utils::recreate_index;
 use indexer::git::{maybe_clone_repo, maybe_pull_and_reset_repo};
 use indexer::indexing::index_all;
+use indexer::jobs::{GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees};
 use indexer::openai::{Message, Role, ToolCall};
 use indexer::search::search_notes;
 use indexer::server;
@@ -21,6 +23,13 @@ use indexer::tools::{CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchToo
 #[derive(ValueEnum, Clone)]
 enum ServiceKind {
     Gmail,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum JobId {
+    ProcessEmail,
+    ResearchMeetingAttendees,
+    GenerateSessionTitles,
 }
 
 impl ServiceKind {
@@ -83,6 +92,11 @@ enum Command {
     Auth {
         #[arg(long, value_enum)]
         service: ServiceKind,
+    },
+    /// Run a periodic job
+    Job {
+        #[arg(long, value_enum)]
+        id: JobId,
     },
 }
 
@@ -434,6 +448,57 @@ async fn main() -> Result<()> {
                     }).await?;
                 }
             }
+        }
+        Some(Command::Job { id }) => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            let db = async_db(&vec_db_path)
+                .await
+                .expect("Failed to connect to db");
+
+            let note_search_api_url = env::var("INDEXER_NOTE_SEARCH_API_URL")
+                .unwrap_or(format!("http://127.0.0.1:2222"));
+            let searxng_api_url = env::var("INDEXER_SEARXNG_API_URL")
+                .unwrap_or("http://127.0.0.1:8080".to_string());
+
+            let config = AppConfig {
+                notes_path,
+                index_path,
+                deploy_key_path: env::var("INDEXER_NOTES_DEPLOY_KEY_PATH")
+                    .expect("Missing INDEXER_NOTES_DEPLOY_KEY_PATH"),
+                vapid_key_path: env::var("INDEXER_VAPID_KEY_PATH")
+                    .expect("Missing INDEXER_VAPID_KEY_PATH"),
+                note_search_api_url,
+                searxng_api_url,
+                gmail_api_client_id: env::var("INDEXER_GMAIL_CLIENT_ID")
+                    .expect("Missing INDEXER_GMAIL_CLIENT_ID"),
+                gmail_api_client_secret: env::var("INDEXER_GMAIL_CLIENT_SECRET")
+                    .expect("Missing INDEXER_GMAIL_CLIENT_SECRET"),
+                openai_model: env::var("INDEXER_LOCAL_LLM_MODEL")
+                    .unwrap_or_else(|_| "gpt-4.1-mini".to_string()),
+                openai_api_hostname: env::var("INDEXER_LOCAL_LLM_HOST")
+                    .unwrap_or_else(|_| "https://api.openai.com".to_string()),
+                openai_api_key: env::var("OPENAI_API_KEY")
+                    .unwrap_or_else(|_| "thiswontworkforopenai".to_string()),
+                system_message: String::new(),
+                calendar_email: env::var("INDEXER_CALENDAR_EMAIL").ok(),
+            };
+
+            let job: Box<dyn PeriodicJob> = match id {
+                JobId::ProcessEmail => Box::new(ProcessEmail),
+                JobId::ResearchMeetingAttendees => Box::new(ResearchMeetingAttendees),
+                JobId::GenerateSessionTitles => Box::new(GenerateSessionTitles),
+            };
+
+            println!("Running job: {:?}", id);
+            job.run_job(&config, &db).await;
+            println!("Job completed");
         }
         None => {}
     }
