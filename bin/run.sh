@@ -1,11 +1,16 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-cd ./web-ui && ../bin/tailwindcss -i ./src/input.css -o ./src/output.css -m && ../bin/biome check && cd ..
+cd ./web-ui
+../bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
+../bin/biome check
+cd ..
 # cargo test
 
 # Start server in background
-cargo run -- serve --host localhost --port 2222 &
+HOST=localhost
+PORT=2222
+cargo run -- serve --host $HOST --port $PORT &
 PID=$!
 
 # Function to cleanup server
@@ -18,8 +23,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Wait for port 2222
-HOST=localhost
-PORT=2222
 TIMEOUT=30
 start=$(date +%s)
 while ! nc -z ${HOST} ${PORT}; do
