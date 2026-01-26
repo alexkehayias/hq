@@ -5,10 +5,10 @@ use tokio::sync::mpsc;
 use tokio_rusqlite::{Connection, params};
 
 use crate::{
+    api::public::ChatSession,
     openai::{
         BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
     },
-    public::ChatSession,
 };
 
 async fn handle_tool_call(

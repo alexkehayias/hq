@@ -15,14 +15,11 @@ use axum::{
 };
 use axum_extra::extract::Query;
 use http::{HeaderValue, header};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{convert::Infallible, time::Duration};
-use tantivy::doc;
 use tokio::sync::{broadcast, mpsc};
 
 use tokio::task::JoinSet;
-use tokio_rusqlite::Connection;
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower::ServiceBuilder;
@@ -31,59 +28,38 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::aql;
-use crate::chat::{
-    chat_session_count, chat_session_list, chat_stream, find_chat_session_by_id,
-    get_or_create_session, insert_chat_message,
-};
-use crate::config::AppConfig;
-use crate::gcal::list_events;
-use crate::google_search;
-use crate::indexing::index_all;
-use crate::jobs::{
-    DailyAgenda, GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job,
-};
-use crate::notification::find_all_notification_subscriptions;
-use crate::openai::{BoxedToolCall, Message, Role};
-use crate::public::{self};
-use crate::tools::{
+use super::utils::DetectDisconnect;
+use crate::ai::tools::{
     CalendarTool, EmailUnreadTool, NoteSearchTool, TasksDueTodayTool, TasksScheduledTodayTool,
     WebSearchTool, WebsiteViewTool,
 };
-use crate::utils::DetectDisconnect;
+use crate::api::public::{self};
+use crate::api::state::{AppState, LastSelection};
+use crate::core::AppConfig;
+use crate::google::custom_search::search_google;
+use crate::google::gcal::list_events;
+use crate::jobs::{
+    DailyAgenda, GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job,
+};
+use crate::notify::{
+    PushNotificationPayload, PushSubscription, broadcast_push_notification,
+    find_all_notification_subscriptions,
+};
+use crate::openai::{BoxedToolCall, Message, Role};
+use crate::openai::{
+    chat_session_count, chat_session_list, chat_stream, find_chat_session_by_id,
+    get_or_create_session, insert_chat_message,
+};
+use crate::search::aql;
+use crate::search::indexing::index_all;
 
-use super::db::async_db;
-use super::git::{diff_last_commit_files, maybe_pull_and_reset_repo};
-use super::notification::{PushNotificationPayload, PushSubscription, broadcast_push_notification};
-use super::search::search_notes;
-use crate::gmail::{Thread, extract_body, fetch_thread, list_unread_messages};
-use crate::oauth::refresh_access_token;
+use crate::core::db::async_db;
+use crate::core::git::{diff_last_commit_files, maybe_pull_and_reset_repo};
+use crate::google::gmail::{Thread, extract_body, fetch_thread, list_unread_messages};
+use crate::google::oauth::refresh_access_token;
+use crate::search::search_notes;
 
 type SharedState = Arc<RwLock<AppState>>;
-
-#[derive(Debug, Deserialize)]
-struct LastSelection {
-    id: String,
-    title: String,
-    file_name: String,
-}
-
-pub struct AppState {
-    // Stores the latest search hit selected by the user
-    latest_selection: Option<LastSelection>,
-    db: Connection,
-    config: AppConfig,
-}
-
-impl AppState {
-    pub fn new(db: Connection, config: AppConfig) -> Self {
-        Self {
-            latest_selection: None,
-            db,
-            config,
-        }
-    }
-}
 
 async fn chat_session(
     State(state): State<SharedState>,
@@ -715,9 +691,7 @@ async fn web_search(
         (google_search_api_key.clone(), google_search_cx_id.clone())
     };
 
-    let items =
-        google_search::search_google(&params.query, &api_key, &cx_id, Some(params.limit), None)
-            .await?;
+    let items = search_google(&params.query, &api_key, &cx_id, Some(params.limit), None).await?;
 
     let results: Vec<public::WebSearchResult> = items
         .into_iter()

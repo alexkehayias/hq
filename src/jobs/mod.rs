@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
 
-use crate::config::AppConfig;
+use crate::core::AppConfig;
 pub mod daily_agenda;
 pub use daily_agenda::DailyAgenda;
 pub mod process_email;

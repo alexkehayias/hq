@@ -1,0 +1,456 @@
+use anyhow::{Result, anyhow};
+use clap::{Parser, Subcommand, ValueEnum};
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
+use serde_json::json;
+use std::env;
+use std::fs;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::ai::tools::{CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchTool};
+use crate::api;
+use crate::core::AppConfig;
+use crate::core::db::{async_db, initialize_db, migrate_db};
+use crate::core::git::{maybe_clone_repo, maybe_pull_and_reset_repo};
+use crate::jobs::{
+    DailyAgenda, GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees,
+};
+use crate::openai::chat;
+use crate::openai::{Message, Role, ToolCall};
+use crate::search::aql;
+use crate::search::fts::utils::recreate_index;
+use crate::search::indexing::index_all;
+use crate::search::search_notes;
+
+#[derive(ValueEnum, Clone)]
+enum ServiceKind {
+    Gmail,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum JobId {
+    ProcessEmail,
+    ResearchMeetingAttendees,
+    GenerateSessionTitles,
+    DailyAgenda,
+}
+
+impl ServiceKind {
+    fn to_str(&self) -> &'static str {
+        match self {
+            ServiceKind::Gmail => "gmail",
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Initialize indices and clone notes from version control
+    Init {
+        #[arg(long, action, default_value = "false")]
+        db: bool,
+        #[arg(long, action, default_value = "false")]
+        index: bool,
+        #[arg(long, action, default_value = "false")]
+        notes: bool,
+    },
+    /// Migrate indices and db schema
+    Migrate {
+        #[arg(long, action, default_value = "false")]
+        db: bool,
+        #[arg(long, action, default_value = "false")]
+        index: bool,
+    },
+    /// Run the API server
+    Serve {
+        /// Set the server host address
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Set the server port
+        #[arg(long, default_value = "2222")]
+        port: String,
+    },
+    /// Index notes
+    Index {
+        #[arg(long, default_value = "false")]
+        all: bool,
+        #[arg(long, default_value = "false")]
+        full_text: bool,
+        #[arg(long, default_value = "false")]
+        vector: bool,
+    },
+    /// Rebuild all of the indices from source
+    Rebuild {},
+    /// Query the search index
+    Query {
+        #[arg(long)]
+        term: String,
+        #[arg(long, default_value = "false")]
+        vector: bool,
+    },
+    /// Start a chat bot session
+    Chat {},
+    /// Perform OAuth authentication and print tokens
+    Auth {
+        #[arg(long, value_enum)]
+        service: ServiceKind,
+    },
+    /// Run a periodic job
+    Job {
+        #[arg(long, value_enum)]
+        id: JobId,
+    },
+}
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+pub struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+pub async fn run() -> Result<()> {
+    let args = Cli::parse();
+
+    let storage_path = env::var("INDEXER_STORAGE_PATH").unwrap_or("./".to_string());
+    let index_path = format!("{}/index", storage_path);
+    let notes_path = format!("{}/notes", storage_path);
+    let vec_db_path = format!("{}/db", storage_path);
+
+    // Handle each sub command
+    match args.command {
+        Some(Command::Init { db, index, notes }) => {
+            if !db && !index && !notes {
+                return Err(anyhow!(
+                    "Missing value for init \"--db\", \"--index\", and/or \"--notes\""
+                ));
+            }
+
+            if db {
+                println!("Initializing db...");
+                // Initialize the vector DB
+                fs::create_dir_all(&vec_db_path)
+                    .unwrap_or_else(|err| println!("Ignoring vector DB create failed: {}", err));
+
+                let db = async_db(&vec_db_path)
+                    .await
+                    .expect("Failed to connect to db");
+                db.call(|conn| {
+                    initialize_db(conn).expect("DB initialization failed");
+                    Ok(())
+                })
+                .await?;
+                println!("Finished initializing db");
+            }
+
+            if index {
+                println!("Initializing search index...");
+                // Create the index directory if it doesn't already exist
+                fs::create_dir_all(&index_path).unwrap_or_else(|err| {
+                    println!("Ignoring index directory create failed: {}", err)
+                });
+                println!("Finished initializing search index...");
+            }
+
+            // Clone and reset the notes repo to origin/main
+            if notes {
+                let deploy_key_path = env::var("INDEXER_NOTES_DEPLOY_KEY_PATH")
+                    .expect("Missing env var INDEXER_NOTES_REPO_URL");
+                let repo_url = env::var("INDEXER_NOTES_REPO_URL")
+                    .expect("Missing env var INDEXER_NOTES_REPO_URL");
+                println!("Cloning notes repo from git...");
+                maybe_clone_repo(&deploy_key_path, &repo_url, &notes_path).await;
+                println!("Finished cloning and resetting notes from git");
+            }
+        }
+        Some(Command::Migrate { db, index }) => {
+            // Run the DB migration script
+            if db {
+                println!("Migrating db...");
+                let db = async_db(&vec_db_path)
+                    .await
+                    .expect("Failed to connect to db");
+                db.call(|conn| {
+                    migrate_db(conn).unwrap_or_else(|err| eprintln!("DB migration failed {}", err));
+                    Ok(())
+                })
+                .await?;
+                println!("Finished migrating db");
+            }
+
+            // Delete and recreate the index
+            if index {
+                println!("Migrating search index...");
+                recreate_index(&index_path);
+                println!("Finished migrating search index");
+                println!(
+                    "NOTE: You will need to re-populate the index by running --index --full-text"
+                );
+            }
+        }
+        Some(Command::Serve { host, port }) => {
+            let config = AppConfig::default();
+            api::serve(host, port, config).await;
+        }
+        Some(Command::Index {
+            all,
+            full_text,
+            vector,
+        }) => {
+            if !all && !full_text && !vector {
+                return Err(anyhow!(
+                    "Missing value for index \"all\", \"full-text\", and/or \"vector\""
+                ));
+            }
+            // If using the CLI only and not the webserver, set up tracing to
+            // output to stdout and stderr
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            // Clone the notes repo
+            let deploy_key_path = env::var("INDEXER_NOTES_DEPLOY_KEY_PATH")
+                .expect("Missing env var INDEXER_NOTES_REPO_URL");
+            maybe_pull_and_reset_repo(&deploy_key_path, &notes_path).await;
+
+            let db = crate::core::db::async_db(&vec_db_path)
+                .await
+                .expect("Failed to connect to async db");
+
+            if full_text {
+                index_all(&db, &index_path, &notes_path, true, false, None)
+                    .await
+                    .expect("Indexing failed");
+            }
+            if vector {
+                index_all(&db, &index_path, &notes_path, false, true, None)
+                    .await
+                    .expect("Indexing failed");
+            }
+            if all {
+                index_all(&db, &index_path, &notes_path, true, true, None)
+                    .await
+                    .expect("Indexing failed");
+            }
+        }
+        Some(Command::Rebuild {}) => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            let db = crate::core::db::async_db(&vec_db_path)
+                .await
+                .expect("Failed to connect to async db");
+
+            // Delete all note metadata and vector data
+            println!("Deleting all meta data in the db...");
+            db.call(|conn| {
+                conn.execute("DELETE FROM vec_items", [])?;
+                conn.execute("DELETE FROM note_meta", [])?;
+                Ok(())
+            })
+            .await
+            .expect("Failed to delete note_meta or vec_items data");
+            println!("Finished deleting all meta data the db...");
+
+            // Remove the full text search index
+            println!("Recreating search index...");
+            recreate_index(&index_path);
+            println!("Finished recreating search index");
+
+            // Index everything
+            index_all(&db, &index_path, &notes_path, true, true, None)
+                .await
+                .expect("Indexing failed");
+        }
+        Some(Command::Query { term, vector }) => {
+            let db = async_db(&vec_db_path)
+                .await
+                .expect("Failed to connect to async db");
+            let query = aql::parse_query(&term).expect("Parsing AQL failed");
+            let results = search_notes(&index_path, &db, vector, false, &query, 20).await?;
+            println!(
+                "{}",
+                json!({
+                    "query": term,
+                    "results": results,
+                })
+            );
+        }
+        Some(Command::Chat {}) => {
+            let mut rl = DefaultEditor::new().expect("Editor failed");
+
+            // Create tools
+            let note_search_api_url = env::var("INDEXER_NOTE_SEARCH_API_URL");
+            let note_search_tool = if let Ok(url) = &note_search_api_url {
+                NoteSearchTool::new(url)
+            } else {
+                NoteSearchTool::default()
+            };
+
+            let email_unread_tool = if let Ok(url) = &note_search_api_url {
+                EmailUnreadTool::new(url)
+            } else {
+                EmailUnreadTool::default()
+            };
+
+            let web_search_tool = if let Ok(url) = &note_search_api_url {
+                WebSearchTool::new(url)
+            } else {
+                WebSearchTool::default()
+            };
+
+            let calendar_tool = if let Ok(url) = &note_search_api_url {
+                CalendarTool::new(url)
+            } else {
+                CalendarTool::default()
+            };
+
+            let tools: Option<Vec<Box<dyn ToolCall + Send + Sync + 'static>>> = Some(vec![
+                Box::new(note_search_tool),
+                Box::new(web_search_tool),
+                Box::new(email_unread_tool),
+                Box::new(calendar_tool),
+            ]);
+
+            // Get OpenAI API configuration from environment variables (similar to AppConfig)
+            let openai_api_hostname = env::var("INDEXER_LOCAL_LLM_HOST")
+                .unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let openai_api_key =
+                env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let openai_model =
+                env::var("INDEXER_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+
+            let mut history = vec![Message::new(Role::System, "You are a helpful assistant.")];
+
+            loop {
+                let readline = rl.readline(">>> ");
+                match readline {
+                    Ok(line) => {
+                        history.push(Message::new(Role::User, line.as_str()));
+                        let resp = chat(
+                            &tools,
+                            &history,
+                            &openai_api_hostname,
+                            &openai_api_key,
+                            &openai_model,
+                        )
+                        .await?;
+                        let msg = resp.last().unwrap();
+                        println!("{}", msg.content.clone().unwrap());
+                    }
+                    Err(ReadlineError::Interrupted) => break,
+                    Err(ReadlineError::Eof) => break,
+                    Err(err) => {
+                        println!("Error: {:?}", err);
+                        break;
+                    }
+                }
+            }
+        }
+        Some(Command::Auth { service }) => {
+            match service {
+                ServiceKind::Gmail => {
+                    use crate::google::oauth::exchange_code_for_token;
+                    use std::io::{self, Write};
+
+                    // Prompt the user for their email address
+                    print!("Enter the email address you are authenticating: ");
+                    io::stdout().flush().unwrap();
+                    let mut user_email = String::new();
+                    io::stdin()
+                        .read_line(&mut user_email)
+                        .expect("Failed to read email address");
+                    let user_email = user_email.trim().to_owned();
+
+                    let client_id = std::env::var("INDEXER_GMAIL_CLIENT_ID")
+                        .expect("Set INDEXER_GMAIL_CLIENT_ID in your environment");
+                    let client_secret = std::env::var("INDEXER_GMAIL_CLIENT_SECRET")
+                        .expect("Set INDEXER_GMAIL_CLIENT_SECRET in your environment");
+                    let redirect_uri = std::env::var("INDEXER_GMAIL_REDIRECT_URI")
+                        .unwrap_or_else(|_| "urn:ietf:wg:oauth:2.0:oob".to_string());
+                    let scope = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.calendars.readonly https://www.googleapis.com/auth/calendar.events.readonly";
+                    let auth_url = format!(
+                        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+                        urlencoding::encode(&client_id),
+                        urlencoding::encode(&redirect_uri),
+                        urlencoding::encode(scope)
+                    );
+                    println!(
+                        "\nPlease open the following URL in your browser and authorize access:\n\n{}\n",
+                        auth_url
+                    );
+                    print!("Paste the authorization code shown by Google here: ");
+                    io::stdout().flush().unwrap();
+                    let mut code = String::new();
+                    io::stdin()
+                        .read_line(&mut code)
+                        .expect("Failed to read code");
+                    let code = code.trim();
+
+                    let token =
+                        exchange_code_for_token(&client_id, &client_secret, code, &redirect_uri)
+                            .await?;
+
+                    // Store the refresh token in the DB and use that to fetch an access token from now on.
+                    let db = async_db(&vec_db_path)
+                        .await
+                        .expect("Failed to connect to db");
+                    let refresh_token = token
+                        .refresh_token
+                        .clone()
+                        .ok_or(anyhow!("No refresh token in response"))?;
+
+                    db.call(move |conn| {
+                        conn.execute(
+                            "INSERT INTO auth (id, service, refresh_token) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(id) DO UPDATE SET service = excluded.service, refresh_token = excluded.refresh_token",
+                            (&user_email, service.to_str(), &refresh_token),
+                        )
+                            .expect("Failed to insert/update refresh token in DB");
+                        println!("Refresh token for {} saved to DB.", user_email);
+                        Ok(())
+                    }).await?;
+                }
+            }
+        }
+        Some(Command::Job { id }) => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            let config = AppConfig::default();
+            let db = async_db(&config.vec_db_path)
+                .await
+                .expect("Failed to connect to db");
+
+            let job: Box<dyn PeriodicJob> = match id {
+                JobId::ProcessEmail => Box::new(ProcessEmail),
+                JobId::ResearchMeetingAttendees => Box::new(ResearchMeetingAttendees),
+                JobId::GenerateSessionTitles => Box::new(GenerateSessionTitles),
+                JobId::DailyAgenda => Box::new(DailyAgenda),
+            };
+
+            println!("Running job: {:?}", id);
+            job.run_job(&config, &db).await;
+            println!("Job completed");
+        }
+        None => {}
+    }
+
+    Ok(())
+}

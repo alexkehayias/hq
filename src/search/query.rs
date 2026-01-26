@@ -1,4 +1,4 @@
-use crate::aql::{Expr, RangeOp};
+use crate::search::aql::{Expr, RangeOp};
 use std::ops::Bound;
 use tantivy::Term;
 use tantivy::query::{AllQuery, BooleanQuery, FuzzyTermQuery, TermQuery};
@@ -303,8 +303,8 @@ pub fn query_to_similarity(expr: &Expr) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aql::parse_query;
-    use crate::fts::schema::note_schema;
+    use crate::search::aql::parse_query;
+    use crate::search::fts::schema::note_schema;
 
     #[test]
     fn test_aql_to_index_query() {

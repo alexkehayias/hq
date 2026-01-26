@@ -8,10 +8,10 @@ use tantivy::{Index, ReloadPolicy};
 use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
-use crate::aql::{self};
-use crate::fts::schema::note_schema;
-use crate::public::SearchResult;
-use crate::query::{aql_to_index_query, expr_to_sql, query_to_similarity};
+use crate::api::public::SearchResult;
+use crate::search::aql::{self};
+use crate::search::fts::schema::note_schema;
+use crate::search::query::{aql_to_index_query, expr_to_sql, query_to_similarity};
 
 #[derive(Serialize)]
 pub enum SearchHitType {

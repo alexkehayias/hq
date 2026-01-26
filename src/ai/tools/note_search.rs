@@ -1,5 +1,5 @@
+use crate::api::public::SearchResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
-use crate::public::SearchResponse;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use reqwest;

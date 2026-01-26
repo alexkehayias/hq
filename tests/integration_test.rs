@@ -16,14 +16,15 @@ mod tests {
     use tokio::sync::mpsc;
     use tower::util::ServiceExt;
 
-    use indexer::config::AppConfig;
-    use indexer::db::async_db;
-    use indexer::db::initialize_db;
-    use indexer::indexing::index_all;
+    use indexer::ai::prompt::{self, Prompt};
+    use indexer::api::server::app;
+    use indexer::api::state::AppState;
+    use indexer::core::AppConfig;
+    use indexer::core::db::async_db;
+    use indexer::core::db::initialize_db;
     use indexer::openai;
     use indexer::openai::BoxedToolCall;
-    use indexer::prompt::{self, Prompt};
-    use indexer::server::{AppState, app};
+    use indexer::search::indexing::index_all;
     use serde::Serialize;
     use serde_json::json;
     use serial_test::serial;
@@ -76,12 +77,15 @@ mod tests {
         let app_config = AppConfig {
             notes_path: notes_path.display().to_string(),
             index_path: index_path.display().to_string(),
+            vec_db_path: vec_db_path.to_str().unwrap().to_string(),
             deploy_key_path: String::from("test_deploy_key_path"),
             vapid_key_path: String::from("test_vapid_key_path"),
             note_search_api_url: String::from("http://localhost:2222"),
             searxng_api_url: String::from("http://localhost:8080"),
             gmail_api_client_id: String::from("test_client_id"),
             gmail_api_client_secret: String::from("test_client_secret"),
+            google_search_api_key: String::from("test_google_search_key"),
+            google_search_cx_id: String::from("test_cx_id"),
             openai_model: String::from("gpt-4o"),
             openai_api_hostname: String::from("https://api.openai.com"),
             openai_api_key: String::from("test-api-key"),
@@ -445,6 +449,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn it_records_metric() {
         let app = test_app().await;
 

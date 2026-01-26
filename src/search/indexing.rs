@@ -2,9 +2,6 @@ use regex::Regex;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-use crate::export::MarkdownExport;
-use crate::fts::schema::note_schema;
-use crate::source::{note_filter, notes};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
@@ -16,6 +13,10 @@ use tiktoken_rs::{CoreBPE, cl100k_base};
 use tokio::fs;
 use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
+
+use super::export::MarkdownExport;
+use super::fts::schema::note_schema;
+use super::source::{note_filter, notes};
 
 #[derive(Debug, Clone)]
 struct Task {

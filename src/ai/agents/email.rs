@@ -1,6 +1,5 @@
-use crate::chat::chat;
-use crate::openai::{Message, Role, ToolCall};
-use crate::tools::EmailUnreadTool;
+use crate::ai::tools::EmailUnreadTool;
+use crate::openai::{Message, Role, ToolCall, chat};
 
 /// Email reader and responder agent.
 pub async fn email_chat_response(

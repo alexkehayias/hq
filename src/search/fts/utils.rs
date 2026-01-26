@@ -1,4 +1,4 @@
-use crate::fts::schema::note_schema;
+use crate::search::fts::schema::note_schema;
 use std::fs;
 use tantivy;
 use tantivy::Index;

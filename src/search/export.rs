@@ -16,7 +16,7 @@ impl MarkdownExport {
     ///
     /// ```rust
     /// use orgize::{Org, ast::Bold, rowan::ast::AstNode};
-    /// use indexer::export::MarkdownExport;
+    /// use indexer::search::export::MarkdownExport;
     ///
     /// let org = Org::parse("* /hello/ *world*");
     /// let bold = org.first_node::<Bold>().unwrap();

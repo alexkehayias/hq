@@ -5,13 +5,13 @@ use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
-    chat::{chat, get_or_create_session, insert_chat_message},
-    config::AppConfig,
-    notification::{
+    ai::tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
+    core::AppConfig,
+    notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
     openai::{BoxedToolCall, Message, Role},
-    tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
+    openai::{chat, get_or_create_session, insert_chat_message},
 };
 
 #[derive(Default, Debug)]

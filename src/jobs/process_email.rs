@@ -5,12 +5,12 @@ use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
-    chat::insert_chat_message,
-    config::AppConfig,
-    notification::{
+    core::AppConfig,
+    google::oauth::find_all_gmail_auth_emails,
+    notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    oauth::find_all_gmail_auth_emails,
+    openai::insert_chat_message,
 };
 
 #[derive(Default, Debug)]
@@ -34,7 +34,7 @@ impl PeriodicJob for ProcessEmail {
         let emails = { find_all_gmail_auth_emails(db).await.expect("Query failed") };
 
         let session_id = Uuid::new_v4().to_string();
-        let history = crate::agents::email::email_chat_response(
+        let history = crate::ai::agents::email::email_chat_response(
             note_search_api_url,
             emails,
             openai_api_hostname,

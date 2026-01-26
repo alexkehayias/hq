@@ -1,6 +1,6 @@
-use crate::chat::chat;
+use crate::ai::tools::{CalendarTool, TasksDueTodayTool, TasksScheduledTodayTool};
+use crate::openai::chat;
 use crate::openai::{Message, Role, ToolCall};
-use crate::tools::{CalendarTool, TasksDueTodayTool, TasksScheduledTodayTool};
 
 /// Daily agenda creator agent.
 pub async fn daily_agenda_response(
