@@ -19,8 +19,8 @@ pub struct DailyAgenda;
 #[async_trait]
 impl PeriodicJob for DailyAgenda {
     fn interval(&self) -> Duration {
-        // Run once daily
-        Duration::from_secs(60 * 60 * 24)
+        // Every 12 hours
+        Duration::from_secs(60 * 60 * 12)
     }
 
     async fn run_job(&self, config: &AppConfig, db: &Connection) {
@@ -66,8 +66,9 @@ impl PeriodicJob for DailyAgenda {
             }
         }
 
-        // Broadcast push notification to all subscribers with a link to the chat session
-        let chat_url = format!("/chat/{}", session_id);
+        // Broadcast push notification to all subscribers with a link
+        // to the chat session
+        let chat_url = format!("/chat?session_id={}", session_id);
         let payload = PushNotificationPayload::new(
             "Daily Agenda",
             &summary.chars().take(150).collect::<String>(),
