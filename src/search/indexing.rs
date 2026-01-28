@@ -142,7 +142,7 @@ fn parse_note(content: &str) -> Note {
         };
         let title = i.title_raw().trim().to_string();
 
-        // Tasks sometimes don't have an org-id. These tasks are ignored.
+        // Tasks sometimes don't have an org-id.
         let mut hasher = DefaultHasher::new();
         title.hash(&mut hasher);
         let default_id = hasher.finish().to_string();

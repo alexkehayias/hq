@@ -234,8 +234,8 @@ pub async fn search_notes(
                     let meeting_date = r.get(11)?;
 
                     if truncate {
-                        title.truncate(140);
-                        body.truncate(240);
+                        title = title.chars().take(140).collect();
+                        body = body.chars().take(240).collect();
                     }
 
                     Ok(SearchResult {
@@ -257,8 +257,7 @@ pub async fn search_notes(
                 .collect::<std::result::Result<Vec<SearchResult>, _>>()?;
             Ok(found)
         })
-        .await
-        .unwrap()
+        .await?
     } else {
         Vec::new()
     };

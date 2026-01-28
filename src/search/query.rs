@@ -287,8 +287,8 @@ pub fn query_to_similarity(expr: &Expr) -> Option<String> {
             }
         }
         Expr::Or(left, right) => {
-            let l = expr_to_sql(left);
-            let r = expr_to_sql(right);
+            let l = query_to_similarity(left);
+            let r = query_to_similarity(right);
             match (l, r) {
                 (Some(l), Some(r)) => Some(format!("({} {})", l, r)),
                 (Some(l), None) => Some(l),

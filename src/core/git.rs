@@ -54,5 +54,5 @@ pub async fn diff_last_commit_files(deploy_key_path: &str, path: &str) -> Vec<St
         tracing::error!("Git diff failed: {}", stderr);
     }
 
-    stdout.split("\n").map(|s| s.to_string()).collect()
+    stdout.trim().split("\n").map(|s| s.to_string()).collect()
 }
