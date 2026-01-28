@@ -34,9 +34,15 @@ fn parse_date_to_timestamp(date_str: &str) -> u64 {
     (days * 24 * 60 * 60) as u64
 }
 
+const DEFAULT_FIELD_NAME: &str = "__default";
+
 pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>> {
     fn is_sql_only_field(field: &str) -> bool {
         matches!(field, "scheduled" | "deadline" | "closed" | "date")
+    }
+
+    fn is_fuzzy_search_field(field: &str) -> bool {
+        matches!(field, DEFAULT_FIELD_NAME | "title" | "body")
     }
 
     match expr {
@@ -50,19 +56,20 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
             phrase: _,
             negated,
         } => {
-            let field_names = field.clone().unwrap_or_else(|| "__default".into());
-            let fields: Vec<Field> = if field_names == "__default" {
+            // Default to title and body when there is no field name specified
+            let field_name = field.clone().unwrap_or_else(|| "__default".into());
+            let fields: Vec<(String, Field)> = if field_name == DEFAULT_FIELD_NAME {
                 vec![
-                    schema.get_field("title").unwrap(),
-                    schema.get_field("body").unwrap(),
+                    (String::from("title"), schema.get_field("title").unwrap()),
+                    (String::from("body"), schema.get_field("body").unwrap()),
                 ]
             } else {
-                vec![schema.get_field(&field_names).unwrap()]
+                vec![(field_name.clone(), schema.get_field(&field_name).unwrap())]
             };
             let terms: Vec<Box<dyn Query>> = fields
                 .iter()
-                .map(|&field| {
-                    let term = Term::from_field_text(field, value);
+                .map(|(query_field_name, query_field)| {
+                    let term = Term::from_field_text(*query_field, value);
                     if *negated {
                         Box::new(BooleanQuery::new(vec![
                             (Occur::Must, Box::new(AllQuery)),
@@ -73,7 +80,15 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
                             ),
                         ]))
                     } else {
-                        Box::new(FuzzyTermQuery::new(term, 2, true)) as Box<dyn Query>
+                        // Only use fuzzy search for variable text
+                        // fields otherwise the query will return
+                        // similar tags, type, categories, etc. which
+                        // are meant to be filters.
+                        if is_fuzzy_search_field(query_field_name) {
+                            Box::new(FuzzyTermQuery::new(term, 2, true)) as Box<dyn Query>
+                        } else {
+                            Box::new(TermQuery::new(term, IndexRecordOption::Basic)) as Box<dyn Query>
+                        }
                     }
                 })
                 .collect();
