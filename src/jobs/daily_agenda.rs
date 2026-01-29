@@ -42,7 +42,7 @@ impl PeriodicJob for DailyAgenda {
         };
 
         // Create the session with an "agenda" tag
-        if let Err(e) = get_or_create_session(db, &session_id, &["agenda"]).await {
+        if let Err(e) = get_or_create_session(db, &session_id, &["background", "agenda"]).await {
             tracing::error!("Failed to create session for daily agenda: {}", e);
             return;
         }
