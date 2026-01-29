@@ -550,7 +550,7 @@ async fn email_unread_handler(
     for t in results {
         let mut messages: Vec<public::EmailMessage> = Vec::new();
         for m in t.messages {
-            let body = extract_body(&m);
+            let body = extract_body(&m).trim().to_string();
             if body == "Failed to decode" {
                 tracing::error!("Decode error: {:?}", m.payload);
             }
