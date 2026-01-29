@@ -89,13 +89,51 @@ document.addEventListener('DOMContentLoaded', () => {
 
   chatInput.addEventListener('input', autoResize);
 
-  sendButton.addEventListener('click', () => sendMessage());
-  chatInput.addEventListener('keydown', (e) => {
-    if (e.metaKey && e.key === 'Enter') {
-      e.preventDefault();
-      sendMessage();
+  // Unix-style word navigation helpers
+  const findPreviousWordBoundary = (text, pos) => {
+    // Skip whitespace
+    while (pos > 0 && /\s/.test(text[pos - 1])) {
+      pos--;
     }
-  });
+    // Skip word characters
+    while (pos > 0 && /\S/.test(text[pos - 1])) {
+      pos--;
+    }
+    return pos;
+  };
+
+  const findNextWordBoundary = (text, pos) => {
+    // If we're on whitespace, skip it first
+    while (pos < text.length && /\s/.test(text[pos])) {
+      pos++;
+    }
+    // Now skip to the end of the word (stop before whitespace or punctuation)
+    const punctuation = /[.!?;:,]/;
+    while (
+      pos < text.length &&
+      /\S/.test(text[pos]) &&
+      !punctuation.test(text[pos])
+    ) {
+      pos++;
+    }
+    return pos;
+  };
+
+  const moveCursorByWord = (direction) => {
+    const text = chatInput.value;
+    const cursorPos = chatInput.selectionStart;
+
+    let newPos;
+    if (direction === -1) {
+      // Move backward
+      newPos = findPreviousWordBoundary(text, cursorPos);
+    } else {
+      // Move forward
+      newPos = findNextWordBoundary(text, cursorPos);
+    }
+
+    chatInput.setSelectionRange(newPos, newPos);
+  };
 
   const sendMessage = () => {
     const message = chatInput.value.trim();
@@ -208,4 +246,21 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.value = ''; // Clear input field
     chatInput.style.height = 'auto'; // Reset height after sending
   };
+
+  sendButton.addEventListener('click', () => sendMessage());
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.metaKey && e.key === 'Enter') {
+      e.preventDefault();
+      sendMessage();
+    }
+
+    // Unix-style word navigation
+    if (e.altKey && e.code === 'KeyB') {
+      e.preventDefault();
+      moveCursorByWord(-1);
+    } else if (e.altKey && e.code === 'KeyF') {
+      e.preventDefault();
+      moveCursorByWord(1);
+    }
+  });
 });
