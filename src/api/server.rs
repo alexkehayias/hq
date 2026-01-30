@@ -775,6 +775,12 @@ async fn get_metrics(
     Ok(Json(public::MetricsResponse { events: results }))
 }
 
+/// Handle forwarded desktop notifications from daemon
+async fn blurt_webhook(Json(notification): Json<public::BlurtNotification>) -> StatusCode {
+    tracing::info!("Received Blurt notification: {:?}", notification);
+    StatusCode::OK
+}
+
 async fn set_static_cache_control(request: Request, next: middleware::Next) -> Response {
     let mut response = next.run(request).await;
     response
@@ -810,6 +816,8 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
         .route("/calendar", get(calendar_handler))
         // Search Google
         .route("/web/search", get(web_search))
+        // Blurt webhook for desktop notifications
+        .route("/webhook/blurt", post(blurt_webhook))
         // Timeseries metrics
         .route("/metrics", post(record_metric).get(get_metrics))
         // Static server of assets in ./web-ui

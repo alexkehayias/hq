@@ -473,4 +473,34 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn it_receives_blurt_webhook() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/webhook/blurt")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": 12345,
+                            "title": "Test Notification",
+                            "subtitle": Some("Subtitle"),
+                            "body": "This is a test notification body",
+                            "date": 1704067200,
+                            "bundle_id": Some("com.example.app"),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
