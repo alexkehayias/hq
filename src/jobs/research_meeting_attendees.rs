@@ -5,14 +5,11 @@ use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
-    ai::tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
-    core::AppConfig,
-    notify::{
+    ai::tools::{CalendarTool, WebSearchTool, WebsiteViewTool}, core::AppConfig, google::oauth::find_all_gmail_auth_emails, notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
-    },
-    openai::{BoxedToolCall, Message, Role},
-    openai::{chat, get_or_create_session, insert_chat_message},
+    }, openai::{BoxedToolCall, Message, Role, chat, get_or_create_session, insert_chat_message}
 };
+
 
 #[derive(Default, Debug)]
 pub struct ResearchMeetingAttendees;
@@ -30,7 +27,6 @@ impl PeriodicJob for ResearchMeetingAttendees {
             openai_api_hostname,
             openai_api_key,
             openai_model,
-            calendar_email,
             ..
         } = config;
 
@@ -41,10 +37,12 @@ impl PeriodicJob for ResearchMeetingAttendees {
             Box::new(WebsiteViewTool::new()),
         ];
 
+        let calendar_emails = find_all_gmail_auth_emails(&db).await.unwrap();
+
         // Early return if there is no calendar email specified.
-        if calendar_email.is_none() {
+        if calendar_emails.is_empty() {
             tracing::warn!(
-                "Background job research_meeting_attendees failed: No calendar email address specified in AppConfig.",
+                "Background job research_meeting_attendees failed: No authenticated calendars found.",
             );
             return;
         }
@@ -52,7 +50,7 @@ impl PeriodicJob for ResearchMeetingAttendees {
         // Create a prompt for the chat to research meeting attendees
         let prompt = format!("Check my calendar for upcoming meetings and prepare a briefing for each meeting using the example below.
 
-My email address to use for the calendar is {}
+My email addresses to use for the calendar are {}
 
 When researching each meeting's attendees you must carefully search for the person's name AND the website from their email address. For example, if the attendee's name is Matt Rumple and their email address is matt@example.com, you should search for \"Matt Rumple example.com\" or just the email \"matt@example.com\" to disambiguate who the attendee is. If you can't find relevant information about the attendee, just say what you tried and that there were no relevant results.
 
@@ -79,7 +77,7 @@ Kristen is the VP of Finance. She joined Acme 2 years ago. She previously worked
 *About Frank Bar*
 Frank is the VP of People at Acme. He was previously HR Manager at Acme and before that he worked at Facebook as an HRBP. He posts about employee engagement and company culture.
 
-[LinkedIn profile](https://linkedin.com/in/frank-bar)", calendar_email.clone().unwrap());
+[LinkedIn profile](https://linkedin.com/in/frank-bar)", calendar_emails.join("and "));
 
         // Create initial message for chat
         let history = vec![Message::new(Role::User, &prompt)];

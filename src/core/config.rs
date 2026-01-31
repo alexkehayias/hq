@@ -17,7 +17,6 @@ pub struct AppConfig {
     pub openai_api_hostname: String,
     pub openai_api_key: String,
     pub system_message: String,
-    pub calendar_email: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -40,7 +39,6 @@ impl Default for AppConfig {
             std::env::var("INDEXER_GMAIL_CLIENT_ID").expect("Missing INDEXER_GMAIL_CLIENT_ID");
         let gmail_api_client_secret = std::env::var("INDEXER_GMAIL_CLIENT_SECRET")
             .expect("Missing INDEXER_GMAIL_CLIENT_SECRET");
-        let calendar_email = std::env::var("INDEXER_CALENDAR_EMAIL").ok();
         let openai_api_hostname = env::var("INDEXER_LOCAL_LLM_HOST")
             .unwrap_or_else(|_| "https://api.openai.com".to_string());
         let openai_api_key =
@@ -70,7 +68,6 @@ impl Default for AppConfig {
             openai_api_key,
             openai_model,
             system_message,
-            calendar_email,
         }
     }
 }

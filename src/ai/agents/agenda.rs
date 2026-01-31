@@ -5,7 +5,7 @@ use crate::openai::{Message, Role, ToolCall};
 /// Daily agenda creator agent.
 pub async fn daily_agenda_response(
     api_base_url: &str,
-    calendar_email: &str,
+    calendar_emails: Vec<String>,
     openai_api_hostname: &str,
     openai_api_key: &str,
     openai_model: &str,
@@ -36,8 +36,8 @@ Format the output as a short, scannable summary with:
 Avoid verbose descriptions. Focus on what's most important for the user to know."#;
 
     let user_msg = format!(
-        r#"Create my daily agenda. My calendar email is {}."#,
-        calendar_email
+        r#"Create my daily agenda. My calendar emails are {}."#,
+        calendar_emails.join("and ")
     );
 
     let history = vec![
