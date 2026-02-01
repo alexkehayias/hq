@@ -16,15 +16,15 @@ mod tests {
     use tokio::sync::mpsc;
     use tower::util::ServiceExt;
 
-    use indexer::ai::prompt::{self, Prompt};
-    use indexer::api::server::app;
-    use indexer::api::state::AppState;
-    use indexer::core::AppConfig;
-    use indexer::core::db::async_db;
-    use indexer::core::db::initialize_db;
-    use indexer::openai;
-    use indexer::openai::BoxedToolCall;
-    use indexer::search::indexing::index_all;
+    use hq::ai::prompt::{self, Prompt};
+    use hq::api::server::app;
+    use hq::api::state::AppState;
+    use hq::core::AppConfig;
+    use hq::core::db::async_db;
+    use hq::core::db::initialize_db;
+    use hq::openai;
+    use hq::openai::BoxedToolCall;
+    use hq::search::indexing::index_all;
     use serde::Serialize;
     use serde_json::json;
     use serial_test::serial;

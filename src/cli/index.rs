@@ -29,7 +29,7 @@ pub async fn run(
 
     // Clone the notes repo
     let deploy_key_path =
-        env::var("INDEXER_NOTES_DEPLOY_KEY_PATH").expect("Missing env var INDEXER_NOTES_REPO_URL");
+        env::var("HQ_NOTES_DEPLOY_KEY_PATH").expect("Missing env var HQ_NOTES_REPO_URL");
     maybe_pull_and_reset_repo(&deploy_key_path, &notes_path).await;
 
     let db = crate::core::db::async_db(&vec_db_path)

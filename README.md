@@ -1,6 +1,12 @@
-# About
+# About `hq`
 
-WIP personal indexer service.
+My personal AI assitant and productivity platform, composed of the following:
+- A server: API, static files
+- Chat UI: AI chat bot, progressive web app (PWA)
+- The CLI: run commands from the terminal
+- AI: tools, agents, and integrations
+
+This is [one-of-one software](https://notes.alexkehayias.com/one-of-one-software/). It's designed from the ground up for one user—me. While the code is available for reference, you may not copy it or use it for any purpose without permission (nor would you want to since it's designed for me).
 
 ## Running it
 
@@ -46,42 +52,42 @@ cargo install --locked watchexec-cli
 Build the image:
 
 ```
-docker build -t "indexer:latest" .
+docker build -t "hq:latest" .
 ```
 
 Run a container:
 
 ```
-docker run -p 2222:2222 -d indexer:latest
+docker run -p 2222:2222 -d hq:latest
 ```
 
 ## Running on Dokku
 
 1. In the `dokku` server, create the app
-2. Create a directory for deploy keys on `dokku` under `/var/lib/dokku/data/storage/indexer/.ssh`
-3. Generate a new key pair on the `dokku` server `ssh-keygen -q -t rsa -b 2048 -f "/var/lib/dokku/data/storage/indexer/.ssh/notes_id_rsa" -N ""`
+2. Create a directory for deploy keys on `dokku` under `/var/lib/dokku/data/storage/hq/.ssh`
+3. Generate a new key pair on the `dokku` server `ssh-keygen -q -t rsa -b 2048 -f "/var/lib/dokku/data/storage/hq/.ssh/notes_id_rsa" -N ""`
 4. Store the public key in the GitHub repo (Settings -> Deploy Keys)
-5. Generate GitHub known hosts `sudo bash -c "ssh-keyscan -t rsa github.com >> /var/lib/dokku/data/storage/indexer/.ssh/known_hosts"`
-7. Create data directory to persist indices between deploys `mkdir /var/lib/dokku/data/storage/indexer/data && dokku storage:mount indexer /var/lib/dokku/data/storage/indexer:/root/data`
+5. Generate GitHub known hosts `sudo bash -c "ssh-keyscan -t rsa github.com >> /var/lib/dokku/data/storage/hq/.ssh/known_hosts"`
+7. Create data directory to persist indices between deploys `mkdir /var/lib/dokku/data/storage/hq/data && dokku storage:mount hq /var/lib/dokku/data/storage/hq:/root/data`
 8. Generate a VAPID key pair, private key with `openssl ecparam -genkey -name prime256v1 -out private_key.pem`, and public key with `openssl ec -in private_key.pem -pubout -outform DER|tail -c 65|base64|tr '/+' '_-'|tr -d '\n'` (remove the trailing `=` in the public key and hard code it into `index.js`)
-9. Add the following environment variables using `dokku config:set indexer {ENV_VAR}`:
-- `INDEXER_NOTES_REPO_URL` to the GitHub repo with notes
-- `INDEXER_NOTES_DEPLOY_KEY_PATH` to `/root/.ssh`
-- `INDEXER_STORAGE_PATH` to allow indices to persist between deploys
-- `INDEXER_VAPID_KEY_PATH` for push notifications
-- `INDEXER_NOTE_SEARCH_API_URL` for the note search AI tool
-- `INDEXER_SEARXNG_API_URL` for the web search AI tool
-- `INDEXER_GMAIL_CLIENT_ID` and `INDEXER_GMAIL_CLIENT_SECRET` for the gmail API
-- `INDEXER_GOOGLE_SEARCH_API_KEY` and `INDEXER_GOOGLE_SEARCH_CX_ID` for the Google search API
-- `INDEXER_LOCAL_LLM_HOST` for the OpenAI API hostname (defaults to "https://api.openai.com" if not set)
-- `INDEXER_CALENDAR_EMAIL` to us for meeting prep
-- `INDEXER_LOCAL_LLM_MODEL` for the OpenAI model to use (defaults to "gpt-4.1-mini" if not set)
+9. Add the following environment variables using `dokku config:set hq {ENV_VAR}`:
+- `HQ_NOTES_REPO_URL` to the GitHub repo with notes
+- `HQ_NOTES_DEPLOY_KEY_PATH` to `/root/.ssh`
+- `HQ_STORAGE_PATH` to allow indices to persist between deploys
+- `HQ_VAPID_KEY_PATH` for push notifications
+- `HQ_NOTE_SEARCH_API_URL` for the note search AI tool
+- `HQ_SEARXNG_API_URL` for the web search AI tool
+- `HQ_GMAIL_CLIENT_ID` and `HQ_GMAIL_CLIENT_SECRET` for the gmail API
+- `HQ_GOOGLE_SEARCH_API_KEY` and `HQ_GOOGLE_SEARCH_CX_ID` for the Google search API
+- `HQ_LOCAL_LLM_HOST` for the OpenAI API hostname (defaults to "https://api.openai.com" if not set)
+- `HQ_CALENDAR_EMAIL` to us for meeting prep
+- `HQ_LOCAL_LLM_MODEL` for the OpenAI model to use (defaults to "gpt-4.1-mini" if not set)
 - `OPENAI_API_KEY` for OpenAI API authentication (ignored when using a local LLM server)
 - `DOKKU_DOCKERFILE_START_CMD` to `serve --host 0.0.0.0 --port 2222`
-10. On local, add remote `git remote add dokku dokku@<dokku-host>:indexer`
+10. On local, add remote `git remote add dokku dokku@<dokku-host>:hq`
 11. Push to build and start `git push dokku main`
-12. Increase the default proxy timeout `dokku nginx:set indexer proxy-read-timeout 5m`
-13. Redeploy the app so the `nginx` changes take effect `dokku deploy indexer`
+12. Increase the default proxy timeout `dokku nginx:set hq proxy-read-timeout 5m`
+13. Redeploy the app so the `nginx` changes take effect `dokku deploy hq`
 
 ## Queries
 

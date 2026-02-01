@@ -490,7 +490,7 @@ async fn send_notification(
         &payload.message,
         None,
         None,
-        Some("indexer_updated"),
+        Some("index_updated"),
     );
     broadcast_push_notification(subscriptions, vapid_key_path, payload).await;
 

@@ -22,7 +22,7 @@ RUN apt update
 RUN apt install -y git
 
 # Use the compiled binary rather than cargo
-COPY --from=builder /target/release/indexer /indexer
+COPY --from=builder /target/release/hq /hq
 
 # Copy over static files for the web UI, currently these are built and
 # checked into the repo but that might change later
@@ -50,5 +50,5 @@ EXPOSE 2222
 
 # Default command with run in docker so we can use `dokku run`
 # Need to update $DOKKU_DOCKERFILE_START_CMD so that the server starts
-#  with `./indexer serve --host 0.0.0.0 --port 2222`
-ENTRYPOINT ["./indexer"]
+#  with `./hq serve --host 0.0.0.0 --port 2222`
+ENTRYPOINT ["./hq"]

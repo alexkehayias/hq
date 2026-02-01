@@ -1,5 +1,5 @@
 use anyhow::Result;
-use indexer::cli;
+use hq::cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {

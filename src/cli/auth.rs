@@ -29,11 +29,11 @@ pub async fn run(service: ServiceKind, vec_db_path: &str) -> Result<()> {
                 .expect("Failed to read email address");
             let user_email = user_email.trim().to_owned();
 
-            let client_id = std::env::var("INDEXER_GMAIL_CLIENT_ID")
-                .expect("Set INDEXER_GMAIL_CLIENT_ID in your environment");
-            let client_secret = std::env::var("INDEXER_GMAIL_CLIENT_SECRET")
-                .expect("Set INDEXER_GMAIL_CLIENT_SECRET in your environment");
-            let redirect_uri = std::env::var("INDEXER_GMAIL_REDIRECT_URI")
+            let client_id = std::env::var("HQ_GMAIL_CLIENT_ID")
+                .expect("Set HQ_GMAIL_CLIENT_ID in your environment");
+            let client_secret = std::env::var("HQ_GMAIL_CLIENT_SECRET")
+                .expect("Set HQ_GMAIL_CLIENT_SECRET in your environment");
+            let redirect_uri = std::env::var("HQ_GMAIL_REDIRECT_URI")
                 .unwrap_or_else(|_| "urn:ietf:wg:oauth:2.0:oob".to_string());
             let scope = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.calendars.readonly https://www.googleapis.com/auth/calendar.events.readonly";
             let auth_url = format!(

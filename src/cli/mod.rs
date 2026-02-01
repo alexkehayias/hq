@@ -86,7 +86,7 @@ pub struct Cli {
 pub async fn run() -> Result<()> {
     let args = Cli::parse();
 
-    let storage_path = env::var("INDEXER_STORAGE_PATH").unwrap_or("./".to_string());
+    let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
     let index_path = format!("{}/index", storage_path);
     let notes_path = format!("{}/notes", storage_path);
     let vec_db_path = format!("{}/db", storage_path);
