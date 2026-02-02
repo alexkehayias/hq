@@ -33,7 +33,7 @@ enum Command {
         #[arg(long, action, default_value = "false")]
         index: bool,
     },
-    /// Run the API server
+    /// Run the server
     Serve {
         /// Set the server host address
         #[arg(long, default_value = "127.0.0.1")]
@@ -52,7 +52,7 @@ enum Command {
         #[arg(long, default_value = "false")]
         vector: bool,
     },
-    /// Rebuild all of the indices from source
+    /// Rebuild all indices from source
     Rebuild {},
     /// Query the search index
     Query {
@@ -63,12 +63,12 @@ enum Command {
     },
     /// Start a chat bot session
     Chat {},
-    /// Perform OAuth authentication and print tokens
+    /// Perform oauth and store credentials
     Auth {
         #[arg(long, value_enum)]
         service: ServiceKind,
     },
-    /// Run a periodic job
+    /// Run a job
     Job {
         #[arg(long, value_enum)]
         id: JobId,
