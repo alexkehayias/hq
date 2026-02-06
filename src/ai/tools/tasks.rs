@@ -33,14 +33,14 @@ impl ToolCall for TasksDueTodayTool {
             .append_pair("query", &query)
             .append_pair("include_similarity", "false");
 
-        let resp = reqwest::Client::new()
+        let search_resp: SearchResponse = reqwest::Client::new()
             .get(url.as_str())
             .header("Content-Type", "application/json")
             .send()
             .await?
-            .error_for_status()?;
-
-        let search_resp: SearchResponse = resp.json().await?;
+            .error_for_status()?
+            .json()
+            .await?;
 
         if search_resp.results.is_empty() {
             return Ok("No results found".to_string());
@@ -167,5 +167,128 @@ impl TasksScheduledTodayTool {
 impl Default for TasksScheduledTodayTool {
     fn default() -> Self {
         Self::new("http://localhost:2222")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::fs;
+
+    #[tokio::test]
+    async fn it_gets_tasks_due_today() -> Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let mock_resp = fs::read_to_string("./tests/data/tasks_search_response.json").unwrap();
+        // The query includes today's date, so we need to match the pattern with regex
+        let _mock = server
+            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=deadline%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_resp)
+            .create();
+
+        let tool = TasksDueTodayTool::new(&url);
+        let result = tool.call("{}").await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(output.contains("## Complete project report"));
+        assert!(output.contains("note-123"));
+        assert!(output.contains("Write the final report for the quarterly project review"));
+        assert!(output.contains("## Review pull requests"));
+        assert!(output.contains("note-456"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn it_gets_tasks_scheduled_today() -> Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let mock_resp = fs::read_to_string("./tests/data/tasks_search_response.json").unwrap();
+        // The query includes today's date, so we need to match the pattern with regex
+        let _mock = server
+            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=scheduled%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_resp)
+            .create();
+
+        let tool = TasksScheduledTodayTool::new(&url);
+        let result = tool.call("{}").await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(output.contains("## Complete project report"));
+        assert!(output.contains("note-123"));
+        assert!(output.contains("Write the final report for the quarterly project review"));
+        assert!(output.contains("## Review pull requests"));
+        assert!(output.contains("note-456"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn it_handles_no_tasks_due_today() -> Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let empty_resp = r#"{"raw_query": "", "parsed_query": "", "results": []}"#;
+        let _mock = server
+            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=deadline%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(empty_resp)
+            .create();
+
+        let tool = TasksDueTodayTool::new(&url);
+        let result = tool.call("{}").await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert_eq!(output, "No results found");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn it_handles_no_tasks_scheduled_today() -> Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let empty_resp = r#"{"raw_query": "", "parsed_query": "", "results": []}"#;
+        let _mock = server
+            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=scheduled%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(empty_resp)
+            .create();
+
+        let tool = TasksScheduledTodayTool::new(&url);
+        let result = tool.call("{}").await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert_eq!(output, "No results found");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_tasks_due_today_default() {
+        let tool = TasksDueTodayTool::default();
+        assert_eq!(tool.api_base_url, "http://localhost:2222");
+        assert_eq!(tool.function_name(), "tasks_due_today");
+    }
+
+    #[test]
+    fn test_tasks_scheduled_today_default() {
+        let tool = TasksScheduledTodayTool::default();
+        assert_eq!(tool.api_base_url, "http://localhost:2222");
+        assert_eq!(tool.function_name(), "tasks_scheduled_today");
     }
 }

@@ -1,0 +1,36 @@
+{
+  "raw_query": "deadline:<=2026-02-06 -status:done -status:canceled",
+  "parsed_query": "",
+  "results": [
+    {
+      "id": "note-123",
+      "type": "task",
+      "title": "Complete project report",
+      "category": "work",
+      "file_name": "work.org",
+      "tags": "urgent,priority",
+      "is_task": true,
+      "task_status": "todo",
+      "task_scheduled": null,
+      "task_deadline": "2026-02-06",
+      "task_closed": null,
+      "meeting_date": null,
+      "body": "Write the final report for the quarterly project review"
+    },
+    {
+      "id": "note-456",
+      "type": "task",
+      "title": "Review pull requests",
+      "category": "development",
+      "file_name": "dev.org",
+      "tags": null,
+      "is_task": true,
+      "task_status": "todo",
+      "task_scheduled": null,
+      "task_deadline": "2026-02-06",
+      "task_closed": null,
+      "meeting_date": null,
+      "body": "Review and approve pending PRs for the main branch"
+    }
+  ]
+}
