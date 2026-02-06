@@ -80,3 +80,44 @@ impl Default for EmailUnreadTool {
         Self::new("http://localhost:2222")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::fs;
+
+    #[tokio::test]
+    async fn it_fetches_unread_emails() -> Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let mock_resp = fs::read_to_string("./tests/data/email_unread_response.json").unwrap();
+        let _mock = server
+            .mock("GET", "/email/unread?email=test%40example.com")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_resp)
+            .create();
+
+        let tool = EmailUnreadTool::new(&url);
+        let args = r#"{"email": "test@example.com"}"#;
+        let result = tool.call(args).await;
+
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        let json_output: serde_json::Value = serde_json::from_str(&output)?;
+        assert_eq!(json_output["email"], "test@example.com");
+
+        let messages = json_output["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+
+        let first_message = &messages[0];
+        assert_eq!(first_message["id"], "123456789");
+        assert_eq!(first_message["subject"], "Project Update Meeting");
+        assert_eq!(first_message["from"], "john@company.com");
+
+        Ok(())
+    }
+}
