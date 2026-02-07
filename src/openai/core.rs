@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum Role {
     #[serde(rename = "system")]
     System,
@@ -406,4 +406,538 @@ pub async fn completion_stream(
         ]
     });
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_role_serialization() {
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), r#""system""#);
+        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), r#""assistant""#);
+        assert_eq!(serde_json::to_string(&Role::User).unwrap(), r#""user""#);
+        assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), r#""tool""#);
+    }
+
+    #[test]
+    fn test_role_deserialization() {
+        let json = r#""system""#;
+        assert_eq!(serde_json::from_str::<Role>(json).unwrap(), Role::System);
+
+        let json = r#""assistant""#;
+        assert_eq!(serde_json::from_str::<Role>(json).unwrap(), Role::Assistant);
+
+        let json = r#""user""#;
+        assert_eq!(serde_json::from_str::<Role>(json).unwrap(), Role::User);
+
+        let json = r#""tool""#;
+        assert_eq!(serde_json::from_str::<Role>(json).unwrap(), Role::Tool);
+    }
+
+    #[test]
+    fn test_message_new() {
+        let msg = Message::new(Role::User, "Hello world");
+        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"role":"user","content":"Hello world"}"#);
+
+        let msg = Message::new(Role::Assistant, "I can help!");
+        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"role":"assistant","content":"I can help!"}"#);
+    }
+
+    #[test]
+    fn test_message_new_tool_call_request() {
+        let tool_calls = vec![FunctionCall {
+            function: FunctionCallFn {
+                arguments: r#"{"query":"books"}"#.to_string(),
+                name: "search_notes".to_string(),
+            },
+            id: "call_test123".to_string(),
+            r#type: "function".to_string(),
+        }];
+
+        let msg = Message::new_tool_call_request(tool_calls);
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"role":"assistant","tool_calls":[{"function":{"arguments":"{\"query\":\"books\"}","name":"search_notes"},"id":"call_test123","type":"function"}]}"#
+        );
+    }
+
+    #[test]
+    fn test_message_new_tool_call_response() {
+        let msg = Message::new_tool_call_response("Found 3 books", "call_test123");
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"role":"tool","content":"Found 3 books","tool_call_id":"call_test123"}"#
+        );
+    }
+
+    #[test]
+    fn test_function_call_serialization() {
+        let fc = FunctionCallFn {
+            arguments: r#"{"query":"test"}"#.to_string(),
+            name: "my_function".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_string(&fc).unwrap(),
+            r#"{"arguments":"{\"query\":\"test\"}","name":"my_function"}"#
+        );
+    }
+
+    #[test]
+    fn test_function_call_deserialization() {
+        let json = r#"{"arguments":"{\"query\":\"test\"}","name":"my_function"}"#;
+        let fc: FunctionCallFn = serde_json::from_str(json).unwrap();
+        assert_eq!(fc.name, "my_function");
+        assert_eq!(fc.arguments, r#"{"query":"test"}"#);
+    }
+
+    #[test]
+    fn test_function_call_full_serialization() {
+        let fc = FunctionCall {
+            function: FunctionCallFn {
+                arguments: r#"{"query":"books"}"#.to_string(),
+                name: "search_notes".to_string(),
+            },
+            id: "call_test123".to_string(),
+            r#type: "function".to_string(),
+        };
+        let json = serde_json::to_string(&fc).unwrap();
+        assert!(json.contains(r#""arguments":"{\"query\":\"books\"}"#));
+        assert!(json.contains(r#""name":"search_notes""#));
+        assert!(json.contains(r#""id":"call_test123""#));
+        assert!(json.contains(r#""type":"function""#));
+    }
+
+    #[test]
+    fn test_function_call_full_deserialization() {
+        let json = r#"{
+            "function": {"arguments":"{\"query\":\"books\"}","name":"search_notes"},
+            "id":"call_test123",
+            "type":"function"
+        }"#;
+        let fc: FunctionCall = serde_json::from_str(json).unwrap();
+        assert_eq!(fc.id, "call_test123");
+        assert_eq!(fc.r#type, "function");
+        assert_eq!(fc.function.name, "search_notes");
+        assert_eq!(fc.function.arguments, r#"{"query":"books"}"#);
+    }
+
+    #[test]
+    fn test_tool_type_serialization() {
+        assert_eq!(serde_json::to_string(&ToolType::Function).unwrap(), r#""function""#);
+    }
+
+    #[test]
+    fn test_property_serialization() {
+        let prop = Property {
+            r#type: "string".to_string(),
+            description: "The search query".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_string(&prop).unwrap(),
+            r#"{"type":"string","description":"The search query"}"#
+        );
+    }
+
+    #[test]
+    fn test_parameters_serialization() {
+        let props = serde_json::json!({"query": {"type": "string", "description": "Search query"}});
+        let params = Parameters {
+            r#type: "object".to_string(),
+            properties: props.clone(),
+            required: vec!["query".to_string()],
+            additional_properties: false,
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["type"], "object");
+        assert_eq!(json["required"].as_array().unwrap()[0], "query");
+        assert_eq!(json["additionalProperties"], false);
+    }
+
+    #[test]
+    fn test_function_serialization() {
+        let props = serde_json::json!({"query": {"type": "string", "description": "Search query"}});
+        let params = Parameters {
+            r#type: "object".to_string(),
+            properties: props,
+            required: vec!["query".to_string()],
+            additional_properties: false,
+        };
+        let func = Function {
+            name: "search_notes".to_string(),
+            description: "Search through notes".to_string(),
+            parameters: params,
+            strict: true,
+        };
+        let json = serde_json::to_value(&func).unwrap();
+        assert_eq!(json["name"], "search_notes");
+        assert_eq!(json["description"], "Search through notes");
+    }
+
+    #[test]
+    fn test_delta_content_deserialization() {
+        let json = r#"{"content":"Hello"}"#;
+        let delta: Delta = serde_json::from_str(json).unwrap();
+        match delta {
+            Delta::Content { content } => assert_eq!(content, "Hello"),
+            _ => panic!("Expected Content variant"),
+        }
+    }
+
+    #[test]
+    fn test_delta_reasoning_deserialization() {
+        let json = r#"{"reasoning":"Thinking..."}"#;
+        let delta: Delta = serde_json::from_str(json).unwrap();
+        match delta {
+            Delta::Reasoning { reasoning } => assert_eq!(reasoning, "Thinking..."),
+            _ => panic!("Expected Reasoning variant"),
+        }
+    }
+
+    #[test]
+    fn test_delta_stop_deserialization() {
+        let json = r#"{}"#;
+        let delta: Delta = serde_json::from_str(json).unwrap();
+        match delta {
+            Delta::Stop {} => {}
+            _ => panic!("Expected Stop variant"),
+        }
+    }
+
+    #[test]
+    fn test_delta_tool_call_deserialization() {
+        let json = r#"{
+            "tool_calls": [{
+                "id":"call_abc",
+                "index":0,
+                "function":{"name":"search","arguments":"{\"q\":\"test\"}"},
+                "type":"function"
+            }]
+        }"#;
+        let delta: Delta = serde_json::from_str(json).unwrap();
+        match delta {
+            Delta::ToolCall { tool_calls } => {
+                assert_eq!(tool_calls.len(), 1);
+            }
+            _ => panic!("Expected ToolCall variant"),
+        }
+    }
+
+    #[test]
+    fn test_tool_call_chunk_init_deserialization() {
+        let json = r#"{
+            "id":"call_abc",
+            "index":0,
+            "function":{"name":"search","arguments":"{"},
+            "type":"function"
+        }"#;
+        let chunk: ToolCallChunk = serde_json::from_str(json).unwrap();
+        match chunk {
+            ToolCallChunk::Init { id, index, function, r#type } => {
+                assert_eq!(id, "call_abc");
+                assert_eq!(index, 0);
+                assert_eq!(function.name, "search");
+                assert_eq!(r#type, "function");
+            }
+            _ => panic!("Expected Init variant"),
+        }
+    }
+
+    #[test]
+    fn test_tool_call_chunk_args_delta_deserialization() {
+        let json = r#"{
+            "index":0,
+            "function":{"arguments":"\"q\":\"test\"}"},
+            "type":"function"
+        }"#;
+        let chunk: ToolCallChunk = serde_json::from_str(json).unwrap();
+        match chunk {
+            ToolCallChunk::ArgsDelta { index, function, r#type } => {
+                assert_eq!(index, 0);
+                assert_eq!(function.arguments, r#""q":"test"}"#);
+                assert_eq!(r#type, "function");
+            }
+            _ => panic!("Expected ArgsDelta variant"),
+        }
+    }
+
+    #[test]
+    fn test_completion_chunk_deserialization() {
+        let json = r#"{
+            "id":"chunk_123",
+            "created":1234567890,
+            "model":"gpt-4",
+            "system_fingerprint":"fp_abc123",
+            "choices":[{
+                "index":0,
+                "delta":{"content":"Hello"},
+                "finish_reason":null
+            }]
+        }"#;
+        let chunk: CompletionChunk = serde_json::from_str(json).unwrap();
+        assert_eq!(chunk.id, "chunk_123");
+        assert_eq!(chunk.created, 1234567890);
+        assert_eq!(chunk.model, "gpt-4");
+    }
+
+    #[tokio::test]
+    async fn test_completion_basic() {
+        let mut server = mockito::Server::new_async().await;
+
+        let response_body = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!"
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response_body)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "Hi")];
+        let result = completion(
+            &messages,
+            &None,
+            server.url().as_str(),
+            "test-key",
+            "gpt-4"
+        ).await;
+
+        mock.assert();
+        assert!(result.is_ok());
+
+        let json = result.unwrap();
+        assert_eq!(json["choices"][0]["message"]["content"], "Hello!");
+    }
+
+    #[tokio::test]
+    async fn test_completion_with_tools() {
+        let mut server = mockito::Server::new_async().await;
+
+        let response_body = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "search_notes",
+                            "arguments": "{\"query\":\"test\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response_body)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "Search for test")];
+
+        // Create a mock tool
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait]
+        impl ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> Result<String, Error> {
+                Ok("mock result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "search_notes".to_string()
+            }
+        }
+
+        let tools = Some(vec![Box::new(MockTool) as BoxedToolCall]);
+
+        let result = completion(
+            &messages,
+            &tools,
+            server.url().as_str(),
+            "test-key",
+            "gpt-4"
+        ).await;
+
+        mock.assert();
+        assert!(result.is_ok());
+
+        let json = result.unwrap();
+        assert!(json["choices"][0]["message"]["tool_calls"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_completion_stream_content() {
+        let mut server = mockito::Server::new_async().await;
+
+        // SSE response with content chunks
+        let sse_response = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":" World"},"finish_reason":null}]}
+
+data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_response)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "Say hello")];
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let server_url = server.url();
+
+        // Run completion_stream in a separate task
+        let handle = tokio::spawn(async move {
+            completion_stream(
+                tx,
+                &messages,
+                &None,
+                server_url.as_str(),
+                "test-key",
+                "gpt-4"
+            ).await
+        });
+
+        // Wait for the task to complete
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            handle
+        ).await;
+
+        mock.assert();
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_ok());
+
+        // The channel should have received the raw JSON chunks
+        let mut chunk_count = 0;
+        while let Ok(_) = rx.try_recv() {
+            chunk_count += 1;
+        }
+        assert!(chunk_count >= 3);
+    }
+
+    #[tokio::test]
+    async fn test_completion_stream_tool_call() {
+        let mut server = mockito::Server::new_async().await;
+
+        // SSE response with tool call chunks
+        let sse_response = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_abc123","index":0,"function":{"name":"search_notes","arguments":"{\"query\":"},"type":"function"}]},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"test\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_response)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "Search for test")];
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_url = server.url();
+
+        // Run completion_stream in a separate task
+        let handle = tokio::spawn(async move {
+            completion_stream(
+                tx,
+                &messages,
+                &None,
+                server_url.as_str(),
+                "test-key",
+                "gpt-4"
+            ).await
+        });
+
+        // Wait for the task to complete
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            handle
+        ).await;
+
+        mock.assert();
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_completion_stream_reasoning() {
+        let mut server = mockito::Server::new_async().await;
+
+        // SSE response with reasoning chunks
+        let sse_response = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"reasoning":"Thinking"},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"reasoning":"..."},"finish_reason":null}]}
+
+data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"Done!"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_response)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "Think about this")];
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_url = server.url();
+
+        // Run completion_stream in a separate task
+        let handle = tokio::spawn(async move {
+            completion_stream(
+                tx,
+                &messages,
+                &None,
+                server_url.as_str(),
+                "test-key",
+                "gpt-4"
+            ).await
+        });
+
+        // Wait for the task to complete
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            handle
+        ).await;
+
+        mock.assert();
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_ok());
+    }
 }
