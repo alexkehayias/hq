@@ -1,11 +1,12 @@
 use regex::Regex;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::hash::DefaultHasher;
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
-use std::hash::DefaultHasher;
 use tantivy::schema::*;
 use tantivy::{Index, IndexWriter, doc};
 use text_splitter::{ChunkConfig, TextSplitter};
@@ -524,8 +525,6 @@ fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) 
 /// saving notes in the db, full text search index, and vector
 /// storage. This needs to be done in one to avoid parsing org mode
 /// notes many times for each index.
-use std::sync::Arc;
-
 pub async fn index_all(
     db: &Connection,
     index_dir_path: &str,
