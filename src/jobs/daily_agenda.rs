@@ -5,9 +5,13 @@ use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
-    ai::agents::agenda, core::AppConfig, google::oauth::find_all_gmail_auth_emails, notify::{
+    ai::agents::agenda,
+    core::AppConfig,
+    google::oauth::find_all_gmail_auth_emails,
+    notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
-    }, openai::{get_or_create_session, insert_chat_message}
+    },
+    openai::{get_or_create_session, insert_chat_message},
 };
 
 #[derive(Debug)]
@@ -32,7 +36,9 @@ impl PeriodicJob for DailyAgenda {
 
         let session_id = Uuid::new_v4().to_string();
 
-        let calendar_emails = find_all_gmail_auth_emails(&db).await.expect("No authenticated calendars for emails found");
+        let calendar_emails = find_all_gmail_auth_emails(&db)
+            .await
+            .expect("No authenticated calendars for emails found");
 
         // Create the session with an "agenda" tag
         if let Err(e) = get_or_create_session(db, &session_id, &["background", "agenda"]).await {

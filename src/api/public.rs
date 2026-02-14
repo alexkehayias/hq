@@ -1,15 +1,7 @@
 //! Public API types
 
-use std::collections::HashMap;
-
-use crate::openai::Message;
 use axum::response::{IntoResponse, Response};
 use http::StatusCode;
-use rusqlite::{
-    ToSql,
-    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
-};
-use serde::{Deserialize, Serialize};
 
 // Errors
 
@@ -41,270 +33,32 @@ where
     }
 }
 
-// Search
+// Re-export public types from each route
 
-fn default_limit() -> usize {
-    20
+pub mod calendar {
+    pub use crate::api::routes::calendar::public::*;
 }
 
-fn default_as_true() -> bool {
-    true
+pub mod email {
+    pub use crate::api::routes::email::public::*;
 }
 
-fn default_as_false() -> bool {
-    false
+pub mod metrics {
+    pub use crate::api::routes::metrics::public::*;
 }
 
-#[derive(Deserialize)]
-pub struct SearchRequest {
-    pub query: String,
-    #[serde(default = "default_as_false")]
-    pub include_similarity: bool,
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-    #[serde(default = "default_as_true")]
-    pub truncate: bool,
+pub mod notes {
+    pub use crate::api::routes::notes::public::*;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct SearchResult {
-    pub id: String,
-    pub r#type: String,
-    pub title: String,
-    pub category: String,
-    pub file_name: String,
-    pub tags: Option<String>,
-    pub is_task: bool,
-    pub task_status: Option<String>,
-    pub task_scheduled: Option<String>,
-    pub task_deadline: Option<String>,
-    pub task_closed: Option<String>,
-    pub meeting_date: Option<String>,
-    pub body: String,
+pub mod push {
+    pub use crate::api::routes::push::public::*;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct SearchResponse {
-    pub raw_query: String,
-    pub parsed_query: String,
-    pub results: Vec<SearchResult>,
+pub mod webhook {
+    pub use crate::api::routes::webhook::public::*;
 }
 
-// Note
-
-#[derive(Serialize)]
-pub struct ViewNoteResponse {
-    pub id: String,
-    pub title: String,
-    pub body: String,
-    pub tags: Option<String>,
-}
-
-// Chat
-
-#[derive(Deserialize)]
-pub struct ChatRequest {
-    pub session_id: String,
-    pub message: String,
-}
-
-#[derive(Deserialize)]
-pub struct ChatSessionsQuery {
-    pub page: Option<usize>,
-    pub limit: Option<usize>,
-    // Use HTML form syntax "?tags=t1&tags=t2"
-    pub tags: Option<Vec<String>>,
-    // Exclude sessions containing any of these tags
-    pub exclude_tags: Option<Vec<String>>,
-}
-
-#[derive(Serialize)]
-pub struct ChatSessionsResponse {
-    pub sessions: Vec<ChatSession>,
-    pub page: usize,
-    pub limit: usize,
-    pub total_sessions: i64,
-    pub total_pages: i64,
-}
-
-#[derive(Serialize)]
-pub struct ChatResponse {
-    message: String,
-}
-
-impl ChatResponse {
-    pub fn new(message: &str) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct ChatTranscriptResponse {
-    pub transcript: Vec<Message>,
-}
-
-// Notifications
-
-#[derive(Deserialize)]
-pub struct PushSubscriptionRequest {
-    pub endpoint: String,
-    pub keys: HashMap<String, String>,
-}
-
-#[derive(Deserialize)]
-pub struct NotificationRequest {
-    pub message: String,
-}
-
-// Email
-
-#[derive(Deserialize)]
-pub struct EmailUnreadQuery {
-    pub email: String,
-    pub limit: Option<i64>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct EmailMessage {
-    pub id: String,
-    pub thread_id: String,
-    pub from: String,
-    pub to: String,
-    pub received: String,
-    pub subject: String,
-    pub body: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct EmailThread {
-    pub id: String,
-    pub received: String,
-    pub from: String,
-    pub to: String,
-    pub subject: String,
-    pub messages: Vec<EmailMessage>,
-}
-
-#[derive(Deserialize)]
-pub struct CalendarQuery {
-    pub email: String,
-    pub days_ahead: Option<i64>,
-    pub calendar_id: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct CalendarAttendee {
-    pub email: String,
-    pub display_name: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct CalendarResponse {
-    pub id: String,
-    pub summary: String,
-    pub start: String, // Using String for datetime to maintain compatibility
-    pub end: String,   // Using String for datetime to maintain compatibility
-    pub attendees: Option<Vec<CalendarAttendee>>,
-}
-
-// Web search request/response structures
-#[derive(Deserialize)]
-pub struct WebSearchParams {
-    pub query: String,
-    #[serde(default = "default_web_limit")]
-    pub limit: u8,
-}
-
-fn default_web_limit() -> u8 {
-    3
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct WebSearchResult {
-    pub title: String,
-    pub link: String,
-    pub snippet: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct WebSearchResponse {
-    pub query: String,
-    pub results: Vec<WebSearchResult>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct ChatSession {
-    pub id: String,
-    pub title: Option<String>,
-    pub summary: Option<String>,
-    pub tags: Vec<String>,
-}
-
-// Metrics
-#[derive(Serialize, Deserialize, Debug)]
-pub enum MetricName {
-    #[serde(rename = "token-count")]
-    TokenCount,
-}
-
-impl ToSql for MetricName {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        // Use serde serialization to convert the enum back into a
-        // string to save to the database while still enforcing metric
-        // names can only be a `MetricName` variant.
-        let name = serde_json::to_string(self).expect("Failed to parse enum into string");
-        let value: String = serde_json::from_str(&name).expect("Failed to parse string from enum");
-        Ok(value.into())
-    }
-}
-
-impl FromSql for MetricName {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // Serde deserialization can only parse an enum from string if
-        // it's double quoted.
-        serde_json::from_str(&format!("\"{}\"", value.as_str()?))
-            .map_err(|e| FromSqlError::Other(Box::new(e)))
-    }
-}
-
-/// Request to record a metric event
-#[derive(Deserialize)]
-pub struct MetricRequest {
-    pub name: MetricName,
-    pub value: i64,
-}
-
-/// Query parameters for getting metric events
-#[derive(Deserialize)]
-pub struct MetricsQuery {
-    pub limit_days: Option<i64>,
-}
-
-/// A single metric event
-#[derive(Serialize)]
-pub struct MetricEvent {
-    pub name: MetricName,
-    pub timestamp: String,
-    pub value: i64,
-}
-
-/// Response containing metric events
-#[derive(Serialize)]
-pub struct MetricsResponse {
-    pub events: Vec<MetricEvent>,
-}
-
-// Webhook
-
-/// Blurt notification from daemon
-#[derive(Debug, Deserialize, Serialize)]
-pub struct BlurtNotification {
-    pub id: i64,
-    pub title: String,
-    pub subtitle: Option<String>,
-    pub body: String,
-    pub date: i64,
-    pub bundle_id: Option<String>,
+pub mod web {
+    pub use crate::api::routes::web::public::*;
 }

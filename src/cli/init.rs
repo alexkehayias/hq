@@ -44,10 +44,10 @@ pub async fn run(
 
     // Clone and reset the notes repo to origin/main
     if notes {
-        let deploy_key_path = std::env::var("HQ_NOTES_DEPLOY_KEY_PATH")
-            .expect("Missing env var HQ_NOTES_REPO_URL");
-        let repo_url = std::env::var("HQ_NOTES_REPO_URL")
-            .expect("Missing env var HQ_NOTES_REPO_URL");
+        let deploy_key_path =
+            std::env::var("HQ_NOTES_DEPLOY_KEY_PATH").expect("Missing env var HQ_NOTES_REPO_URL");
+        let repo_url =
+            std::env::var("HQ_NOTES_REPO_URL").expect("Missing env var HQ_NOTES_REPO_URL");
         println!("Cloning notes repo from git...");
         maybe_clone_repo(&deploy_key_path, &repo_url, &notes_path).await;
         println!("Finished cloning and resetting notes from git");

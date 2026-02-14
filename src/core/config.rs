@@ -27,8 +27,8 @@ impl Default for AppConfig {
         let index_path = format!("{}/index", storage_path);
         let notes_path = format!("{}/notes", storage_path);
         let vec_db_path = format!("{}/db", storage_path);
-        let deploy_key_path = env::var("HQ_NOTES_DEPLOY_KEY_PATH")
-            .expect("Missing env var HQ_NOTES_REPO_URL");
+        let deploy_key_path =
+            env::var("HQ_NOTES_DEPLOY_KEY_PATH").expect("Missing env var HQ_NOTES_REPO_URL");
         let vapid_key_path =
             env::var("HQ_VAPID_KEY_PATH").expect("Missing env var HQ_VAPID_KEY_PATH");
         let note_search_api_url =
@@ -37,10 +37,10 @@ impl Default for AppConfig {
             env::var("HQ_SEARXNG_API_URL").unwrap_or(format!("http://{}:{}", host, "8080"));
         let gmail_api_client_id =
             std::env::var("HQ_GMAIL_CLIENT_ID").expect("Missing HQ_GMAIL_CLIENT_ID");
-        let gmail_api_client_secret = std::env::var("HQ_GMAIL_CLIENT_SECRET")
-            .expect("Missing HQ_GMAIL_CLIENT_SECRET");
-        let openai_api_hostname = env::var("HQ_LOCAL_LLM_HOST")
-            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        let gmail_api_client_secret =
+            std::env::var("HQ_GMAIL_CLIENT_SECRET").expect("Missing HQ_GMAIL_CLIENT_SECRET");
+        let openai_api_hostname =
+            env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
         let openai_api_key =
             env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
         let openai_model =

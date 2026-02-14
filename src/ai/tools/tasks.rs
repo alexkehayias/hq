@@ -1,4 +1,4 @@
-use crate::api::public::SearchResponse;
+use crate::api::public::notes::SearchResponse;
 use crate::openai::{Function, Parameters, ToolCall, ToolType};
 use anyhow::{Error, Result};
 use async_trait::async_trait;

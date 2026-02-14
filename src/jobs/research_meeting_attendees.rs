@@ -5,11 +5,14 @@ use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
-    ai::tools::{CalendarTool, WebSearchTool, WebsiteViewTool}, core::AppConfig, google::oauth::find_all_gmail_auth_emails, notify::{
+    ai::tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
+    core::AppConfig,
+    google::oauth::find_all_gmail_auth_emails,
+    notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
-    }, openai::{BoxedToolCall, Message, Role, chat, get_or_create_session, insert_chat_message}
+    },
+    openai::{BoxedToolCall, Message, Role, chat, get_or_create_session, insert_chat_message},
 };
-
 
 #[derive(Default, Debug)]
 pub struct ResearchMeetingAttendees;

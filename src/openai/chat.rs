@@ -1,18 +1,13 @@
 use anyhow::{Error, Result, anyhow, bail};
-use async_trait::async_trait;
-use erased_serde;
 use futures_util::future::try_join_all;
-use serde::{Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_rusqlite::{Connection, params};
 
 use crate::{
-    api::public::ChatSession,
-    core::db::initialize_db,
+    api::public::notes::ChatSession,
     openai::{
         BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
-        ToolCall, Property, Parameters, Function, ToolType,
     },
 };
 

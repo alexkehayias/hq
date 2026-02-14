@@ -8,7 +8,7 @@ use tantivy::{Index, ReloadPolicy};
 use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
-use crate::api::public::SearchResult;
+use crate::api::public::notes::SearchResult;
 use crate::search::aql::{self};
 use crate::search::fts::schema::note_schema;
 use crate::search::query::{aql_to_index_query, expr_to_sql, query_to_similarity};

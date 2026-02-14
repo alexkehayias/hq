@@ -17,8 +17,8 @@ mod tests {
     use tower::util::ServiceExt;
 
     use hq::ai::prompt::{self, Prompt};
-    use hq::api::server::app;
-    use hq::api::state::AppState;
+    use hq::api::app;
+    use hq::api::AppState;
     use hq::core::AppConfig;
     use hq::core::db::async_db;
     use hq::core::db::initialize_db;

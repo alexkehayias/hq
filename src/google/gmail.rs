@@ -102,18 +102,21 @@ fn clean_unicode(content: &str) -> String {
 
     // Clean up common encoding artifacts (escaped sequences like \u2019)
     let escape_re = Regex::new(r"\\u([0-9a-fA-F]{4})").unwrap();
-    content = escape_re.replace_all(&content, |caps: &regex::Captures| {
-        if let Some(hex) = caps.get(1)
-            && let Ok(codepoint) = u32::from_str_radix(hex.as_str(), 16)
-                && let Some(c) = char::from_u32(codepoint) {
-                    return c.to_string();
-                }
-        caps.get(0).unwrap().as_str().to_string()
-    }).to_string();
+    content = escape_re
+        .replace_all(&content, |caps: &regex::Captures| {
+            if let Some(hex) = caps.get(1)
+                && let Ok(codepoint) = u32::from_str_radix(hex.as_str(), 16)
+                && let Some(c) = char::from_u32(codepoint)
+            {
+                return c.to_string();
+            }
+            caps.get(0).unwrap().as_str().to_string()
+        })
+        .to_string();
 
     // Convert smart quotes to regular quotes
-    content = content.replace('\u{2019}', "'");  // Right single quotation mark
-    content = content.replace('\u{2018}', "'");  // Left single quotation mark
+    content = content.replace('\u{2019}', "'"); // Right single quotation mark
+    content = content.replace('\u{2018}', "'"); // Left single quotation mark
     content = content.replace('\u{201c}', "\""); // Left double quotation mark
     content = content.replace('\u{201d}', "\""); // Right double quotation mark
 
@@ -178,22 +181,26 @@ fn html_entity_decode(input: &str) -> String {
 
     // Numeric entities (&#123; or &#x1F600;)
     let numeric_entity = Regex::new(r"&(#(\d+)|#x([0-9a-fA-F]+));").unwrap();
-    result = numeric_entity.replace_all(&result, |caps: &regex::Captures| {
-        if let Some(decimal) = caps.get(2) {
-            // Decimal: &#123;
-            if let Ok(codepoint) = decimal.as_str().parse::<u32>()
-                && let Some(c) = char::from_u32(codepoint) {
+    result = numeric_entity
+        .replace_all(&result, |caps: &regex::Captures| {
+            if let Some(decimal) = caps.get(2) {
+                // Decimal: &#123;
+                if let Ok(codepoint) = decimal.as_str().parse::<u32>()
+                    && let Some(c) = char::from_u32(codepoint)
+                {
                     return c.to_string();
                 }
-        } else if let Some(hex) = caps.get(3) {
-            // Hex: &#x1F600;
-            if let Ok(codepoint) = u32::from_str_radix(hex.as_str(), 16)
-                && let Some(c) = char::from_u32(codepoint) {
+            } else if let Some(hex) = caps.get(3) {
+                // Hex: &#x1F600;
+                if let Ok(codepoint) = u32::from_str_radix(hex.as_str(), 16)
+                    && let Some(c) = char::from_u32(codepoint)
+                {
                     return c.to_string();
                 }
-        }
-        caps.get(0).unwrap().as_str().to_string()
-    }).to_string();
+            }
+            caps.get(0).unwrap().as_str().to_string()
+        })
+        .to_string();
 
     result
 }
@@ -229,13 +236,16 @@ fn strip_signature(content: &str) -> String {
     result = footer_re.replace(&result, "").to_string();
 
     // Remove mobile signatures (can appear without delimiter)
-    let mobile_re = Regex::new(r"(?is)\n\n(?:Sent from my (?:iPhone|iPad|iPod)|Sent from my Android)[^\n]*$").unwrap();
+    let mobile_re =
+        Regex::new(r"(?is)\n\n(?:Sent from my (?:iPhone|iPad|iPod)|Sent from my Android)[^\n]*$")
+            .unwrap();
     result = mobile_re.replace(&result, "").to_string();
 
     // Remove standard signature delimiters with following content
     let delimiter_re = Regex::new(
-        r"(?is)(?:^|\n)\s*(?:--\s*\n|---+\s*\n|==+\s*\n|\*{3,}\s*\n).*(?:[^\n]{0,200}\n){0,10}$"
-    ).unwrap();
+        r"(?is)(?:^|\n)\s*(?:--\s*\n|---+\s*\n|==+\s*\n|\*{3,}\s*\n).*(?:[^\n]{0,200}\n){0,10}$",
+    )
+    .unwrap();
     if let Some(pos) = delimiter_re.find(&result) {
         result.truncate(pos.start());
     }
@@ -263,48 +273,59 @@ pub fn extract_body(message: &Message) -> String {
     let payload = message.payload.clone().unwrap();
 
     if let Some(body) = &payload.body
-        && let Some(data) = &body.data {
-            if &payload.mimetype == "text/html" {
-                let html = decode_base64(data);
-                let converter = HtmlToMarkdown::builder()
-                    .skip_tags(vec!["script", "style", "footer", "img", "svg"])
-                    .build();
-                return converter.convert(&html).expect("Failed to convert HTML to markdown");
-            }
-
-            return clean_and_strip_body(decode_base64(data));
+        && let Some(data) = &body.data
+    {
+        if &payload.mimetype == "text/html" {
+            let html = decode_base64(data);
+            let converter = HtmlToMarkdown::builder()
+                .skip_tags(vec!["script", "style", "footer", "img", "svg"])
+                .build();
+            return converter
+                .convert(&html)
+                .expect("Failed to convert HTML to markdown");
         }
+
+        return clean_and_strip_body(decode_base64(data));
+    }
 
     if let Some(parts) = &payload.parts {
         // Prefer plain text over HTML
         for part in parts {
             if part.mimetype == "text/plain"
-                && let Some(body) = &part.body {
-                    // Skip attachments
-                    if body.attachment_id.is_some() {
-                        continue;
-                    }
-                    // Return the first non-empty body found in parts
-                    if let Some(data) = &body.data && !data.is_empty() {
-                        return clean_and_strip_body(decode_base64(data));
-                    }
+                && let Some(body) = &part.body
+            {
+                // Skip attachments
+                if body.attachment_id.is_some() {
+                    continue;
                 }
+                // Return the first non-empty body found in parts
+                if let Some(data) = &body.data
+                    && !data.is_empty()
+                {
+                    return clean_and_strip_body(decode_base64(data));
+                }
+            }
 
             if part.mimetype == "text/html"
-                && let Some(body) = &part.body {
-                    // Skip attachments
-                    if body.attachment_id.is_some() {
-                        continue;
-                    }
-                    // Return the first non-empty body found in parts
-                    if let Some(data) = &body.data && !data.is_empty() {
-                        let html = decode_base64(data);
-                        let converter = HtmlToMarkdown::builder()
-                            .skip_tags(vec!["script", "style", "footer", "img", "svg"])
-                            .build();
-                        return converter.convert(&html).expect("Failed to convert HTML to markdown");
-                    }
+                && let Some(body) = &part.body
+            {
+                // Skip attachments
+                if body.attachment_id.is_some() {
+                    continue;
                 }
+                // Return the first non-empty body found in parts
+                if let Some(data) = &body.data
+                    && !data.is_empty()
+                {
+                    let html = decode_base64(data);
+                    let converter = HtmlToMarkdown::builder()
+                        .skip_tags(vec!["script", "style", "footer", "img", "svg"])
+                        .build();
+                    return converter
+                        .convert(&html)
+                        .expect("Failed to convert HTML to markdown");
+                }
+            }
         }
     }
 
@@ -319,7 +340,8 @@ pub fn extract_body(message: &Message) -> String {
     // return and empty string.
     tracing::warn!(
         "Body was empty for message with ID: {} in thread: {}",
-        message.id, message.thread_id
+        message.id,
+        message.thread_id
     );
 
     String::new()
@@ -498,7 +520,10 @@ mod tests {
         // Common unicode characters (note: this only decodes quoted-printable, doesn't convert smart quotes)
         assert_eq!(decode_quoted_printable("Test=E2=80=99"), "Test\u{2019}");
         assert_eq!(decode_quoted_printable("Don=E2=80=99t"), "Don\u{2019}t");
-        assert_eq!(decode_quoted_printable("smart=E2=80=9Cquotes=E2=80=9D"), "smart\u{201C}quotes\u{201D}");
+        assert_eq!(
+            decode_quoted_printable("smart=E2=80=9Cquotes=E2=80=9D"),
+            "smart\u{201C}quotes\u{201D}"
+        );
         assert_eq!(decode_quoted_printable("em=E2=80=94dash"), "em\u{2014}dash");
     }
 
@@ -513,15 +538,24 @@ mod tests {
 
         // Numeric entities (decimal)
         assert_eq!(html_entity_decode("Price: &#36;100"), "Price: $100");
-        assert_eq!(html_entity_decode("Copyright &#169; 2024"), "Copyright © 2024");
+        assert_eq!(
+            html_entity_decode("Copyright &#169; 2024"),
+            "Copyright © 2024"
+        );
 
         // Numeric entities (hex) - note: this converts to unicode characters, not regular quotes
         assert_eq!(html_entity_decode("Don&#x2019;t"), "Don\u{2019}t");
         assert_eq!(html_entity_decode("Test&#x1F600;ing"), "Test😀ing");
-        assert_eq!(html_entity_decode("&#x201C;Hello&#x201D;"), "\u{201C}Hello\u{201D}");
+        assert_eq!(
+            html_entity_decode("&#x201C;Hello&#x201D;"),
+            "\u{201C}Hello\u{201D}"
+        );
 
         // Mixed
-        assert_eq!(html_entity_decode("&lt;&#x201C;test&#x201D;&amp; more&gt;"), "<\u{201C}test\u{201D}& more>");
+        assert_eq!(
+            html_entity_decode("&lt;&#x201C;test&#x201D;&amp; more&gt;"),
+            "<\u{201C}test\u{201D}& more>"
+        );
     }
 
     #[test]
@@ -564,7 +598,10 @@ mod tests {
 
         // No signature
         let input = "Just a regular email\nWith multiple lines\nNo signature here";
-        assert_eq!(strip_signature(input), "Just a regular email\nWith multiple lines\nNo signature here");
+        assert_eq!(
+            strip_signature(input),
+            "Just a regular email\nWith multiple lines\nNo signature here"
+        );
 
         // Multiple dashes
         let input = "Content\n---\nSignature line";
@@ -579,7 +616,10 @@ mod tests {
     fn test_strip_quoted_replies() {
         // Simple quoted reply
         let input = "Hi Foo, I hope you had a great holiday weekend.\r\n\r\nOn Tue, Jul 1, 2025 at 1:43 PM Foo Bar <foo@example.com> wrote:\r\n\r\n> Hi Bar - it was great connecting with you";
-        assert_eq!(strip_quoted_replies(input), "Hi Foo, I hope you had a great holiday weekend.");
+        assert_eq!(
+            strip_quoted_replies(input),
+            "Hi Foo, I hope you had a great holiday weekend."
+        );
 
         // Nested quoted replies
         let input = "New message here\r\n\r\nOn Mon, Jun 23 at 5:21 PM Bar <bar@example.com> wrote:\r\n\r\n> Hi Foo, thanks for getting back to me.\r\n>\r\n>> On Fri, Jun 20 at 1:20 PM Foo wrote:\r\n>\r\n>>>> Hi Bar - thanks for your patience";
@@ -591,7 +631,10 @@ mod tests {
 
         // No quoted replies
         let input = "Just a regular email\nWith no quotes";
-        assert_eq!(strip_quoted_replies(input), "Just a regular email\nWith no quotes");
+        assert_eq!(
+            strip_quoted_replies(input),
+            "Just a regular email\nWith no quotes"
+        );
 
         // Unix line endings
         let input = "Hello world\n\nOn Tue, Jul 1, 2025 at 1:43 PM Foo wrote:\n\n> Quoted content";

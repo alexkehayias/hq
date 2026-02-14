@@ -1,4 +1,4 @@
-use crate::api::public::CalendarResponse;
+use crate::api::public::calendar::CalendarResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result};
 use async_trait::async_trait;

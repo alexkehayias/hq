@@ -87,7 +87,8 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
                         if is_fuzzy_search_field(query_field_name) {
                             Box::new(FuzzyTermQuery::new(term, 2, true)) as Box<dyn Query>
                         } else {
-                            Box::new(TermQuery::new(term, IndexRecordOption::Basic)) as Box<dyn Query>
+                            Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+                                as Box<dyn Query>
                         }
                     }
                 })
