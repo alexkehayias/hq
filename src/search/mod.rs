@@ -1,8 +1,10 @@
 pub mod aql;
-pub mod core;
-pub mod export;
-pub mod fts;
-pub mod indexing;
-pub mod query;
-pub mod source;
-pub use core::*;
+mod core;
+mod export;
+mod fts;
+pub use fts::utils::recreate_index;
+mod indexing;
+pub use indexing::index_all;
+mod query;
+mod source;
+pub use core::search_notes;

@@ -1,5 +1,5 @@
 use crate::core::git::maybe_pull_and_reset_repo;
-use crate::search::indexing::index_all;
+use crate::search::index_all;
 use anyhow::{Result, anyhow};
 use std::env;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

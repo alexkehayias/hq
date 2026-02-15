@@ -33,7 +33,7 @@ use crate::openai::{
     get_or_create_session, insert_chat_message,
 };
 use crate::search::aql;
-use crate::search::indexing::index_all;
+use crate::search::index_all;
 use crate::search::search_notes;
 use super::public;
 

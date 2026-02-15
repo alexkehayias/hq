@@ -24,7 +24,7 @@ mod tests {
     use hq::core::db::initialize_db;
     use hq::openai;
     use hq::openai::BoxedToolCall;
-    use hq::search::indexing::index_all;
+    use hq::search::index_all;
     use serde::Serialize;
     use serde_json::json;
     use serial_test::serial;

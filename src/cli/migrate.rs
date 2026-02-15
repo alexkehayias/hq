@@ -1,5 +1,5 @@
 use crate::core::db::{async_db, migrate_db};
-use crate::search::fts::utils::recreate_index;
+use crate::search::recreate_index;
 use anyhow::Result;
 
 pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> Result<()> {
