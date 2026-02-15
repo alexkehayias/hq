@@ -26,11 +26,9 @@ use crate::core::AppConfig;
 use crate::notify::{
     PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
 };
-use crate::openai::{BoxedToolCall, Message, Role};
-use crate::openai::{
-    chat_session_count, chat_session_list, chat_stream, find_chat_session_by_id,
-    get_or_create_session, insert_chat_message,
-};
+use crate::openai::{BoxedToolCall, Message, Role, chat_stream};
+use crate::chat::db::{find_chat_session_by_id, get_or_create_session, insert_chat_message};
+use super::db::{chat_session_count, chat_session_list};
 use super::public;
 
 type SharedState = Arc<RwLock<AppState>>;

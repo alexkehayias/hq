@@ -335,7 +335,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/notes/chat")
+                    .uri("/chat")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -356,7 +356,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/notes/chat/sessions")
+                    .uri("/chat/sessions")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -385,7 +385,7 @@ mod tests {
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .uri("/notes/chat")
+                        .uri("/chat")
                         .method("POST")
                         .header("content-type", "application/json")
                         .body(Body::from(
@@ -408,7 +408,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/notes/chat/sessions?page=1&limit=2")
+                    .uri("/chat/sessions?page=1&limit=2")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -430,7 +430,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/notes/chat/sessions?page=2&limit=2")
+                    .uri("/chat/sessions?page=2&limit=2")
                     .body(Body::empty())
                     .unwrap(),
             )

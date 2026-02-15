@@ -11,7 +11,8 @@ use crate::{
     notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    openai::{BoxedToolCall, Message, Role, chat, get_or_create_session, insert_chat_message},
+    openai::{BoxedToolCall, Message, Role, chat},
+    chat::db::{get_or_create_session, insert_chat_message},
 };
 
 #[derive(Default, Debug)]
