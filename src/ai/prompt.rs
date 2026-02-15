@@ -1,10 +1,13 @@
 use std::fmt;
 
-use handlebars::Handlebars;
+use handlebars::{Handlebars, handlebars_helper};
+
+handlebars_helper!(inc: |v: i64| format!("{}", v + 1));
 
 #[derive(Debug)]
 pub enum Prompt {
     NoteSummary,
+    UnreadEmails,
 }
 
 impl fmt::Display for Prompt {
@@ -27,11 +30,44 @@ CONTEXT:
 {{context}}
 ";
 
+const UNREAD_EMAILS_PROMPT: &str = r"
+The following is a list of unread emails and their related email thread in reverse chronological order.
+
+# Unread Emails
+{{#each email_threads}}
+
+## {{subject}}
+
+**ID:** {{id}}
+**From:** {{from}}
+**To:** {{to}}
+**Subject:** {{subject}}
+
+{{#each messages}}
+### Message {{inc @index}}
+
+**From:** {{from}}
+**To:** {{to}}
+**Date:** {{received}}
+**Subject:** {{subject}}
+**Body:**
+{{body}}
+
+---
+
+{{/each}}
+{{/each}}
+";
+
 pub fn templates<'a>() -> Handlebars<'a> {
     let mut registry = Handlebars::new();
     registry.set_strict_mode(true);
+    registry.register_helper("inc", Box::new(inc));
     registry
         .register_template_string(&Prompt::NoteSummary.to_string(), NOTES_PROMPT)
+        .expect("Failed to register template");
+    registry
+        .register_template_string(&Prompt::UnreadEmails.to_string(), UNREAD_EMAILS_PROMPT)
         .expect("Failed to register template");
     registry
 }

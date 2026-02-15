@@ -1,22 +1,83 @@
-{
-  "email": "test@example.com",
-  "unread_count": 2,
-  "messages": [
-    {
-      "id": "123456789",
-      "thread_id": "987654321",
-      "snippet": "Project update meeting tomorrow at 2pm...",
-      "subject": "Project Update Meeting",
-      "from": "john@company.com",
-      "date": "2025-09-13T10:30:00Z"
-    },
-    {
-      "id": "234567890",
-      "thread_id": "876543210",
-      "snippet": "Please review the attached document...",
-      "subject": "Document Review Required",
-      "from": "sarah@organization.org",
-      "date": "2025-09-13T09:15:00Z"
-    }
-  ]
-}
+[
+  {
+    "id": "thr_001",
+    "received": "2024-11-12T08:15:23Z",
+    "from": "alice@example.com",
+    "to": "bob@example.org",
+    "subject": "Project kickoff meeting",
+    "messages": [
+      {
+        "id": "msg_001a",
+        "thread_id": "thr_001",
+        "from": "alice@example.com",
+        "to": "bob@example.org",
+        "received": "2024-11-12T08:15:23Z",
+        "subject": "Project kickoff meeting",
+        "body": "Hi Bob,\n\nCan we schedule a quick call tomorrow to go over the project kickoff agenda? Let me know what time works for you.\n\nThanks,\nAlice"
+      },
+      {
+        "id": "msg_001b",
+        "thread_id": "thr_001",
+        "from": "bob@example.org",
+        "to": "alice@example.com",
+        "received": "2024-11-12T09:02:10Z",
+        "subject": "Re: Project kickoff meeting",
+        "body": "Hey Alice,\n\nSure thing – I’m free at 10AM PST tomorrow. Does that work?\n\nBest,\nBob"
+      },
+      {
+        "id": "msg_001c",
+        "thread_id": "thr_001",
+        "from": "alice@example.com",
+        "to": "bob@example.org",
+        "received": "2024-11-12T09:15:44Z",
+        "subject": "Re: Project kickoff meeting",
+        "body": "10AM PST works perfectly. I’ll send a calendar invite shortly.\n\nCheers,\nAlice"
+      }
+    ]
+  },
+  {
+    "id": "thr_002",
+    "received": "2024-11-10T14:42:07Z",
+    "from": "carol@workplace.com",
+    "to": "dave@workplace.com, erin@workplace.com",
+    "subject": "Quarterly budget review – documents attached",
+    "messages": [
+      {
+        "id": "msg_002a",
+        "thread_id": "thr_002",
+        "from": "carol@workplace.com",
+        "to": "dave@workplace.com, erin@workplace.com",
+        "received": "2024-11-10T14:42:07Z",
+        "subject": "Quarterly budget review – documents attached",
+        "body": "Hi team,\n\nPlease find the Q3 budget spreadsheet and the executive summary attached. Let me know if you have any questions before our meeting on Friday.\n\nThanks,\nCarol"
+      },
+      {
+        "id": "msg_002b",
+        "thread_id": "thr_002",
+        "from": "erin@workplace.com",
+        "to": "carol@workplace.com, dave@workplace.com",
+        "received": "2024-11-10T15:08:33Z",
+        "subject": "Re: Quarterly budget review – documents attached",
+        "body": "Thanks Carol. I’ve reviewed the numbers and have a few comments on line 42 – can we discuss that during the call?\n\nErin"
+      }
+    ]
+  },
+  {
+    "id": "thr_003",
+    "received": "2024-11-01T07:30:55Z",
+    "from": "no-reply@newsletter.com",
+    "to": "you@example.net",
+    "subject": "Your weekly tech roundup –  Nov 1-7",
+    "messages": [
+      {
+        "id": "msg_003a",
+        "thread_id": "thr_003",
+        "from": "no-reply@newsletter.com",
+        "to": "you@example.net",
+        "received": "2024-11-01T07:30:55Z",
+        "subject": "Your weekly tech roundup –  Nov 1-7",
+        "body": "Hello,\n\nHere’s what happened in the world of tech this week:\n\n• Rust 2.0 beta released…\n• New AI model beats GPT-4 on benchmarks…\n• Chrome 129 ships with built-in password manager…\n\nRead more at https://newsletter.com/weekly/2024-11-01\n\nIf you’d like to unsubscribe, click here."
+      }
+    ]
+  }
+]
