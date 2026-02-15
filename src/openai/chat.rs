@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio_rusqlite::{Connection, params};
 
 use crate::{
-    api::public::notes::ChatSession,
+    api::routes::chat::public::ChatSession,
     openai::{
         BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
     },

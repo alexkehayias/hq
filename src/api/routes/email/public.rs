@@ -7,7 +7,7 @@ pub struct EmailUnreadQuery {
     pub limit: Option<i64>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailMessage {
     pub id: String,
     pub thread_id: String,
@@ -18,7 +18,7 @@ pub struct EmailMessage {
     pub body: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailThread {
     pub id: String,
     pub received: String,

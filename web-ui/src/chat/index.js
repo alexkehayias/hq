@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const maybeSessionId = urlParams.get('session_id');
   if (maybeSessionId) {
     sessionId = maybeSessionId;
-    fetch(`/notes/chat/${sessionId}`, {
+    fetch(`/chat/${sessionId}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -161,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
       message: message,
     };
 
-    fetch('/notes/chat', {
+    fetch('/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

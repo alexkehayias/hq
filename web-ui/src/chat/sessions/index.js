@@ -7,7 +7,7 @@ window.loadSessions = async (page = 1) => {
   try {
     // Fetch chat sessions from the backend with pagination
     const response = await fetch(
-      `/notes/chat/sessions?exclude_tags=background&page=${page}&limit=${limit}`,
+      `/chat/sessions?exclude_tags=background&page=${page}&limit=${limit}`,
       {
         method: 'GET',
         headers: {

@@ -1,6 +1,7 @@
 //! API routes module
 
 pub mod calendar;
+pub mod chat;
 pub mod email;
 mod kv;
 pub mod metrics;
@@ -21,6 +22,8 @@ pub fn router() -> Router<SharedState> {
     Router::new()
         // Notes routes
         .nest("/notes", notes::router())
+        // Chat routes
+        .nest("/chat", chat::router())
         // KV routes (for latest selection)
         .nest("/notes/search", kv::router())
         // Push notification routes

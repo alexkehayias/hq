@@ -4,7 +4,6 @@ use std::sync::{Arc, RwLock};
 
 use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
-use serde_json::Value;
 use tokio::task::JoinSet;
 
 use crate::api::state::AppState;
@@ -18,7 +17,7 @@ type SharedState = Arc<RwLock<AppState>>;
 async fn email_unread_handler(
     State(state): State<SharedState>,
     Query(params): Query<public::EmailUnreadQuery>,
-) -> Result<Json<Value>, crate::api::public::ApiError> {
+) -> Result<Json<Vec<public::EmailThread>>, crate::api::public::ApiError> {
     let refresh_token: String = {
         let db = state.read().unwrap().db.clone();
 
@@ -114,7 +113,7 @@ async fn email_unread_handler(
 
     threads.sort_by_key(|i| std::cmp::Reverse(i.received.clone()));
 
-    Ok(Json(serde_json::json!(threads)))
+    Ok(Json(threads))
 }
 
 /// Create the email router
