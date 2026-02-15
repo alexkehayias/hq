@@ -13,17 +13,6 @@ pub struct MarkdownExport {
 
 impl MarkdownExport {
     /// Render syntax node to markdown string
-    ///
-    /// ```rust
-    /// use orgize::{Org, ast::Bold, rowan::ast::AstNode};
-    /// use hq::search::export::MarkdownExport;
-    ///
-    /// let org = Org::parse("* /hello/ *world*");
-    /// let bold = org.first_node::<Bold>().unwrap();
-    /// let mut markdown = MarkdownExport::default();
-    /// markdown.render(bold.syntax());
-    /// assert_eq!(markdown.finish(), "**world**");
-    /// ```
     pub fn render(&mut self, node: &SyntaxNode) {
         let mut ctx = TraversalContext::default();
         self.element(SyntaxElement::Node(node.clone()), &mut ctx);
@@ -188,5 +177,20 @@ impl Traverser for MarkdownExport {
 
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use orgize::{Org, ast::Bold, rowan::ast::AstNode};
+    use super::MarkdownExport;
+
+    #[test]
+    fn test_it_works() {
+        let org = Org::parse("* /hello/ *world*");
+        let bold = org.first_node::<Bold>().unwrap();
+        let mut markdown = MarkdownExport::default();
+        markdown.render(bold.syntax());
+        assert_eq!(markdown.finish(), "**world**");
     }
 }
