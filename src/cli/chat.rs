@@ -3,9 +3,9 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::env;
 
+use crate::ai::chat::ChatBuilder;
 use crate::ai::tools::{CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchTool};
-use crate::openai::chat;
-use crate::openai::{Message, Role, ToolCall};
+use crate::openai::{BoxedToolCall, Message, Role};
 
 pub async fn run() -> Result<()> {
     let mut rl = DefaultEditor::new().expect("Editor failed");
@@ -36,12 +36,12 @@ pub async fn run() -> Result<()> {
         CalendarTool::default()
     };
 
-    let tools: Option<Vec<Box<dyn ToolCall + Send + Sync + 'static>>> = Some(vec![
+    let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
-    ]);
+    ];
 
     // Get OpenAI API configuration from environment variables (similar to AppConfig)
     let openai_api_hostname =
@@ -51,21 +51,17 @@ pub async fn run() -> Result<()> {
     let openai_model =
         env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
 
-    let mut history = vec![Message::new(Role::System, "You are a helpful assistant.")];
+    let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
+        .transcript(vec![Message::new(Role::System, "You are a helpful assistant.")])
+        .tools(tools)
+        .build();
 
     loop {
         let readline = rl.readline(">>> ");
         match readline {
             Ok(line) => {
-                history.push(Message::new(Role::User, line.as_str()));
-                let resp = chat(
-                    &tools,
-                    &history,
-                    &openai_api_hostname,
-                    &openai_api_key,
-                    &openai_model,
-                )
-                .await?;
+                let user_msg = Message::new(Role::User, line.as_str());
+                let resp = chat.next_msg(user_msg).await?;
                 let msg = resp.last().unwrap();
                 println!("{}", msg.content.clone().unwrap());
             }
