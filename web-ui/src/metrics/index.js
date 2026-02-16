@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const limitDays = timeRangeSelect.value;
     try {
-      const response = await fetch(`/metrics?limit_days=${limitDays}`);
+      const response = await fetch(`/api/metrics?limit_days=${limitDays}`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }

@@ -24,7 +24,7 @@
       const queryWithDefaults = `${queryEncoded}%20${defaultParams}`;
 
       const response = await fetch(
-        `/notes/search?query=${queryWithDefaults}&include_similarity=${includeSimilarity}`,
+        `/api/notes/search?query=${queryWithDefaults}&include_similarity=${includeSimilarity}`,
         {
           method: 'GET',
           headers,
@@ -139,7 +139,7 @@
             hit.classList.add(...['bg-blue-700', 'text-white']);
 
             // Store the selected hit in the search session
-            const resp = await fetch(`/notes/search/latest`, {
+            const resp = await fetch(`/api/notes/search/latest`, {
               method: 'POST',
               body: JSON.stringify({
                 id: r.id,
@@ -213,7 +213,7 @@
               }
 
               // Fetch and render the note JSON
-              fetch(`/notes/${r.id}/view`, {
+              fetch(`/api/notes/${r.id}/view`, {
                 headers: { Accept: 'application/json' },
               })
                 .then(async (resp) => {
@@ -319,7 +319,7 @@
       });
 
       // Send subscription to server
-      await fetch('/push/subscribe', {
+      await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

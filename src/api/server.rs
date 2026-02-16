@@ -29,7 +29,7 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
 
     Router::new()
         // API routes
-        .merge(routes::router())
+        .nest("/api", routes::router())
         // Static server of assets in ./web-ui
         .fallback_service(
             ServiceBuilder::new()
