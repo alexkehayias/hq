@@ -169,15 +169,15 @@ impl Chat {
 
         let mut resp = completion(&history, tools, api_hostname, api_key, model).await?;
 
-        let tools_ref = tools
-            .as_ref()
-            .expect("Received tool call but no tools were specified");
-
         // Tool calls need to be handled for the chat to proceed
         while let Some(tool_calls) = resp["choices"][0]["message"]["tool_calls"].as_array() {
             if tool_calls.is_empty() {
                 break;
             }
+
+            let tools_ref = tools
+                .as_ref()
+                .expect("Received tool call but no tools were specified");
 
             let tool_call_msgs = Self::handle_tool_calls(tools_ref, tool_calls).await?;
             for m in tool_call_msgs.into_iter() {
@@ -514,5 +514,267 @@ mod tests {
         let chat = builder.build();
         assert!(chat.db.is_some());
         assert_eq!(chat.session_id, Some("existing-session-id".to_string()));
+    }
+
+    // Tests for Chat::chat method (tested through next_msg)
+    #[tokio::test]
+    async fn test_chat_basic_response() {
+        let mut server = mockito::Server::new_async().await;
+
+        // Mock response for a basic chat completion (no tools)
+        let response_body = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response_body)
+            .create();
+
+        // No tools provided - this should work fine when there are no tool calls
+        let url = server.url();
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .build();
+
+        let msg = Message::new(Role::User, "Hi");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        // Should return the assistant's response
+        assert_eq!(messages.len(), 1);
+        let content = messages[0].content.as_ref().expect("Should have content");
+        assert_eq!(content, "Hello! How can I help you today?");
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_tool_calls() {
+        let mut server = mockito::Server::new_async().await;
+
+        // First response: model makes a tool call
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "mock_tool",
+                            "arguments": "{\"query\":\"test\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        // Second response: model responds after tool result
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I found some results for your query."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        // Create two mocks - first for tool call, second for final response
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
+            .create();
+
+        // Create a mock tool that will be called when the model requests it
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("mock result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .tools(tools)
+            .build();
+
+        let msg = Message::new(Role::User, "Search for test");
+        let result = chat.next_msg(msg).await;
+
+        mock1.assert();
+        mock2.assert();
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        // Should return 3 messages:
+        // 1. Tool call request
+        // 2. Tool call response
+        // 3. Assistant's final content
+        assert_eq!(messages.len(), 3);
+    }
+
+    // Tests for Chat::chat_stream (tested through next_msg with streaming enabled)
+    #[tokio::test]
+    async fn test_chat_stream_basic() {
+        let mut server = mockito::Server::new_async().await;
+
+        // SSE response with content chunks
+        let sse_response = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":" World"},"finish_reason":null}]}
+
+data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_response)
+            .create();
+
+        let url = server.url();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // No tools provided - streaming should work without tools when no tool calls needed
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .streaming(tx)
+            .build();
+
+        let msg = Message::new(Role::User, "Say hello");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+
+        // Should return the assistant's response (assembled from streamed chunks)
+        // Note: The last chunk with finish_reason="stop" doesn't add content,
+        // so only "Hello World" (not the "!") is assembled
+        assert_eq!(messages.len(), 1);
+        let content = messages[0].content.as_ref().expect("Should have content");
+        assert_eq!(content, "Hello World");
+
+        // Verify the raw chunks were also sent to the streaming channel
+        let mut chunk_count = 0;
+        while let Ok(_) = rx.try_recv() {
+            chunk_count += 1;
+        }
+        assert!(chunk_count >= 3, "Expected at least 3 chunks, got {}", chunk_count);
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_with_tool_calls() {
+        let mut server = mockito::Server::new_async().await;
+
+        // First response: streaming tool call chunks
+        let sse_tool_call = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_abc123","index":0,"function":{"name":"mock_tool","arguments":"{\"query\":"},"type":"function"}]},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"test\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        // Second response: final content after tool result
+        let sse_final = r#"data: {"id":"chunk4","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"Found results!"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        // Create two mocks - first for tool call stream, second for final response
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_final)
+            .create();
+
+        // Create a mock tool that will be called when the model requests it
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("mock result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .streaming(tx)
+            .tools(tools)
+            .build();
+
+        let msg = Message::new(Role::User, "Search for test");
+        let result = chat.next_msg(msg).await;
+
+        mock1.assert();
+        mock2.assert();
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        // Should return 3 messages:
+        // 1. Tool call request
+        // 2. Tool call response
+        // 3. Assistant's final content
+        assert_eq!(messages.len(), 3);
     }
 }
