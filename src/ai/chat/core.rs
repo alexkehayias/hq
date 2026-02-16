@@ -42,10 +42,6 @@ impl Chat {
         ChatBuilder::default()
     }
 
-    pub async fn load(id: &str) -> Result<Self, Error> {
-        unimplemented!()
-    }
-
     async fn handle_tool_call(
         tools: &Vec<BoxedToolCall>,
         tool_call: &Value,

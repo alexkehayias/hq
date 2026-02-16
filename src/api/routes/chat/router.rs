@@ -27,7 +27,7 @@ use crate::notify::{
     PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
 };
 use crate::openai::{BoxedToolCall, Message, Role};
-use crate::chat::{ChatBuilder, find_chat_session_by_id};
+use crate::ai::chat::{ChatBuilder, find_chat_session_by_id};
 use super::db::{chat_session_count, chat_session_list};
 use super::public;
 

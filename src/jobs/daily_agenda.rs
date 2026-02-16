@@ -6,12 +6,12 @@ use uuid::Uuid;
 use super::PeriodicJob;
 use crate::{
     ai::agents::agenda,
+    ai::chat::db::{get_or_create_session, insert_chat_message},
     core::AppConfig,
     google::oauth::find_all_gmail_auth_emails,
     notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    chat::db::{get_or_create_session, insert_chat_message},
 };
 
 #[derive(Debug)]

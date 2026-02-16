@@ -10,7 +10,7 @@ use crate::{
     notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    chat::db::insert_chat_message,
+    ai::chat::db::insert_chat_message,
 };
 
 #[derive(Default, Debug)]
