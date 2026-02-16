@@ -1,7 +1,16 @@
+//! Reusable prompts using Handlebars for templating. Handlebars adds
+//! additional security controls since it can't do much out of the box
+//! without registering your own helpers. This is ideal since output
+//! from LLMs should be considered untrusted and Handlebars forces you
+//! to add only what you need.
+
 use std::fmt;
 
 use handlebars::{Handlebars, handlebars_helper};
 
+// A simple `inc` helper for use with `each` and `@index` so that
+// there can be natural number sequences when rendering (instead of
+// starting at 0).
 handlebars_helper!(inc: |v: i64| format!("{}", v + 1));
 
 #[derive(Debug)]
