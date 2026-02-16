@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
-use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
@@ -10,7 +9,7 @@ use crate::{
     notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    ai::chat::db::insert_chat_message,
+    ai::agents::email,
 };
 
 #[derive(Default, Debug)]
@@ -33,8 +32,8 @@ impl PeriodicJob for ProcessEmail {
         } = config;
         let emails = { find_all_gmail_auth_emails(db).await.expect("Query failed") };
 
-        let session_id = Uuid::new_v4().to_string();
-        let history = crate::ai::agents::email::email_chat_response(
+        let (session_id, messages) = email::email_chat_response(
+            db,
             note_search_api_url,
             emails,
             openai_api_hostname,
@@ -42,21 +41,15 @@ impl PeriodicJob for ProcessEmail {
             openai_model,
         )
         .await;
-        let last_msg = history.last().unwrap();
+        let last_msg = messages.last().unwrap();
         let summary = last_msg.content.clone().unwrap();
 
-        // Store the chat messages so the session can be picked up later
-        {
-            for m in history {
-                insert_chat_message(db, &session_id, &m).await.unwrap();
-            }
-        }
-
         // Broadcast push notification to all subscribers, using a new read lock for DB/config each time
+        let chat_url = format!("/chat?session_id={}", session_id);
         let payload = PushNotificationPayload::new(
-            "Background job update",
+            "Unread Email Summary",
             &format!("Emails processed! {}", summary),
-            None,
+            Some(&chat_url),
             None,
             None,
         );
