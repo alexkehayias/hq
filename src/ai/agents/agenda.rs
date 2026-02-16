@@ -1,24 +1,27 @@
+use tokio_rusqlite::Connection;
+
 use crate::ai::tools::{CalendarTool, TasksDueTodayTool, TasksScheduledTodayTool};
-use crate::openai::chat;
-use crate::openai::{Message, Role, ToolCall};
+use crate::ai::chat::ChatBuilder;
+use crate::openai::{BoxedToolCall, Message, Role};
 
 /// Daily agenda creator agent.
 pub async fn daily_agenda_response(
+    db: &Connection,
     api_base_url: &str,
     calendar_emails: Vec<String>,
     openai_api_hostname: &str,
     openai_api_key: &str,
     openai_model: &str,
-) -> Vec<Message> {
+) -> (String, Vec<Message>) {
     let tasks_due_today_tool = TasksDueTodayTool::new(api_base_url);
     let tasks_scheduled_today_tool = TasksScheduledTodayTool::new(api_base_url);
     let calendar_tool = CalendarTool::new(api_base_url);
 
-    let tools: Option<Vec<Box<dyn ToolCall + Send + Sync + 'static>>> = Some(vec![
+    let tools: Vec<BoxedToolCall> = vec![
         Box::new(tasks_due_today_tool),
         Box::new(tasks_scheduled_today_tool),
         Box::new(calendar_tool),
-    ]);
+    ];
 
     let system_msg = r#"You are a daily agenda assistant. Create an easy-to-read digest of what needs to happen today.
 
@@ -40,18 +43,15 @@ Avoid verbose descriptions. Focus on what's most important for the user to know.
         calendar_emails.join("and ")
     );
 
-    let history = vec![
-        Message::new(Role::System, system_msg),
-        Message::new(Role::User, &user_msg),
-    ];
+    let mut chat = ChatBuilder::new(openai_api_hostname, openai_api_key, openai_model)
+        .transcript(vec![Message::new(Role::System, system_msg)])
+        .database(db, None, Some(vec![String::from("background"), String::from("agenda")]))
+        .tools(tools)
+        .build();
 
-    chat(
-        &tools,
-        &history,
-        openai_api_hostname,
-        openai_api_key,
-        openai_model,
-    )
-    .await
-    .expect("Chat session failed")
+    let response = chat.next_msg(Message::new(Role::User, &user_msg))
+        .await
+        .expect("Chat session failed");
+
+    (chat.session_id.unwrap(), response)
 }

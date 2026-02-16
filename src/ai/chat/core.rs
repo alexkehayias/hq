@@ -30,7 +30,7 @@ pub struct Chat {
     tx: Option<mpsc::UnboundedSender<String>>,
     tools: Option<Vec<BoxedToolCall>>,
     transcript: Transcript,
-    session_id: Option<String>,
+    pub session_id: Option<String>,
     tags: Option<Vec<String>>,
     // TODO: Skills
     // TODO: MCP
@@ -38,10 +38,6 @@ pub struct Chat {
 }
 
 impl Chat {
-    pub fn builder() -> ChatBuilder {
-        ChatBuilder::default()
-    }
-
     async fn handle_tool_call(
         tools: &Vec<BoxedToolCall>,
         tool_call: &Value,
