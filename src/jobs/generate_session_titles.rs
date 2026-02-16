@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
 
+use crate::ai::chat::ChatBuilder;
 use crate::core::AppConfig;
-use crate::openai::{Message, Role, completion};
+use crate::openai::{Message, Role};
 use crate::ai::chat::db::find_chat_session_by_id;
 
 #[derive(Debug)]
@@ -89,64 +90,56 @@ async fn generate_and_update_session_info(
     // Create a prompt for the LLM to generate title and summary
     let prompt = create_session_prompt(transcript);
 
+    let system_prompt = "You are an assistant that generates concise titles and summaries for chat sessions based on the conversation content.";
     // Prepare the messages for the LLM
-    let messages = vec![
-        Message::new(
-            Role::System,
-            "You are an assistant that generates concise titles and summaries for chat sessions based on the conversation content.",
-        ),
-        Message::new(Role::User, &prompt),
-    ];
 
-    // Call the LLM to generate title and summary
-    let response = completion(
-        &messages,
-        &None, // No tools needed for this task
+    let mut chat = ChatBuilder::new(
         &config.openai_api_hostname,
         &config.openai_api_key,
         &config.openai_model,
     )
-    .await?;
+        .transcript(vec![Message::new(Role::System, system_prompt)])
+        .build();
+
+    let response = chat.next_msg(Message::new(Role::User, &prompt)).await?;
+    let last_msg = response.last().expect("No messages").to_owned();
+    let content = last_msg.content.expect("No content");
 
     // Extract the generated title and summary from the response
-    if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
-        // Try to parse the JSON response
-        match serde_json::from_str::<serde_json::Value>(content) {
-            Ok(json_response) => {
-                if let (Some(title), Some(summary)) = (
-                    json_response["title"].as_str(),
-                    json_response["summary"].as_str(),
-                ) {
-                    let session_id_owned = session_id.to_string();
-                    let title_owned = title.to_string();
-                    let summary_owned = summary.to_string();
+    // Try to parse the JSON response
+    match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(json_response) => {
+            if let (Some(title), Some(summary)) = (
+                json_response["title"].as_str(),
+                json_response["summary"].as_str(),
+            ) {
+                let session_id_owned = session_id.to_string();
+                let title_owned = title.to_string();
+                let summary_owned = summary.to_string();
 
-                    // Update the session in the database
-                    db_conn
-                        .call(move |conn| {
-                            let mut stmt = conn.prepare(
-                                "UPDATE session SET title = ?, summary = ? WHERE id = ?",
-                            )?;
-                            stmt.execute([title_owned, summary_owned, session_id_owned])?;
-                            Ok(())
-                        })
-                        .await?;
-                } else {
-                    tracing::warn!("LLM response missing title or summary fields: {}", content);
-                }
-            }
-            // Don't do anything but log it if it didn't work
-            Err(e) => {
-                tracing::error!(
-                    "Failed to parse LLM response as JSON for session {}: {} - Response: {}",
-                    session_id,
-                    e,
-                    content
-                );
+                // Update the session in the database
+                db_conn
+                    .call(move |conn| {
+                        let mut stmt = conn.prepare(
+                            "UPDATE session SET title = ?, summary = ? WHERE id = ?",
+                        )?;
+                        stmt.execute([title_owned, summary_owned, session_id_owned])?;
+                        Ok(())
+                    })
+                    .await?;
+            } else {
+                tracing::warn!("LLM response missing title or summary fields: {}", content);
             }
         }
-    } else {
-        tracing::warn!("No content in LLM response for session {}", session_id);
+        // Don't do anything but log it if it didn't work
+        Err(e) => {
+            tracing::error!(
+                "Failed to parse LLM response as JSON for session {}: {} - Response: {}",
+                session_id,
+                e,
+                content
+            );
+        }
     }
 
     Ok(())
