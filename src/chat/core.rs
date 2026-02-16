@@ -21,7 +21,7 @@ use super::db::{insert_chat_message, get_or_create_session};
 //  - Use local or commercial models
 ///
 /// Use `Chat::builder()` to construct a valid `Chat`.
-struct Chat {
+pub struct Chat {
     api_hostname: String,
     api_key: String,
     model: String,
@@ -144,6 +144,9 @@ impl Chat {
             // resulted in an error on the first turn.
             get_or_create_session(db, session_id, tags).await?;
 
+            // Save the input message
+            insert_chat_message(db, session_id, &msg).await?;
+
             // Save each message
             for m in messages.iter() {
                 self.transcript.push(m.clone());
@@ -264,7 +267,7 @@ impl Chat {
 }
 
 #[derive(Default)]
-struct ChatBuilder {
+pub struct ChatBuilder {
     api_hostname: String,
     api_key: String,
     model: String,
@@ -323,8 +326,8 @@ impl ChatBuilder {
         self
     }
 
-    pub fn transcript(mut self, transcript: Transcript) -> Self {
-        self.transcript = transcript;
+    pub fn transcript(mut self, messages: Vec<Message>) -> Self {
+        self.transcript = Transcript::new_with_messages(messages);
         self
     }
 
@@ -382,11 +385,12 @@ mod tests {
 
     #[test]
     fn test_builder_transcript() {
-        let mut transcript = Transcript::new();
-        transcript.push(Message::new(Role::User, "Hello"));
+        let messages = vec![
+            Message::new(Role::User, "Hello")
+        ];
 
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .transcript(transcript);
+            .transcript(messages);
 
         assert_eq!(builder.transcript.messages().len(), 1);
     }
@@ -431,8 +435,9 @@ mod tests {
 
     #[test]
     fn test_builder_chaining() {
-        let mut transcript = Transcript::new();
-        transcript.push(Message::new(Role::User, "Hello"));
+        let messages = vec![
+            Message::new(Role::User, "Hello")
+        ];
 
         let (tx, _rx) = mpsc::unbounded_channel();
 
@@ -451,7 +456,7 @@ mod tests {
         let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
 
         let chat = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .transcript(transcript)
+            .transcript(messages)
             .streaming(tx)
             .tools(tools)
             .build();

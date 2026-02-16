@@ -12,6 +12,10 @@ impl Transcript {
         Self(Vec::new())
     }
 
+    pub fn new_with_messages(messages: Vec<Message>) -> Self {
+        Self(messages)
+    }
+
     pub fn messages(&self) -> Vec<Message> {
         self.0.clone()
     }
@@ -29,7 +33,9 @@ impl Transcript {
     }
 }
 
-pub struct Session {
-    id: String,
-    transcript: Transcript,
-}
+// TODO: Consider a session model to keep track of things like
+// metrics, rate limits, registries.
+// pub struct Session {
+//     id: String,
+//     transcript: Transcript,
+// }
