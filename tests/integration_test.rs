@@ -147,7 +147,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/notes/search?query=test")
+                    .uri("/api/notes/search?query=test")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -335,7 +335,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/chat")
+                    .uri("/api/chat")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -356,7 +356,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/chat/sessions")
+                    .uri("/api/chat/sessions")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -385,7 +385,7 @@ mod tests {
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .uri("/chat")
+                        .uri("/api/chat")
                         .method("POST")
                         .header("content-type", "application/json")
                         .body(Body::from(
@@ -408,7 +408,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/chat/sessions?page=1&limit=2")
+                    .uri("/api/chat/sessions?page=1&limit=2")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -430,7 +430,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/chat/sessions?page=2&limit=2")
+                    .uri("/api/chat/sessions?page=2&limit=2")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -455,7 +455,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/metrics")
+                    .uri("/api/metrics")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -481,7 +481,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/webhook/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
