@@ -1,18 +1,16 @@
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
-use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
-    ai::tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
-    ai::chat::db::{get_or_create_session, insert_chat_message},
+    ai::{chat::ChatBuilder, tools::{CalendarTool, WebSearchTool, WebsiteViewTool}},
     core::AppConfig,
     google::oauth::find_all_gmail_auth_emails,
     notify::{
         PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     },
-    openai::{BoxedToolCall, Message, Role, chat},
+    openai::{BoxedToolCall, Message, Role},
 };
 
 #[derive(Default, Debug)]
@@ -41,7 +39,7 @@ impl PeriodicJob for ResearchMeetingAttendees {
             Box::new(WebsiteViewTool::new()),
         ];
 
-        let calendar_emails = find_all_gmail_auth_emails(&db).await.unwrap();
+        let calendar_emails = find_all_gmail_auth_emails(db).await.unwrap();
 
         // Early return if there is no calendar email specified.
         if calendar_emails.is_empty() {
@@ -83,32 +81,24 @@ Frank is the VP of People at Acme. He was previously HR Manager at Acme and befo
 
 [LinkedIn profile](https://linkedin.com/in/frank-bar)", calendar_emails.join("and "));
 
-        // Create initial message for chat
-        let history = vec![Message::new(Role::User, &prompt)];
-
-        // Create a new chat session with the tools
-        let messages = chat(
-            &Some(tools),
-            &history,
+        let mut chat = ChatBuilder::new(
             openai_api_hostname,
             openai_api_key,
             openai_model,
         )
-        .await
-        .expect("Chat session failed");
+            .database(db, None, Some(vec![String::from("background")]))
+            .tools(tools)
+            .build();
 
-        let session_id = Uuid::new_v4().to_string();
-        get_or_create_session(db, &session_id, &["background"])
+        // Create a new chat session with the tools
+        let messages = chat.next_msg(Message::new(Role::User, &prompt))
             .await
-            .unwrap();
+            .expect("Chat session failed");
 
-        // Store the chat messages so the session can be picked up later
-        for m in &messages {
-            insert_chat_message(db, &session_id, m).await.unwrap();
-        }
+        let session_id = chat.session_id.unwrap();
 
         // Get the final response from the chat
-        let summary = if let Some(last_msg) = history.last() {
+        let summary = if let Some(last_msg) = messages.last() {
             last_msg
                 .content
                 .clone()
