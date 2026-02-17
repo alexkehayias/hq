@@ -306,6 +306,7 @@ impl ChatBuilder {
     }
 
     pub fn database(mut self, db: &Connection, session_id: Option<&str>, tags: Option<Vec<String>>) -> Self {
+        // Always sets a session ID, tags, and DB connection
         if let Some(id) = session_id {
             self.session_id = Some(id.to_string());
         } else {
@@ -313,6 +314,8 @@ impl ChatBuilder {
         }
         if let Some(tags) = tags {
             self.tags = Some(tags);
+        } else {
+            self.tags = Some(Vec::new())
         }
         self.db = Some(db.clone());
         self
@@ -487,9 +490,10 @@ mod tests {
         let db = tokio_rusqlite::Connection::open_in_memory().await.unwrap();
 
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .database(&db, None, Some(vec![String::from("tag1")]));
+            .database(&db, None, None);
 
-        // db and session_id should always be set together
+        // db, session_id, tags should always be set together and
+        // should never by None
         assert!(builder.db.is_some());
         assert!(builder.session_id.is_some());
         assert!(builder.tags.is_some());
@@ -698,7 +702,7 @@ data: [DONE]
 
         // Verify the raw chunks were also sent to the streaming channel
         let mut chunk_count = 0;
-        while let Ok(_) = rx.try_recv() {
+        while rx.try_recv().is_ok() {
             chunk_count += 1;
         }
         assert!(chunk_count >= 3, "Expected at least 3 chunks, got {}", chunk_count);
