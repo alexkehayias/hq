@@ -80,6 +80,7 @@
   }
 
   /* Highlight JS code syntax highlighting theme */
+  /* Based on the Ayu color theme */
   pre code.hljs {
     display: block;
     overflow-x: auto;
@@ -89,66 +90,62 @@
     padding: 3px 5px;
   }
   .hljs {
-    color: #444;
+    @apply text-gray-500 dark:text-gray-50;
   }
   .hljs-comment {
-    color: #697070;
+    @apply text-gray-400 dark:text-gray-500;
   }
   .hljs-punctuation,
-  .hljs-tag {
-    color: #444a;
+  .hljs-operator {
+    color: #f2a191;
   }
-  .hljs-tag .hljs-attr,
-  .hljs-tag .hljs-name {
-    color: #444;
-  }
+  .hljs-tag,
   .hljs-attribute,
-  .hljs-doctag,
-  .hljs-keyword,
-  .hljs-meta .hljs-keyword,
+  .hljs-tag .hljs-name,
+  .hljs-tag .hljs-attr {
+    color: #55b4d4;
+  }
   .hljs-name,
   .hljs-selector-tag {
+    color: #f07171;
+  }
+  .hljs-keyword,
+  .hljs-meta .hljs-keyword {
+    color: #fa8532;
     font-weight: 700;
   }
-  .hljs-deletion,
+  .hljs-literal,
   .hljs-number,
-  .hljs-quote,
-  .hljs-selector-class,
-  .hljs-selector-id,
-  .hljs-string,
-  .hljs-template-tag,
-  .hljs-type {
-    color: #800;
+  .hljs-constant {
+    color: #a37acc;
   }
-  .hljs-section,
-  .hljs-title {
-    color: #800;
+  .hljs-string,
+  .hljs-meta .hljs-string {
+    color: #94978d;
+  }
+  .hljs-regexp {
+    color: #4cbf99;
+  }
+  .hljs-built_in,
+  .hljs-type,
+  .hljs-title,
+  .hljs-section {
+    color: #eba400;
     font-weight: 700;
   }
-  .hljs-link,
-  .hljs-operator,
-  .hljs-regexp,
-  .hljs-selector-attr,
-  .hljs-selector-pseudo,
-  .hljs-symbol,
+  .hljs-variable,
   .hljs-template-variable,
-  .hljs-variable {
-    color: #ab5656;
+  .hljs-symbol {
+    color: #22a4e6;
   }
-  .hljs-literal {
-    color: #695;
-  }
+  .hljs-meta,
+  .hljs-doctag,
+  .hljs-attribute,
+  .hljs-deletion,
   .hljs-addition,
-  .hljs-built_in,
   .hljs-bullet,
   .hljs-code {
-    color: #397300;
-  }
-  .hljs-meta {
-    color: #1f7199;
-  }
-  .hljs-meta .hljs-string {
-    color: #38a;
+    color: #e59645;
   }
   .hljs-emphasis {
     font-style: italic;
@@ -161,7 +158,13 @@
     display: block;
     overflow-x: auto;
     padding: 1em;
-    color: #c9d1d9;
+    background-color: transparent;
+  }
+  pre code.hljs,
+  .hljs {
+    display: block;
+    overflow-x: auto;
+    padding: 1em;
     background-color: transparent;
   }
 }
