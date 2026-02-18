@@ -27,7 +27,7 @@ impl ToolCall for TasksDueTodayTool {
         // Build query: deadline:<TODAY> -status:done -status:canceled -title:journal
         let query = format!("deadline:<={} -status:done -status:canceled", today);
 
-        let mut url = reqwest::Url::parse(&format!("{}/notes/search", self.api_base_url))
+        let mut url = reqwest::Url::parse(&format!("{}/api/notes/search", self.api_base_url))
             .expect("Invalid URL");
         url.query_pairs_mut()
             .append_pair("query", &query)
@@ -109,7 +109,7 @@ impl ToolCall for TasksScheduledTodayTool {
         // Build query: scheduled:<TODAY> -status:done -status:canceled -title:journal
         let query = format!("scheduled:<={} -status:done -status:canceled", today);
 
-        let mut url = reqwest::Url::parse(&format!("{}/notes/search", self.api_base_url))
+        let mut url = reqwest::Url::parse(&format!("{}/api/notes/search", self.api_base_url))
             .expect("Invalid URL");
         url.query_pairs_mut()
             .append_pair("query", &query)
@@ -184,7 +184,7 @@ mod tests {
         let mock_resp = fs::read_to_string("./tests/data/tasks_search_response.json").unwrap();
         // The query includes today's date, so we need to match the pattern with regex
         let _mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=deadline%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .mock("GET", mockito::Matcher::Regex(r"/api/notes/search\?query=deadline%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_resp)
@@ -212,7 +212,7 @@ mod tests {
         let mock_resp = fs::read_to_string("./tests/data/tasks_search_response.json").unwrap();
         // The query includes today's date, so we need to match the pattern with regex
         let _mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=scheduled%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .mock("GET", mockito::Matcher::Regex(r"/api/notes/search\?query=scheduled%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_resp)
@@ -239,7 +239,7 @@ mod tests {
 
         let empty_resp = r#"{"raw_query": "", "parsed_query": "", "results": []}"#;
         let _mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=deadline%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .mock("GET", mockito::Matcher::Regex(r"/api/notes/search\?query=deadline%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(empty_resp)
@@ -262,7 +262,7 @@ mod tests {
 
         let empty_resp = r#"{"raw_query": "", "parsed_query": "", "results": []}"#;
         let _mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/notes/search\?query=scheduled%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
+            .mock("GET", mockito::Matcher::Regex(r"/api/notes/search\?query=scheduled%3A%3C%3D\d{4}-\d{2}-\d{2}\+-status%3Adone\+-status%3Acanceled&include_similarity=false".into()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(empty_resp)

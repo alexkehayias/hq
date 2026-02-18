@@ -32,7 +32,7 @@ impl ToolCall for WebSearchTool {
         let fn_args: WebSearchArgs = serde_json::from_str(args).unwrap();
 
         let url = reqwest::Url::parse_with_params(
-            &format!("{}/web/search", self.api_base_url),
+            &format!("{}/api/web/search", self.api_base_url),
             &[
                 ("query", &fn_args.query),
                 ("limit", &fn_args.limit.to_string()),

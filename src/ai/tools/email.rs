@@ -30,7 +30,7 @@ impl ToolCall for EmailUnreadTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: EmailUnreadArgs = serde_json::from_str(args).unwrap();
 
-        let mut url = reqwest::Url::parse(&format!("{}/email/unread", self.api_base_url))
+        let mut url = reqwest::Url::parse(&format!("{}/api/email/unread", self.api_base_url))
             .expect("Invalid URL");
         url.query_pairs_mut().append_pair("email", &fn_args.email);
 
@@ -104,7 +104,7 @@ mod tests {
 
         let mock_resp = fs::read_to_string("./tests/data/email_unread_response.json").unwrap();
         let _mock = server
-            .mock("GET", "/email/unread?email=test%40example.com")
+            .mock("GET", "/api/email/unread?email=test%40example.com")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_resp)
