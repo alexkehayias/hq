@@ -5,10 +5,10 @@ pub struct AppConfig {
     pub notes_path: String,
     pub index_path: String,
     pub vec_db_path: String,
+    pub storage_path: String,
     pub deploy_key_path: String,
     pub vapid_key_path: String,
     pub note_search_api_url: String,
-    pub searxng_api_url: String,
     pub gmail_api_client_id: String,
     pub gmail_api_client_secret: String,
     pub google_search_api_key: String,
@@ -33,8 +33,6 @@ impl Default for AppConfig {
             env::var("HQ_VAPID_KEY_PATH").expect("Missing env var HQ_VAPID_KEY_PATH");
         let note_search_api_url =
             env::var("HQ_NOTE_SEARCH_API_URL").unwrap_or(format!("http://{}:{}", host, port));
-        let searxng_api_url =
-            env::var("HQ_SEARXNG_API_URL").unwrap_or(format!("http://{}:{}", host, "8080"));
         let gmail_api_client_id =
             std::env::var("HQ_GMAIL_CLIENT_ID").expect("Missing HQ_GMAIL_CLIENT_ID");
         let gmail_api_client_secret =
@@ -56,10 +54,10 @@ impl Default for AppConfig {
             notes_path: notes_path.clone(),
             index_path,
             vec_db_path: vec_db_path.clone(),
+            storage_path: storage_path.clone(),
             deploy_key_path,
             vapid_key_path,
             note_search_api_url: note_search_api_url.clone(),
-            searxng_api_url,
             gmail_api_client_id,
             gmail_api_client_secret,
             google_search_api_key,
