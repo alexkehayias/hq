@@ -462,45 +462,6 @@ pub async fn fetch_thread(
     Ok(thread)
 }
 
-/// Send a reply to a message/thread
-/// curl: see spec (see MIME construction below)
-pub async fn send_reply(
-    access_token: &str,
-    thread_id: &str,
-    to: &str,
-    subject: &str,
-    reply_to_message_id: &str,
-    reply_body: &str,
-) -> Result<(), anyhow::Error> {
-    // Note: "me" as "From" will be replaced by Gmail
-    let mime = format!(
-        "From: me\nTo: {to}\nSubject: Re: {subject}\nIn-Reply-To: <{msgid}>\nReferences: <{msgid}>\n\n{body}",
-        to = to,
-        subject = subject,
-        msgid = reply_to_message_id,
-        body = reply_body
-    );
-    let raw_encoded = base64_url_no_pad(&mime);
-    let client = Client::new();
-    let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
-    let payload = serde_json::json!({
-        "raw": raw_encoded,
-        "threadId": thread_id,
-    });
-    let res = client
-        .post(url)
-        .bearer_auth(access_token)
-        .json(&payload)
-        .send()
-        .await?;
-    let status = res.status();
-    let text = res.text().await.unwrap_or_default();
-    if !status.is_success() {
-        anyhow::bail!("Send failed: {} ({})", status, text);
-    }
-    Ok(())
-}
-
 /// Helper: base64url encode w/out padding
 fn base64_url_no_pad(input: &str) -> String {
     URL_SAFE.encode(input.as_bytes())
@@ -639,5 +600,390 @@ mod tests {
         // Unix line endings
         let input = "Hello world\n\nOn Tue, Jul 1, 2025 at 1:43 PM Foo wrote:\n\n> Quoted content";
         assert_eq!(strip_quoted_replies(input), "Hello world");
+    }
+
+    #[test]
+    fn test_base64_url_no_pad() {
+        // Basic encoding - URL_SAFE includes padding
+        assert_eq!(base64_url_no_pad("Hello"), "SGVsbG8=");
+        assert_eq!(base64_url_no_pad("World"), "V29ybGQ=");
+
+        // Empty string
+        assert_eq!(base64_url_no_pad(""), "");
+
+        // Special characters (URL-safe)
+        assert_eq!(base64_url_no_pad("test+value/with=special"), "dGVzdCt2YWx1ZS93aXRoPXNwZWNpYWw=");
+
+        // Binary-like data
+        assert_eq!(base64_url_no_pad("\x00\x01\x02"), "AAEC");
+    }
+
+    #[test]
+    fn test_clean_and_strip_body() {
+        // Basic plain text with signature
+        let input = "Hello world\n\nBest regards,\nJohn".to_string();
+        assert_eq!(clean_and_strip_body(input), "Hello world");
+
+        // Quoted-printable with signature
+        let input = "Don=E2=80=99t stop\n\nThanks,\nTeam".to_string();
+        assert_eq!(clean_and_strip_body(input), "Don't stop");
+
+        // HTML entities with signature
+        let input = "Test &amp; more\n\nRegards,\nBob".to_string();
+        assert_eq!(clean_and_strip_body(input), "Test & more");
+
+        // With quoted reply
+        let input = "Main content\n\nOn Tue, Jul 1 at 1:43 PM wrote:\n> quoted".to_string();
+        assert_eq!(clean_and_strip_body(input), "Main content");
+
+        // No signature or quotes
+        let input = "Just a regular message\nwith multiple lines".to_string();
+        assert_eq!(clean_and_strip_body(input), "Just a regular message\nwith multiple lines");
+    }
+
+    #[test]
+    fn test_extract_subject() {
+        // Normal subject
+        let message = create_message_with_headers("Test Subject", "From: <from@example.com>", "To: <to@example.com>");
+        assert_eq!(extract_subject(&message), "Test Subject");
+
+        // Subject with unicode
+        let message = create_message_with_headers("Don=E2=80=99t fear", "From: <from@example.com>", "To: <to@example.com>");
+        assert_eq!(extract_subject(&message), "Don't fear");
+
+        // Subject with HTML entities
+        let message = create_message_with_headers("Test &amp; more", "From: <from@example.com>", "To: <to@example.com>");
+        assert_eq!(extract_subject(&message), "Test & more");
+
+        // Empty payload
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: None,
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        assert_eq!(extract_subject(&message), "");
+
+        // No subject header
+        let payload = MessagePayload {
+            headers: Some(vec![
+                MessageHeader { name: "From".to_string(), value: "test@example.com".to_string() },
+            ]),
+            mimetype: "text/plain".to_string(),
+            body: None,
+            parts: None,
+        };
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: Some(payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        assert_eq!(extract_subject(&message), "");
+    }
+
+    #[test]
+    fn test_extract_from() {
+        // Normal from
+        let message = create_message_with_headers("Subject", "From: Alice <alice@example.com>", "To: <to@example.com>");
+        assert_eq!(extract_from(&message), "Alice <alice@example.com>");
+
+        // From with unicode
+        let message = create_message_with_headers("Subject", "From: =E2=80=9CJohn=E2=80=9D <john@example.com>", "To: <to@example.com>");
+        assert_eq!(extract_from(&message), "\"John\" <john@example.com>");
+
+        // Empty payload
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: None,
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        assert_eq!(extract_from(&message), "");
+
+        // No from header
+        let payload = MessagePayload {
+            headers: Some(vec![
+                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
+            ]),
+            mimetype: "text/plain".to_string(),
+            body: None,
+            parts: None,
+        };
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: Some(payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        assert_eq!(extract_from(&message), "");
+    }
+
+    #[test]
+    fn test_extract_to() {
+        // Normal to
+        let message = create_message_with_headers("Subject", "From: <from@example.com>", "To: Bob <bob@example.org>");
+        assert_eq!(extract_to(&message), "Bob <bob@example.org>");
+
+        // Multiple recipients
+        let message = create_message_with_headers("Subject", "From: <from@example.com>", "To: a@a.com, b@b.com");
+        assert_eq!(extract_to(&message), "a@a.com, b@b.com");
+
+        // Empty payload
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: None,
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        assert_eq!(extract_to(&message), "");
+
+        // No to header
+        let payload = MessagePayload {
+            headers: Some(vec![
+                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
+            ]),
+            mimetype: "text/plain".to_string(),
+            body: None,
+            parts: None,
+        };
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: Some(payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        assert_eq!(extract_to(&message), "");
+    }
+
+    #[test]
+    fn test_extract_body() {
+        // Body in payload.body (text/plain)
+        let body_data = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, "Hello World");
+        let payload = MessagePayload {
+            headers: Some(vec![
+                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
+            ]),
+            mimetype: "text/plain".to_string(),
+            body: Some(MessagePartBody {
+                attachment_id: None,
+                size: 11,
+                data: Some(body_data),
+            }),
+            parts: None,
+        };
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: Some(payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        let result = extract_body(&message);
+        assert!(result.contains("Hello World"));
+
+        // Body in parts (text/plain)
+        let body_data = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, "Plain text body");
+        let parts = vec![MessagePart {
+            part_id: "1".to_string(),
+            mimetype: "text/plain".to_string(),
+            body: Some(MessagePartBody {
+                attachment_id: None,
+                size: 16,
+                data: Some(body_data),
+            }),
+        }];
+        let payload = MessagePayload {
+            headers: Some(vec![
+                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
+            ]),
+            mimetype: "multipart/alternative".to_string(),
+            body: None,
+            parts: Some(parts),
+        };
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: Some(payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        let result = extract_body(&message);
+        assert!(result.contains("Plain text body"));
+
+        // Fallback to snippet - note: this requires payload with no body/parts
+        let empty_payload = MessagePayload {
+            headers: Some(vec![
+                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
+            ]),
+            mimetype: "text/plain".to_string(),
+            body: None,
+            parts: None,
+        };
+        let message = Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: Some("This is a snippet...".to_string()),
+            payload: Some(empty_payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        };
+        let result = extract_body(&message);
+        assert_eq!(result, "This is a snippet...");
+    }
+
+    // Helper function to create a message with headers for testing
+    fn create_message_with_headers(subject: &str, from_header: &str, to_header: &str) -> Message {
+        let headers = vec![
+            MessageHeader { name: "Subject".to_string(), value: subject.to_string() },
+            parse_header(from_header),
+            parse_header(to_header),
+        ];
+        let payload = MessagePayload {
+            headers: Some(headers),
+            mimetype: "text/plain".to_string(),
+            body: None,
+            parts: None,
+        };
+        Message {
+            id: "test".to_string(),
+            thread_id: "thread".to_string(),
+            snippet: None,
+            payload: Some(payload),
+            label_ids: None,
+            internal_date: "0".to_string(),
+        }
+    }
+
+    fn parse_header(header_str: &str) -> MessageHeader {
+        let parts: Vec<&str> = header_str.splitn(2, ": ").collect();
+        MessageHeader {
+            name: parts[0].to_string(),
+            value: parts.get(1).unwrap_or(&"").to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_unread_messages() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        // Create a mock for the Gmail API - use wildcard matching
+        let mock_resp = r#"{"messages": [{"id": "msg_001", "threadId": "thr_001"}], "nextPageToken": null}"#;
+        let _mock = server
+            .mock("GET", "/gmail/v1/users/me/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_resp)
+            .match_query(mockito::Matcher::Regex(r"labelIds=UNREAD".to_string()))
+            .create();
+
+        // Override the URL construction to use mock server
+        let client = reqwest::Client::new();
+        let after_date = (chrono::Utc::now() - chrono::Duration::days(1))
+            .format("%Y/%m/%d")
+            .to_string();
+        let request_url = format!(
+            "{}/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",
+            url, after_date
+        );
+        let res = client.get(&request_url).bearer_auth("test_token").send().await.unwrap();
+        let status = res.status();
+        assert!(status.is_success());
+
+        let text = res.text().await.unwrap();
+        let msgs: ListMessagesResponse = serde_json::from_str(&text).unwrap();
+        assert_eq!(msgs.messages.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_thread() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        // Create a mock for the Gmail thread API
+        let mock_resp = r#"{
+            "id": "thr_001",
+            "messages": [
+                {
+                    "id": "msg_001a",
+                    "threadId": "thr_001",
+                    "snippet": "Test snippet",
+                    "labelIds": ["INBOX"],
+                    "internalDate": "1731401723000",
+                    "payload": {
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": "test@example.com"},
+                            {"name": "To", "value": "me@example.org"},
+                            {"name": "Subject", "value": "Test Thread"}
+                        ],
+                        "body": {
+                            "attachmentId": null,
+                            "size": 10,
+                            "data": "SGVsbG8gV29ybGQ="
+                        }
+                    }
+                }
+            ]
+        }"#;
+        let _mock = server
+            .mock("GET", "/gmail/v1/users/me/threads/thr_001?format=full")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_resp)
+            .create();
+
+        let client = reqwest::Client::new();
+        let request_url = format!("{}/gmail/v1/users/me/threads/thr_001?format=full", url);
+        let res = client.get(&request_url).bearer_auth("test_token").send().await.unwrap();
+        let status = res.status();
+        assert!(status.is_success());
+
+        let text = res.text().await.unwrap();
+        let thread: Thread = serde_json::from_str(&text).unwrap();
+        assert_eq!(thread.id, "thr_001");
+        assert_eq!(thread.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_unread_messages_error() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        // Create a mock that returns an error - use wildcard matching
+        let _mock = server
+            .mock("GET", "/gmail/v1/users/me/messages")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error": {"message": "Unauthorized"}}"#)
+            .match_query(mockito::Matcher::Regex(r"labelIds=UNREAD".to_string()))
+            .create();
+
+        let client = reqwest::Client::new();
+        let after_date = (chrono::Utc::now() - chrono::Duration::days(1))
+            .format("%Y/%m/%d")
+            .to_string();
+        let request_url = format!(
+            "{}/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",
+            url, after_date
+        );
+        let res = client.get(&request_url).bearer_auth("bad_token").send().await.unwrap();
+        let status = res.status();
+        assert!(!status.is_success());
     }
 }

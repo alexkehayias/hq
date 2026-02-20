@@ -1,0 +1,63 @@
+{
+  "id": "thr_001",
+  "messages": [
+    {
+      "id": "msg_001a",
+      "threadId": "thr_001",
+      "snippet": "Hi Bob, can we schedule a quick call...",
+      "labelIds": ["INBOX", "UNREAD"],
+      "internalDate": "1731401723000",
+      "payload": {
+        "mimeType": "text/plain",
+        "headers": [
+          { "name": "From", "value": "Alice <alice@example.com>" },
+          { "name": "To", "value": "Bob <bob@example.org>" },
+          { "name": "Subject", "value": "Project kickoff meeting" }
+        ],
+        "body": {
+          "attachmentId": null,
+          "size": 150,
+          "data": "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IG1lc3NhZ2Uu"
+        },
+        "parts": []
+      }
+    },
+    {
+      "id": "msg_001b",
+      "threadId": "thr_001",
+      "snippet": "Sure thing - I'm free at 10AM...",
+      "labelIds": ["INBOX"],
+      "internalDate": "1731404530000",
+      "payload": {
+        "mimeType": "multipart/alternative",
+        "headers": [
+          { "name": "From", "value": "Bob <bob@example.org>" },
+          { "name": "To", "value": "Alice <alice@example.com>" },
+          { "name": "Subject", "value": "Re: Project kickoff meeting" }
+        ],
+        "body": null,
+        "parts": [
+          {
+            "partId": "1",
+            "mimeType": "text/plain",
+            "body": {
+              "attachmentId": null,
+              "size": 100,
+              "data": "SGVsbG8gQWxpY2UsCgpzdXJlIHRoaW5nIC0gSSdtIGZyZWUgYXQgMTBBTSBaLgpCZXN0LAo=
+="
+            }
+          },
+          {
+            "partId": "2",
+            "mimeType": "text/html",
+            "body": {
+              "attachmentId": null,
+              "size": 200,
+              "data": "PGgxPkhlbGxvIEFsaWNlPC9oMT4K"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
