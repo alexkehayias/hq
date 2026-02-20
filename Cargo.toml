@@ -12,6 +12,8 @@ axum-extra = { version = "0.12.2", features = ["query"] }
 clap = { version = "4.5.17", features = ["derive"] }
 erased-serde = "0.4.5"
 fastembed = "4.9.1"
+async-stream = "0.3"
+futures = "0.3"
 futures-util = "0.3"
 handlebars = "6.3.0"
 http = "1.1.0"
@@ -48,3 +50,4 @@ htmd = "0.5"
 serial_test = "3.2.0"
 tower = { version = "0.5.2", features = ["util"] }
 mockito = "1.6.1"
+tempfile = "3"
