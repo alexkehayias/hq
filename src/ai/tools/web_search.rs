@@ -70,12 +70,14 @@ impl WebSearchTool {
                     query: Property {
                         r#type: String::from("string"),
                         description: String::from("The search query term."),
+                        r#enum: None,
                     },
                     limit: Property {
                         r#type: String::from("integer"),
                         description: String::from(
                             "Maximum number of results to return (default 10).",
                         ),
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("query"), String::from("limit")],

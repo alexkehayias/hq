@@ -91,10 +91,27 @@ impl Message {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct Property {
     pub r#type: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#enum: Option<Vec<String>>,
+}
+
+impl Property {
+    pub fn new(r#type: &str, description: &str) -> Self {
+        Self {
+            r#type: r#type.to_string(),
+            description: description.to_string(),
+            r#enum: None,
+        }
+    }
+
+    pub fn with_enum(mut self, enum_values: Vec<String>) -> Self {
+        self.r#enum = Some(enum_values);
+        self
+    }
 }
 
 #[derive(Serialize)]
@@ -544,6 +561,7 @@ mod tests {
         let prop = Property {
             r#type: "string".to_string(),
             description: "The search query".to_string(),
+            r#enum: None,
         };
         assert_eq!(
             serde_json::to_string(&prop).unwrap(),

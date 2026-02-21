@@ -23,7 +23,9 @@ struct MemoryArgs {
 
 #[derive(Serialize)]
 pub struct MemoryProps {
-    pub query: Property,
+    pub operation: Property,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Property>,
 }
 
 #[derive(Serialize)]
@@ -43,14 +45,23 @@ impl MemoryTool {
             parameters: Parameters {
                 r#type: String::from("object"),
                 properties: MemoryProps {
-                    query: Property {
+                    operation: Property {
+                        r#type: String::from("string"),
+                        description: String::from("The operation to perform: 'read' or 'write'."),
+                        r#enum: Some(vec![
+                            String::from("read"),
+                            String::from("write"),
+                        ]),
+                    },
+                    content: Some(Property {
                         r#type: String::from("string"),
                         description: String::from(
                             "The content to write (required for 'write' operation). Keep it concise and under 2000 words total.",
                         ),
-                    },
+                        r#enum: None,
+                    }),
                 },
-                required: vec![],
+                required: vec![String::from("operation")],
                 additional_properties: false,
             },
             strict: false,
@@ -109,7 +120,6 @@ impl ToolCall for MemoryTool {
 
                 // Ensure parent directory exists
                 if let Some(parent) = memory_path.parent() {
-                    dbg!(parent);
                     fs::create_dir_all(parent)?;
                 }
 
@@ -244,5 +254,59 @@ mod tests {
         let tool = MemoryTool::new("/tmp/test");
         assert_eq!(tool.storage_path, "/tmp/test");
         assert_eq!(tool.function_name(), "memory");
+    }
+
+    #[test]
+    fn test_memory_function_json_has_required_parameters() {
+        let tool = MemoryTool::new("/tmp/test");
+        let json = serde_json::to_string(&tool.function).expect("Failed to serialize function");
+
+        // Parse the JSON to verify structure
+        let value: serde_json::Value =
+            serde_json::from_str(&json).expect("Failed to parse function JSON");
+
+        // Verify the function name
+        assert_eq!(value["name"], "memory");
+
+        // Get the parameters object
+        let params = &value["parameters"];
+
+        // Verify required array includes "operation"
+        let required = params["required"]
+            .as_array()
+            .expect("Required should be an array");
+        assert!(
+            required.contains(&serde_json::json!("operation")),
+            "operation should be in required array"
+        );
+
+        // Verify properties contain operation with enum
+        let properties = &params["properties"];
+        assert!(
+            properties.get("operation").is_some(),
+            "operation property should exist"
+        );
+
+        let operation = &properties["operation"];
+        assert_eq!(operation["type"], "string");
+        assert!(
+            operation.get("enum").is_some(),
+            "operation should have enum"
+        );
+        let enum_values = operation["enum"].as_array().expect("enum should be an array");
+        assert!(
+            enum_values.contains(&serde_json::json!("read")),
+            "enum should contain 'read'"
+        );
+        assert!(
+            enum_values.contains(&serde_json::json!("write")),
+            "enum should contain 'write'"
+        );
+
+        // Verify content property exists (but is not required)
+        assert!(
+            properties.get("content").is_some(),
+            "content property should exist"
+        );
     }
 }

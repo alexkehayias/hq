@@ -70,6 +70,7 @@ impl EmailUnreadTool {
                     email: Property {
                         r#type: String::from("string"),
                         description: String::from("The email address to fetch unread emails for."),
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("email")],

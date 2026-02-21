@@ -138,6 +138,7 @@ impl WebsiteViewTool {
                         description: String::from(
                             "The URL of the website to fetch and convert to markdown.",
                         ),
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("url")],

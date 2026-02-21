@@ -106,18 +106,21 @@ impl CalendarTool {
                         description: String::from(
                             "The email address associated with the Google account to fetch calendar events from.",
                         ),
+                        r#enum: None,
                     },
                     days_ahead: Property {
                         r#type: String::from("integer"),
                         description: String::from(
                             "Number of days ahead to fetch events for (default is 7).",
                         ),
+                        r#enum: None,
                     },
                     calendar_id: Property {
                         r#type: String::from("string"),
                         description: String::from(
                             "The calendar ID to fetch events from (default is 'primary').",
                         ),
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("email")],

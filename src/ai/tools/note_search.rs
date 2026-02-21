@@ -76,6 +76,7 @@ impl NoteSearchTool {
                         description: String::from(
                             "The query to use for searching notes that should be short and optimized for search.",
                         ),
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("query")],

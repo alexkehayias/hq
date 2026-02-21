@@ -227,6 +227,12 @@ fn strip_quoted_replies(content: &str) -> String {
     quoted_lines.trim_end().to_string()
 }
 
+/// Encode a string to base64 URL-safe without padding
+fn base64_url_no_pad(input: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    URL_SAFE_NO_PAD.encode(input.as_bytes())
+}
+
 /// Strip email signatures from the content
 fn strip_signature(content: &str) -> String {
     let mut result = content.to_string();
