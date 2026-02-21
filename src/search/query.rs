@@ -42,7 +42,9 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
     }
 
     fn is_fuzzy_search_field(field: &str) -> bool {
-        matches!(field, DEFAULT_FIELD_NAME | "title" | "body")
+        // Only apply fuzzy search to title field for typo tolerance
+        // otherwise the search hits become less useful
+        matches!(field, "title")
     }
 
     match expr {
@@ -79,17 +81,11 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
                                     as Box<dyn Query>,
                             ),
                         ]))
+                    } else if is_fuzzy_search_field(query_field_name) {
+                        Box::new(FuzzyTermQuery::new(term, 2, true)) as Box<dyn Query>
                     } else {
-                        // Only use fuzzy search for variable text
-                        // fields otherwise the query will return
-                        // similar tags, type, categories, etc. which
-                        // are meant to be filters.
-                        if is_fuzzy_search_field(query_field_name) {
-                            Box::new(FuzzyTermQuery::new(term, 2, true)) as Box<dyn Query>
-                        } else {
-                            Box::new(TermQuery::new(term, IndexRecordOption::Basic))
-                                as Box<dyn Query>
-                        }
+                        Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+                            as Box<dyn Query>
                     }
                 })
                 .collect();
