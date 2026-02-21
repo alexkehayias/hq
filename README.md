@@ -76,7 +76,6 @@ docker run -p 2222:2222 -d hq:latest
 - `HQ_STORAGE_PATH` to allow indices to persist between deploys
 - `HQ_VAPID_KEY_PATH` for push notifications
 - `HQ_NOTE_SEARCH_API_URL` for the note search AI tool
-- `HQ_SEARXNG_API_URL` for the web search AI tool
 - `HQ_GMAIL_CLIENT_ID` and `HQ_GMAIL_CLIENT_SECRET` for the gmail API
 - `HQ_GOOGLE_SEARCH_API_KEY` and `HQ_GOOGLE_SEARCH_CX_ID` for the Google search API
 - `HQ_LOCAL_LLM_HOST` for the OpenAI API hostname (defaults to "https://api.openai.com" if not set)

@@ -1,9 +1,6 @@
 pub mod note_search;
 pub use note_search::NoteSearchTool;
 
-pub mod searxng;
-pub use searxng::SearxSearchTool;
-
 pub mod calendar;
 pub use calendar::CalendarTool;
 
