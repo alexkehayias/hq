@@ -30,6 +30,11 @@ Use the available tools to gather:
 2. Tasks scheduled for today
 3. Today's calendar events
 
+When displaying calendar events:
+- Ignore DNS blocks
+- Ignore any meeting I declined
+- Adjust time to PST time
+
 Format the output as a short, scannable summary with:
 - A brief overview of today's priorities
 - Time-sensitive calendar events (with times)
