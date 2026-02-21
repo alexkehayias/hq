@@ -1,6 +1,6 @@
 //! Database queries for the notes API
-use tokio_rusqlite::Connection;
 use super::public::ViewNoteResponse;
+use tokio_rusqlite::Connection;
 
 /// Get a note by ID from the database
 pub async fn get_note_by_id(

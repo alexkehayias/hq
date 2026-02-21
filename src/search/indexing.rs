@@ -1,8 +1,8 @@
 use regex::Regex;
+use std::hash::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::hash::DefaultHasher;
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use orgize::ParseConfig;

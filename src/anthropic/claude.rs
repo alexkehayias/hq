@@ -3,7 +3,7 @@
 //! This module provides a way to interact with Claude Code (via `ccr code`) in
 //! non-interactive mode, streaming JSON events back to the caller.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::stream::BoxStream;
 use serde::Deserialize;
 use tokio::process::Command;
@@ -30,15 +30,11 @@ pub enum StreamEvent {
 
     /// Start of a content block (text or tool_use)
     #[serde(rename = "content_block_start")]
-    ContentBlockStart {
-        content_block: ContentBlock,
-    },
+    ContentBlockStart { content_block: ContentBlock },
 
     /// Incremental update to a content block
     #[serde(rename = "content_block_delta")]
-    ContentBlockDelta {
-        delta: Delta,
-    },
+    ContentBlockDelta { delta: Delta },
 
     /// End of a content block
     #[serde(rename = "content_block_stop")]
@@ -265,10 +261,8 @@ mod tests {
 
     #[test]
     fn test_custom_tools() {
-        let session = ClaudeCodeSession::new(
-            Uuid::new_v4(),
-            vec!["Read".to_string(), "Bash".to_string()],
-        );
+        let session =
+            ClaudeCodeSession::new(Uuid::new_v4(), vec!["Read".to_string(), "Bash".to_string()]);
         assert_eq!(session.allowed_tools(), vec!["Read", "Bash"]);
     }
 

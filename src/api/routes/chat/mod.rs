@@ -1,7 +1,7 @@
 //! Chat API routes
 
+mod db;
 pub mod public;
 mod router;
-mod db;
 
 pub use router::router;

@@ -5,11 +5,11 @@ use tokio::sync::mpsc;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
-use crate::openai::{
-    BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream
-};
+use super::db::{get_or_create_session, insert_chat_message};
 use super::models::Transcript;
-use super::db::{insert_chat_message, get_or_create_session};
+use crate::openai::{
+    BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
+};
 
 /// The core abstraction around interacting with an LLM in a chat
 /// completion style using an OpenAI compatible API.
@@ -97,7 +97,9 @@ impl Chat {
         // would be more efficient as it runs on the same thread, but that
         // causes lifetime issues that I don't understand how to get
         // around.
-        let futures = tool_calls.iter().map(|call| Self::handle_tool_call(tools, call));
+        let futures = tool_calls
+            .iter()
+            .map(|call| Self::handle_tool_call(tools, call));
         // Flatten the results to match what the API is expecting.
         let results = try_join_all(futures).await?.into_iter().flatten().collect();
         Ok(results)
@@ -116,12 +118,23 @@ impl Chat {
             // always set together
             let tx = &self.tx.clone().unwrap();
             Self::chat_stream(
-                tx.clone(), &self.tools, &self.transcript, &self.api_hostname, &self.api_key, &self.model
-            ).await?
+                tx.clone(),
+                &self.tools,
+                &self.transcript,
+                &self.api_hostname,
+                &self.api_key,
+                &self.model,
+            )
+            .await?
         } else {
             Self::chat(
-                &self.tools, &self.transcript, &self.api_hostname, &self.api_key, &self.model
-            ).await?
+                &self.tools,
+                &self.transcript,
+                &self.api_hostname,
+                &self.api_key,
+                &self.model,
+            )
+            .await?
         };
 
         // Store the new messages in the DB
@@ -198,7 +211,6 @@ impl Chat {
         Ok(messages)
     }
 
-
     /// Runs the next turn in chat by passing a transcript to the LLM and
     /// the next response is streamed via the transmitter channel
     /// `tx`. Also returns the next messages so they can be processed
@@ -211,7 +223,6 @@ impl Chat {
         api_key: &str,
         model: &str,
     ) -> Result<Vec<Message>, Error> {
-
         let history = transcript.messages();
         let mut updated_history = history.to_owned();
         let mut messages = Vec::new();
@@ -244,7 +255,7 @@ impl Chat {
                 api_key,
                 model,
             )
-                .await?;
+            .await?;
         }
 
         if let Some(msg) = resp["choices"][0]["message"]["content"].as_str() {
@@ -255,7 +266,6 @@ impl Chat {
 
         Ok(messages)
     }
-
 }
 
 #[derive(Default)]
@@ -305,7 +315,12 @@ impl ChatBuilder {
         }
     }
 
-    pub fn database(mut self, db: &Connection, session_id: Option<&str>, tags: Option<Vec<String>>) -> Self {
+    pub fn database(
+        mut self,
+        db: &Connection,
+        session_id: Option<&str>,
+        tags: Option<Vec<String>>,
+    ) -> Self {
         // Always sets a session ID, tags, and DB connection
         if let Some(id) = session_id {
             self.session_id = Some(id.to_string());
@@ -380,12 +395,10 @@ mod tests {
 
     #[test]
     fn test_builder_transcript() {
-        let messages = vec![
-            Message::new(Role::User, "Hello")
-        ];
+        let messages = vec![Message::new(Role::User, "Hello")];
 
-        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .transcript(messages);
+        let builder =
+            ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").transcript(messages);
 
         assert_eq!(builder.transcript.messages().len(), 1);
     }
@@ -394,8 +407,8 @@ mod tests {
     fn test_builder_streaming() {
         let (tx, _rx) = mpsc::unbounded_channel();
 
-        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .streaming(tx);
+        let builder =
+            ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").streaming(tx);
 
         assert!(builder.streaming);
         assert!(builder.tx.is_some());
@@ -421,8 +434,7 @@ mod tests {
         }
 
         let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
-        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .tools(tools);
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").tools(tools);
 
         assert!(builder.tools.is_some());
         assert_eq!(builder.tools.as_ref().unwrap().len(), 1);
@@ -430,9 +442,7 @@ mod tests {
 
     #[test]
     fn test_builder_chaining() {
-        let messages = vec![
-            Message::new(Role::User, "Hello")
-        ];
+        let messages = vec![Message::new(Role::User, "Hello")];
 
         let (tx, _rx) = mpsc::unbounded_channel();
 
@@ -508,8 +518,11 @@ mod tests {
     async fn test_builder_database_with_existing_session_id() {
         let db = tokio_rusqlite::Connection::open_in_memory().await.unwrap();
 
-        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-            .database(&db, Some("existing-session-id"), None);
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").database(
+            &db,
+            Some("existing-session-id"),
+            None,
+        );
 
         // db and session_id should always be set together
         assert!(builder.db.is_some());
@@ -550,8 +563,7 @@ mod tests {
 
         // No tools provided - this should work fine when there are no tool calls
         let url = server.url();
-        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
-            .build();
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4").build();
 
         let msg = Message::new(Role::User, "Hi");
         let result = chat.next_msg(msg).await;
@@ -705,7 +717,11 @@ data: [DONE]
         while rx.try_recv().is_ok() {
             chunk_count += 1;
         }
-        assert!(chunk_count >= 3, "Expected at least 3 chunks, got {}", chunk_count);
+        assert!(
+            chunk_count >= 3,
+            "Expected at least 3 chunks, got {}",
+            chunk_count
+        );
     }
 
     #[tokio::test]

@@ -415,7 +415,10 @@ mod tests {
     #[test]
     fn test_role_serialization() {
         assert_eq!(serde_json::to_string(&Role::System).unwrap(), r#""system""#);
-        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), r#""assistant""#);
+        assert_eq!(
+            serde_json::to_string(&Role::Assistant).unwrap(),
+            r#""assistant""#
+        );
         assert_eq!(serde_json::to_string(&Role::User).unwrap(), r#""user""#);
         assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), r#""tool""#);
     }
@@ -438,10 +441,16 @@ mod tests {
     #[test]
     fn test_message_new() {
         let msg = Message::new(Role::User, "Hello world");
-        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"role":"user","content":"Hello world"}"#);
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"role":"user","content":"Hello world"}"#
+        );
 
         let msg = Message::new(Role::Assistant, "I can help!");
-        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"role":"assistant","content":"I can help!"}"#);
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"role":"assistant","content":"I can help!"}"#
+        );
     }
 
     #[test]
@@ -524,7 +533,10 @@ mod tests {
 
     #[test]
     fn test_tool_type_serialization() {
-        assert_eq!(serde_json::to_string(&ToolType::Function).unwrap(), r#""function""#);
+        assert_eq!(
+            serde_json::to_string(&ToolType::Function).unwrap(),
+            r#""function""#
+        );
     }
 
     #[test]
@@ -633,7 +645,12 @@ mod tests {
         }"#;
         let chunk: ToolCallChunk = serde_json::from_str(json).unwrap();
         match chunk {
-            ToolCallChunk::Init { id, index, function, r#type } => {
+            ToolCallChunk::Init {
+                id,
+                index,
+                function,
+                r#type,
+            } => {
                 assert_eq!(id, "call_abc");
                 assert_eq!(index, 0);
                 assert_eq!(function.name, "search");
@@ -652,7 +669,11 @@ mod tests {
         }"#;
         let chunk: ToolCallChunk = serde_json::from_str(json).unwrap();
         match chunk {
-            ToolCallChunk::ArgsDelta { index, function, r#type } => {
+            ToolCallChunk::ArgsDelta {
+                index,
+                function,
+                r#type,
+            } => {
                 assert_eq!(index, 0);
                 assert_eq!(function.arguments, r#""q":"test"}"#);
                 assert_eq!(r#type, "function");
@@ -707,13 +728,7 @@ mod tests {
             .create();
 
         let messages = vec![Message::new(Role::User, "Hi")];
-        let result = completion(
-            &messages,
-            &None,
-            server.url().as_str(),
-            "test-key",
-            "gpt-4"
-        ).await;
+        let result = completion(&messages, &None, server.url().as_str(), "test-key", "gpt-4").await;
 
         mock.assert();
         assert!(result.is_ok());
@@ -777,8 +792,9 @@ mod tests {
             &tools,
             server.url().as_str(),
             "test-key",
-            "gpt-4"
-        ).await;
+            "gpt-4",
+        )
+        .await;
 
         mock.assert();
         assert!(result.is_ok());
@@ -821,15 +837,13 @@ data: [DONE]
                 &None,
                 server_url.as_str(),
                 "test-key",
-                "gpt-4"
-            ).await
+                "gpt-4",
+            )
+            .await
         });
 
         // Wait for the task to complete
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            handle
-        ).await;
+        let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
 
         mock.assert();
         assert!(result.is_ok());
@@ -877,15 +891,13 @@ data: [DONE]
                 &None,
                 server_url.as_str(),
                 "test-key",
-                "gpt-4"
-            ).await
+                "gpt-4",
+            )
+            .await
         });
 
         // Wait for the task to complete
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            handle
-        ).await;
+        let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
 
         mock.assert();
         assert!(result.is_ok());
@@ -926,15 +938,13 @@ data: [DONE]
                 &None,
                 server_url.as_str(),
                 "test-key",
-                "gpt-4"
-            ).await
+                "gpt-4",
+            )
+            .await
         });
 
         // Wait for the task to complete
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            handle
-        ).await;
+        let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
 
         mock.assert();
         assert!(result.is_ok());

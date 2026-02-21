@@ -32,8 +32,8 @@ impl ToolCall for CalendarTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: CalendarArgs = serde_json::from_str(args).unwrap();
 
-        let mut url =
-            reqwest::Url::parse(&format!("{}/api/calendar", self.api_base_url)).expect("Invalid URL");
+        let mut url = reqwest::Url::parse(&format!("{}/api/calendar", self.api_base_url))
+            .expect("Invalid URL");
 
         url.query_pairs_mut().append_pair("email", &fn_args.email);
 

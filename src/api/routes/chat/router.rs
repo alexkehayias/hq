@@ -17,6 +17,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use super::db::{chat_session_count, chat_session_list};
+use super::public;
+use crate::ai::chat::{ChatBuilder, find_chat_session_by_id};
 use crate::ai::tools::{
     CalendarTool, EmailUnreadTool, MemoryTool, NoteSearchTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
@@ -27,9 +30,6 @@ use crate::notify::{
     PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
 };
 use crate::openai::{BoxedToolCall, Message, Role};
-use crate::ai::chat::{ChatBuilder, find_chat_session_by_id};
-use super::db::{chat_session_count, chat_session_list};
-use super::public;
 
 type SharedState = Arc<RwLock<AppState>>;
 

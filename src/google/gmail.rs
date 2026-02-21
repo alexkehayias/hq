@@ -462,11 +462,6 @@ pub async fn fetch_thread(
     Ok(thread)
 }
 
-/// Helper: base64url encode w/out padding
-fn base64_url_no_pad(input: &str) -> String {
-    URL_SAFE.encode(input.as_bytes())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,7 +607,10 @@ mod tests {
         assert_eq!(base64_url_no_pad(""), "");
 
         // Special characters (URL-safe)
-        assert_eq!(base64_url_no_pad("test+value/with=special"), "dGVzdCt2YWx1ZS93aXRoPXNwZWNpYWw=");
+        assert_eq!(
+            base64_url_no_pad("test+value/with=special"),
+            "dGVzdCt2YWx1ZS93aXRoPXNwZWNpYWw="
+        );
 
         // Binary-like data
         assert_eq!(base64_url_no_pad("\x00\x01\x02"), "AAEC");
@@ -638,21 +636,36 @@ mod tests {
 
         // No signature or quotes
         let input = "Just a regular message\nwith multiple lines".to_string();
-        assert_eq!(clean_and_strip_body(input), "Just a regular message\nwith multiple lines");
+        assert_eq!(
+            clean_and_strip_body(input),
+            "Just a regular message\nwith multiple lines"
+        );
     }
 
     #[test]
     fn test_extract_subject() {
         // Normal subject
-        let message = create_message_with_headers("Test Subject", "From: <from@example.com>", "To: <to@example.com>");
+        let message = create_message_with_headers(
+            "Test Subject",
+            "From: <from@example.com>",
+            "To: <to@example.com>",
+        );
         assert_eq!(extract_subject(&message), "Test Subject");
 
         // Subject with unicode
-        let message = create_message_with_headers("Don=E2=80=99t fear", "From: <from@example.com>", "To: <to@example.com>");
+        let message = create_message_with_headers(
+            "Don=E2=80=99t fear",
+            "From: <from@example.com>",
+            "To: <to@example.com>",
+        );
         assert_eq!(extract_subject(&message), "Don't fear");
 
         // Subject with HTML entities
-        let message = create_message_with_headers("Test &amp; more", "From: <from@example.com>", "To: <to@example.com>");
+        let message = create_message_with_headers(
+            "Test &amp; more",
+            "From: <from@example.com>",
+            "To: <to@example.com>",
+        );
         assert_eq!(extract_subject(&message), "Test & more");
 
         // Empty payload
@@ -668,9 +681,10 @@ mod tests {
 
         // No subject header
         let payload = MessagePayload {
-            headers: Some(vec![
-                MessageHeader { name: "From".to_string(), value: "test@example.com".to_string() },
-            ]),
+            headers: Some(vec![MessageHeader {
+                name: "From".to_string(),
+                value: "test@example.com".to_string(),
+            }]),
             mimetype: "text/plain".to_string(),
             body: None,
             parts: None,
@@ -689,11 +703,19 @@ mod tests {
     #[test]
     fn test_extract_from() {
         // Normal from
-        let message = create_message_with_headers("Subject", "From: Alice <alice@example.com>", "To: <to@example.com>");
+        let message = create_message_with_headers(
+            "Subject",
+            "From: Alice <alice@example.com>",
+            "To: <to@example.com>",
+        );
         assert_eq!(extract_from(&message), "Alice <alice@example.com>");
 
         // From with unicode
-        let message = create_message_with_headers("Subject", "From: =E2=80=9CJohn=E2=80=9D <john@example.com>", "To: <to@example.com>");
+        let message = create_message_with_headers(
+            "Subject",
+            "From: =E2=80=9CJohn=E2=80=9D <john@example.com>",
+            "To: <to@example.com>",
+        );
         assert_eq!(extract_from(&message), "\"John\" <john@example.com>");
 
         // Empty payload
@@ -709,9 +731,10 @@ mod tests {
 
         // No from header
         let payload = MessagePayload {
-            headers: Some(vec![
-                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
-            ]),
+            headers: Some(vec![MessageHeader {
+                name: "Subject".to_string(),
+                value: "Test".to_string(),
+            }]),
             mimetype: "text/plain".to_string(),
             body: None,
             parts: None,
@@ -730,11 +753,19 @@ mod tests {
     #[test]
     fn test_extract_to() {
         // Normal to
-        let message = create_message_with_headers("Subject", "From: <from@example.com>", "To: Bob <bob@example.org>");
+        let message = create_message_with_headers(
+            "Subject",
+            "From: <from@example.com>",
+            "To: Bob <bob@example.org>",
+        );
         assert_eq!(extract_to(&message), "Bob <bob@example.org>");
 
         // Multiple recipients
-        let message = create_message_with_headers("Subject", "From: <from@example.com>", "To: a@a.com, b@b.com");
+        let message = create_message_with_headers(
+            "Subject",
+            "From: <from@example.com>",
+            "To: a@a.com, b@b.com",
+        );
         assert_eq!(extract_to(&message), "a@a.com, b@b.com");
 
         // Empty payload
@@ -750,9 +781,10 @@ mod tests {
 
         // No to header
         let payload = MessagePayload {
-            headers: Some(vec![
-                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
-            ]),
+            headers: Some(vec![MessageHeader {
+                name: "Subject".to_string(),
+                value: "Test".to_string(),
+            }]),
             mimetype: "text/plain".to_string(),
             body: None,
             parts: None,
@@ -771,11 +803,13 @@ mod tests {
     #[test]
     fn test_extract_body() {
         // Body in payload.body (text/plain)
-        let body_data = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, "Hello World");
+        let body_data =
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, "Hello World");
         let payload = MessagePayload {
-            headers: Some(vec![
-                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
-            ]),
+            headers: Some(vec![MessageHeader {
+                name: "Subject".to_string(),
+                value: "Test".to_string(),
+            }]),
             mimetype: "text/plain".to_string(),
             body: Some(MessagePartBody {
                 attachment_id: None,
@@ -796,7 +830,10 @@ mod tests {
         assert!(result.contains("Hello World"));
 
         // Body in parts (text/plain)
-        let body_data = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, "Plain text body");
+        let body_data = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE,
+            "Plain text body",
+        );
         let parts = vec![MessagePart {
             part_id: "1".to_string(),
             mimetype: "text/plain".to_string(),
@@ -807,9 +844,10 @@ mod tests {
             }),
         }];
         let payload = MessagePayload {
-            headers: Some(vec![
-                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
-            ]),
+            headers: Some(vec![MessageHeader {
+                name: "Subject".to_string(),
+                value: "Test".to_string(),
+            }]),
             mimetype: "multipart/alternative".to_string(),
             body: None,
             parts: Some(parts),
@@ -827,9 +865,10 @@ mod tests {
 
         // Fallback to snippet - note: this requires payload with no body/parts
         let empty_payload = MessagePayload {
-            headers: Some(vec![
-                MessageHeader { name: "Subject".to_string(), value: "Test".to_string() },
-            ]),
+            headers: Some(vec![MessageHeader {
+                name: "Subject".to_string(),
+                value: "Test".to_string(),
+            }]),
             mimetype: "text/plain".to_string(),
             body: None,
             parts: None,
@@ -849,7 +888,10 @@ mod tests {
     // Helper function to create a message with headers for testing
     fn create_message_with_headers(subject: &str, from_header: &str, to_header: &str) -> Message {
         let headers = vec![
-            MessageHeader { name: "Subject".to_string(), value: subject.to_string() },
+            MessageHeader {
+                name: "Subject".to_string(),
+                value: subject.to_string(),
+            },
             parse_header(from_header),
             parse_header(to_header),
         ];
@@ -883,7 +925,8 @@ mod tests {
         let url = server.url();
 
         // Create a mock for the Gmail API - use wildcard matching
-        let mock_resp = r#"{"messages": [{"id": "msg_001", "threadId": "thr_001"}], "nextPageToken": null}"#;
+        let mock_resp =
+            r#"{"messages": [{"id": "msg_001", "threadId": "thr_001"}], "nextPageToken": null}"#;
         let _mock = server
             .mock("GET", "/gmail/v1/users/me/messages")
             .with_status(200)
@@ -901,7 +944,12 @@ mod tests {
             "{}/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",
             url, after_date
         );
-        let res = client.get(&request_url).bearer_auth("test_token").send().await.unwrap();
+        let res = client
+            .get(&request_url)
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
         let status = res.status();
         assert!(status.is_success());
 
@@ -950,7 +998,12 @@ mod tests {
 
         let client = reqwest::Client::new();
         let request_url = format!("{}/gmail/v1/users/me/threads/thr_001?format=full", url);
-        let res = client.get(&request_url).bearer_auth("test_token").send().await.unwrap();
+        let res = client
+            .get(&request_url)
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
         let status = res.status();
         assert!(status.is_success());
 
@@ -982,7 +1035,12 @@ mod tests {
             "{}/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",
             url, after_date
         );
-        let res = client.get(&request_url).bearer_auth("bad_token").send().await.unwrap();
+        let res = client
+            .get(&request_url)
+            .bearer_auth("bad_token")
+            .send()
+            .await
+            .unwrap();
         let status = res.status();
         assert!(!status.is_success());
     }

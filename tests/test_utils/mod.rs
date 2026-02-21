@@ -5,23 +5,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use axum::{
-    body::Body,
-    Router,
-};
+use axum::{Router, body::Body};
 
-use hq::api::app;
 use hq::api::AppState;
+use hq::api::app;
 use hq::core::AppConfig;
 use hq::core::db::async_db;
 use hq::core::db::initialize_db;
 use hq::search::index_all;
-
-/// Converts a response body to a string
-pub async fn body_to_string(body: Body) -> String {
-    let bytes = axum::body::to_bytes(body, 8192usize).await.unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
-}
 
 /// Creates a test application router with temporary directories.
 ///

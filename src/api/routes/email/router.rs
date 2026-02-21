@@ -6,11 +6,11 @@ use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
 use tokio::task::JoinSet;
 
+use super::public;
 use crate::api::state::AppState;
 use crate::core::AppConfig;
 use crate::google::gmail::{Thread, extract_body, fetch_thread, list_unread_messages};
 use crate::google::oauth::refresh_access_token;
-use super::public;
 
 type SharedState = Arc<RwLock<AppState>>;
 

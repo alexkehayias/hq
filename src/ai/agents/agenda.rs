@@ -1,7 +1,7 @@
 use tokio_rusqlite::Connection;
 
-use crate::ai::tools::{CalendarTool, TasksDueTodayTool, TasksScheduledTodayTool};
 use crate::ai::chat::ChatBuilder;
+use crate::ai::tools::{CalendarTool, TasksDueTodayTool, TasksScheduledTodayTool};
 use crate::openai::{BoxedToolCall, Message, Role};
 
 /// Daily agenda creator agent.
@@ -50,11 +50,16 @@ Avoid verbose descriptions. Focus on what's most important for the user to know.
 
     let mut chat = ChatBuilder::new(openai_api_hostname, openai_api_key, openai_model)
         .transcript(vec![Message::new(Role::System, system_msg)])
-        .database(db, None, Some(vec![String::from("background"), String::from("agenda")]))
+        .database(
+            db,
+            None,
+            Some(vec![String::from("background"), String::from("agenda")]),
+        )
         .tools(tools)
         .build();
 
-    let response = chat.next_msg(Message::new(Role::User, &user_msg))
+    let response = chat
+        .next_msg(Message::new(Role::User, &user_msg))
         .await
         .expect("Chat session failed");
 

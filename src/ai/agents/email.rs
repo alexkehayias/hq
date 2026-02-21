@@ -1,8 +1,8 @@
 use tokio_rusqlite::Connection;
 
+use crate::ai::chat::ChatBuilder;
 use crate::ai::tools::EmailUnreadTool;
 use crate::openai::{BoxedToolCall, Message, Role};
-use crate::ai::chat::ChatBuilder;
 
 /// Email reader and responder agent.
 pub async fn email_chat_response(
@@ -30,5 +30,4 @@ pub async fn email_chat_response(
 
     let response = chat.next_msg(user_msg).await.expect("Chat session failed");
     (chat.session_id.unwrap(), response)
-
 }

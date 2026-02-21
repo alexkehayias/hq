@@ -55,7 +55,10 @@ pub async fn run() -> Result<()> {
         env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
 
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
-        .transcript(vec![Message::new(Role::System, "You are a helpful assistant.")])
+        .transcript(vec![Message::new(
+            Role::System,
+            "You are a helpful assistant.",
+        )])
         .tools(tools)
         .build();
 

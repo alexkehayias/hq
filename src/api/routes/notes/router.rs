@@ -8,14 +8,14 @@ use axum::{
     routing::{get, post},
 };
 use axum_extra::extract::Query;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use super::public;
 use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
 use crate::search::aql;
 use crate::search::index_all;
 use crate::search::search_notes;
-use super::public;
 
 type SharedState = Arc<RwLock<AppState>>;
 

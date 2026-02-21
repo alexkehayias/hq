@@ -4,7 +4,10 @@ use tokio_rusqlite::Connection;
 
 use super::PeriodicJob;
 use crate::{
-    ai::{chat::ChatBuilder, tools::{CalendarTool, WebSearchTool, WebsiteViewTool}},
+    ai::{
+        chat::ChatBuilder,
+        tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
+    },
     core::AppConfig,
     google::oauth::find_all_gmail_auth_emails,
     notify::{
@@ -81,17 +84,14 @@ Frank is the VP of People at Acme. He was previously HR Manager at Acme and befo
 
 [LinkedIn profile](https://linkedin.com/in/frank-bar)", calendar_emails.join("and "));
 
-        let mut chat = ChatBuilder::new(
-            openai_api_hostname,
-            openai_api_key,
-            openai_model,
-        )
+        let mut chat = ChatBuilder::new(openai_api_hostname, openai_api_key, openai_model)
             .database(db, None, Some(vec![String::from("background")]))
             .tools(tools)
             .build();
 
         // Create a new chat session with the tools
-        let messages = chat.next_msg(Message::new(Role::User, &prompt))
+        let messages = chat
+            .next_msg(Message::new(Role::User, &prompt))
             .await
             .expect("Chat session failed");
 

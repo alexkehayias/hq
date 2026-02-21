@@ -182,8 +182,8 @@ impl Traverser for MarkdownExport {
 
 #[cfg(test)]
 mod tests {
-    use orgize::{Org, ast::Bold, rowan::ast::AstNode};
     use super::MarkdownExport;
+    use orgize::{Org, ast::Bold, rowan::ast::AstNode};
 
     #[test]
     fn test_it_works() {

@@ -1,5 +1,5 @@
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -93,9 +93,9 @@ impl ToolCall for MemoryTool {
                 }
             }
             MemoryOperation::Write => {
-                let content = fn_args.content.ok_or_else(|| {
-                    anyhow!("Content is required for write operation")
-                })?;
+                let content = fn_args
+                    .content
+                    .ok_or_else(|| anyhow!("Content is required for write operation"))?;
 
                 // Validate word count
                 let word_count = content.split_whitespace().count();
@@ -149,7 +149,9 @@ mod tests {
         let tool = MemoryTool::new(temp_dir.path().to_str().unwrap());
 
         // Write memory
-        let write_result = tool.call(r#"{"operation": "write", "content": "User prefers concise responses"}"#).await?;
+        let write_result = tool
+            .call(r#"{"operation": "write", "content": "User prefers concise responses"}"#)
+            .await?;
         assert!(write_result.contains("Memory saved"));
         assert!(write_result.contains("4 words"));
 
@@ -166,7 +168,9 @@ mod tests {
         let nested_path = temp_dir.path().join("subdir").join("nested");
         let tool = MemoryTool::new(nested_path.to_str().unwrap());
 
-        let result = tool.call(r#"{"operation": "write", "content": "Test memory"}"#).await?;
+        let result = tool
+            .call(r#"{"operation": "write", "content": "Test memory"}"#)
+            .await?;
         assert!(result.contains("Memory saved"));
 
         // Verify the file was created in the nested directory
@@ -197,7 +201,12 @@ mod tests {
         // Create a string with more than 2000 words
         let long_content: String = "word ".repeat(2001);
 
-        let result = tool.call(&format!(r#"{{"operation": "write", "content": "{}"}}"#, long_content)).await;
+        let result = tool
+            .call(&format!(
+                r#"{{"operation": "write", "content": "{}"}}"#,
+                long_content
+            ))
+            .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("exceeds 2000 words"));
@@ -211,11 +220,14 @@ mod tests {
         let tool = MemoryTool::new(temp_dir.path().to_str().unwrap());
 
         // Create exactly 2000 words
-        let content: String = "word ".repeat(2000)
-            .trim()
-            .to_string();
+        let content: String = "word ".repeat(2000).trim().to_string();
 
-        let result = tool.call(&format!(r#"{{"operation": "write", "content": "{}"}}"#, content)).await?;
+        let result = tool
+            .call(&format!(
+                r#"{{"operation": "write", "content": "{}"}}"#,
+                content
+            ))
+            .await?;
         assert!(result.contains("2000 words"));
 
         Ok(())

@@ -1,18 +1,15 @@
 //! Router for the webhook API
 
-use std::sync::{Arc, RwLock};
 use axum::{Json, Router, http::StatusCode};
+use std::sync::{Arc, RwLock};
 
-use crate::api::state::AppState;
 use super::public::BlurtNotification;
-
+use crate::api::state::AppState;
 
 type SharedState = Arc<RwLock<AppState>>;
 
 /// Handle forwarded desktop notifications from daemon
-async fn blurt_webhook(
-    Json(notification): Json<BlurtNotification>,
-) -> StatusCode {
+async fn blurt_webhook(Json(notification): Json<BlurtNotification>) -> StatusCode {
     tracing::info!("Received Blurt notification: {:?}", notification);
     StatusCode::OK
 }

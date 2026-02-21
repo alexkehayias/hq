@@ -1,5 +1,5 @@
-use crate::search::recreate_index;
 use crate::search::index_all;
+use crate::search::recreate_index;
 use anyhow::Result;
 use std::env;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

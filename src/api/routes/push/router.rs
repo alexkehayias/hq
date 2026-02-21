@@ -5,9 +5,9 @@ use std::sync::{Arc, RwLock};
 use axum::{Json, Router, extract::State};
 use serde_json::Value;
 
+use super::public;
 use crate::api::state::AppState;
 use crate::notify::{PushNotificationPayload, PushSubscription, broadcast_push_notification};
-use super::public;
 
 type SharedState = Arc<RwLock<AppState>>;
 

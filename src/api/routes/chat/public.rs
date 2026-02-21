@@ -1,6 +1,6 @@
 //! Public types for the chat API
-use serde::{Deserialize, Serialize};
 use crate::openai::Message;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Clone)]
 pub struct ChatSession {

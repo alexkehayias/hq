@@ -5,11 +5,11 @@ use std::sync::{Arc, RwLock};
 use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
 
+use super::public;
 use crate::api::routes::web::public::{WebSearchResponse, WebSearchResult};
 use crate::api::state::AppState;
 use crate::core::AppConfig;
 use crate::google::custom_search::search_google;
-use super::public;
 
 type SharedState = Arc<RwLock<AppState>>;
 

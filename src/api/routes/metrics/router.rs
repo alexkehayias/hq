@@ -4,10 +4,13 @@ use std::sync::{Arc, RwLock};
 
 use axum::{Router, extract::State, http::StatusCode, response::Json};
 use axum_extra::extract::Query;
-use rusqlite::{ToSql, types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef}};
+use rusqlite::{
+    ToSql,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
+};
 
-use crate::api::state::AppState;
 use super::public;
+use crate::api::state::AppState;
 
 type SharedState = Arc<RwLock<AppState>>;
 
