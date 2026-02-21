@@ -18,8 +18,8 @@ use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, NoteSearchTool, TasksDueTodayTool, TasksScheduledTodayTool,
-    WebSearchTool, WebsiteViewTool,
+    CalendarTool, EmailUnreadTool, MemoryTool, NoteSearchTool, TasksDueTodayTool,
+    TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
 };
 use crate::api::state::AppState;
 use crate::core::AppConfig;
@@ -100,6 +100,7 @@ async fn chat_handler(
         website_view_tool,
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
+        memory_tool,
         openai_api_hostname,
         openai_api_key,
         openai_model,
@@ -108,6 +109,7 @@ async fn chat_handler(
         let shared_state = state.read().expect("Unable to read share state");
         let AppConfig {
             note_search_api_url,
+            storage_path,
             openai_api_hostname,
             openai_api_key,
             openai_model,
@@ -122,6 +124,7 @@ async fn chat_handler(
             WebsiteViewTool::new(),
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
+            MemoryTool::new(storage_path),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
             openai_model.clone(),
@@ -137,6 +140,7 @@ async fn chat_handler(
         Box::new(website_view_tool),
         Box::new(tasks_due_today_tool),
         Box::new(tasks_scheduled_today_tool),
+        Box::new(memory_tool),
     ];
     let user_msg = Message::new(Role::User, &payload.message);
 

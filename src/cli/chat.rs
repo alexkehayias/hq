@@ -4,7 +4,7 @@ use rustyline::error::ReadlineError;
 use std::env;
 
 use crate::ai::chat::ChatBuilder;
-use crate::ai::tools::{CalendarTool, EmailUnreadTool, NoteSearchTool, WebSearchTool};
+use crate::ai::tools::{CalendarTool, EmailUnreadTool, MemoryTool, NoteSearchTool, WebSearchTool};
 use crate::openai::{BoxedToolCall, Message, Role};
 
 pub async fn run() -> Result<()> {
@@ -36,11 +36,14 @@ pub async fn run() -> Result<()> {
         CalendarTool::default()
     };
 
+    let memory_tool = MemoryTool::default();
+
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
+        Box::new(memory_tool),
     ];
 
     // Get OpenAI API configuration from environment variables (similar to AppConfig)
