@@ -3,7 +3,7 @@
   const resultList = document.getElementById('results');
   const emptyState = document.getElementById('empty-state');
 
-  const handleSearch = async (includeSimilarity, viewSelected, val) => {
+  const handleSearch = async (includeSimilarity, val) => {
     try {
       const queryEncoded = encodeURIComponent(val);
       // Auto hide results from journal entries
@@ -157,99 +157,97 @@
               console.log(`Updated latest hit to ${r.id}`);
             }
 
-            // Show note in fullscreen modal if viewSelected
-            if (viewSelected) {
-              // Create or reuse overlay modal
-              let modal = document.getElementById('note-modal');
-              let addedModal = false;
-              if (!modal) {
-                modal = document.createElement('div');
-                modal.id = 'note-modal';
-                modal.className =
-                  'fixed inset-0 flex items-center justify-center bg-black bg-opacity-85 z-[10000]';
-                modal.innerHTML = `<div id="note-modal-content" class="relative bg-white max-w-2xl w-[95vw] max-h-[90vh] rounded-lg shadow-xl p-8 overflow-auto"></div>`;
-                document.body.appendChild(modal);
-                addedModal = true;
-              }
-              const content = modal.querySelector('#note-modal-content');
-
-              // Show loading
-              content.innerHTML =
-                '<div class="mb-4 text-center text-xl">Loading...</div>';
-              modal.style.display = 'flex';
-
-              function dismissModal() {
-                modal.style.display = 'none';
-                document.removeEventListener('keydown', escListener);
-                if (addedModal) {
-                  modal.remove();
-                }
-              }
-
-              // Click outside the modal content to close
-              modal.onclick = (e) => {
-                if (e.target === modal) {
-                  dismissModal();
-                }
-              };
-
-              // ESC key closes modal
-              function escListener(e) {
-                if (e.key === 'Escape') {
-                  dismissModal();
-                }
-              }
-              document.addEventListener('keydown', escListener);
-
-              // Make modal closable via button
-              if (!document.getElementById('modal-close-btn')) {
-                const closeBtn = document.createElement('button');
-                closeBtn.id = 'modal-close-btn';
-                closeBtn.innerText = '×';
-                closeBtn.className =
-                  'absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black cursor-pointer';
-                closeBtn.onclick = dismissModal;
-                content.appendChild(closeBtn);
-              }
-
-              // Fetch and render the note JSON
-              fetch(`/api/notes/${r.id}/view`, {
-                headers: { Accept: 'application/json' },
-              })
-                .then(async (resp) => {
-                  if (!resp.ok) throw new Error('Failed to fetch note');
-                  return resp.json();
-                })
-                .then((noteData) => {
-                  let html = '';
-                  // Render markdown into HTML
-                  const messageHtml = marked.parse(noteData.body, {
-                    breaks: true,
-                  });
-                  // Tags
-                  if (noteData.tags) {
-                    html += `<div class="mb-4">${noteData.tags
-                      .split(',')
-                      .map(
-                        (t) =>
-                          `<span class="inline-block mr-2 bg-gray-200 text-gray-700 text-xs px-2 py-0.5 rounded-full">#${t}</span>`,
-                      )
-                      .join('')}</div>`;
-                  }
-                  // Content
-                  html += `<div class="markdown leading-relaxed text-base text-gray-800">${messageHtml || ''}</div>`;
-                  // Insert and keep the close button on top
-                  content.innerHTML =
-                    `<button id="modal-close-btn" class="absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black cursor-pointer">×</button>` +
-                    html;
-                  content.querySelector('#modal-close-btn').onclick =
-                    dismissModal;
-                })
-                .catch((err) => {
-                  content.innerHTML = `<div class="text-center text-red-700 p-8">Failed to load note: ${err.message}</div>`;
-                });
-              return;
+            // Show note in fullscreen modal
+            // Create or reuse overlay modal
+            let modal = document.getElementById('note-modal');
+            let addedModal = false;
+            if (!modal) {
+              modal = document.createElement('div');
+              modal.id = 'note-modal';
+              modal.className =
+                'fixed inset-0 flex items-center justify-center bg-black bg-opacity-85 z-[10000]';
+              modal.innerHTML = `<div id="note-modal-content" class="relative bg-white max-w-2xl w-[95vw] max-h-[90vh] rounded-lg shadow-xl p-8 overflow-auto"></div>`;
+              document.body.appendChild(modal);
+              addedModal = true;
             }
+            const content = modal.querySelector('#note-modal-content');
+
+            // Show loading
+            content.innerHTML =
+              '<div class="mb-4 text-center text-xl">Loading...</div>';
+            modal.style.display = 'flex';
+
+            function dismissModal() {
+              modal.style.display = 'none';
+              document.removeEventListener('keydown', escListener);
+              if (addedModal) {
+                modal.remove();
+              }
+            }
+
+            // Click outside the modal content to close
+            modal.onclick = (e) => {
+              if (e.target === modal) {
+                dismissModal();
+              }
+            };
+
+            // ESC key closes modal
+            function escListener(e) {
+              if (e.key === 'Escape') {
+                dismissModal();
+              }
+            }
+            document.addEventListener('keydown', escListener);
+
+            // Make modal closable via button
+            if (!document.getElementById('modal-close-btn')) {
+              const closeBtn = document.createElement('button');
+              closeBtn.id = 'modal-close-btn';
+              closeBtn.innerText = '×';
+              closeBtn.className =
+                'absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black cursor-pointer';
+              closeBtn.onclick = dismissModal;
+              content.appendChild(closeBtn);
+            }
+
+            // Fetch and render the note JSON
+            fetch(`/api/notes/${r.id}/view`, {
+              headers: { Accept: 'application/json' },
+            })
+              .then(async (resp) => {
+                if (!resp.ok) throw new Error('Failed to fetch note');
+                return resp.json();
+              })
+              .then((noteData) => {
+                let html = '';
+                // Render markdown into HTML
+                const messageHtml = marked.parse(noteData.body, {
+                  breaks: true,
+                });
+                // Tags
+                if (noteData.tags) {
+                  html += `<div class="mb-4">${noteData.tags
+                    .split(',')
+                    .map(
+                      (t) =>
+                        `<span class="inline-block mr-2 bg-gray-200 text-gray-700 text-xs px-2 py-0.5 rounded-full">#${t}</span>`,
+                    )
+                    .join('')}</div>`;
+                }
+                // Content
+                html += `<div class="markdown leading-relaxed text-base text-gray-800">${messageHtml || ''}</div>`;
+                // Insert and keep the close button on top
+                content.innerHTML =
+                  `<button id="modal-close-btn" class="absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black cursor-pointer">×</button>` +
+                  html;
+                content.querySelector('#modal-close-btn').onclick =
+                  dismissModal;
+              })
+              .catch((err) => {
+                content.innerHTML = `<div class="text-center text-red-700 p-8">Failed to load note: ${err.message}</div>`;
+              });
+            return;
           });
           return hit;
         });
@@ -267,11 +265,10 @@
   const urlParams = new URLSearchParams(window.location.search);
   const initQuery = urlParams.get('query');
   const includeSimilarity = urlParams.get('include_similarity') === 'true';
-  const viewSelected = urlParams.get('view_selected') === 'true';
 
   if (initQuery) {
     searchInput.value = decodeURIComponent(initQuery);
-    handleSearch(includeSimilarity, viewSelected, searchInput.value);
+    handleSearch(includeSimilarity, searchInput.value);
   }
 
   // Handle search as you type
@@ -279,7 +276,7 @@
     const val = e.target.value;
 
     if (val) {
-      await handleSearch(includeSimilarity, viewSelected, val);
+      await handleSearch(includeSimilarity, val);
     }
   });
 
