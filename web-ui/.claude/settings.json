@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "../bin/biome check --write",
+            "command": "../bin/biome check",
             "timeout": 30
           }
         ]
