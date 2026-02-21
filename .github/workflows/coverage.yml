@@ -24,9 +24,3 @@ jobs:
 
       - name: Run coverage
         run: cargo tarpaulin --fail-under 50 --out Xml --output-dir coverage
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage/cobertura.xml
-          fail_ci_if_error: false
