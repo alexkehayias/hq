@@ -9,3 +9,4 @@
 marginalia.org
 /storage
 .DS_STORE
+.claude/settings.local.json
