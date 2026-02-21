@@ -1,7 +1,7 @@
 use crate::search::aql::{Expr, RangeOp};
 use std::ops::Bound;
 use tantivy::Term;
-use tantivy::query::{AllQuery, BooleanQuery, FuzzyTermQuery, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, FuzzyTermQuery, PhraseQuery, TermQuery};
 use tantivy::query::{Occur, Query};
 use tantivy::schema::{Field, IndexRecordOption, Schema};
 
@@ -55,7 +55,7 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
         Expr::Term {
             field,
             value,
-            phrase: _,
+            phrase,
             negated,
         } => {
             // Default to title and body when there is no field name specified
@@ -81,6 +81,11 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
                                     as Box<dyn Query>,
                             ),
                         ]))
+                    } else if *phrase {
+                        let terms = value.split(" ").map(|i| Term::from_field_text(*query_field, i)).collect::<Vec<Term>>();
+                        let mut query = PhraseQuery::new(terms);
+                        query.set_slop(2);
+                        Box::new(query)
                     } else if is_fuzzy_search_field(query_field_name) {
                         Box::new(FuzzyTermQuery::new(term, 2, true)) as Box<dyn Query>
                     } else {
