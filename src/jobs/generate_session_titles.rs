@@ -43,37 +43,43 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
             })
             .await;
 
-        if let Ok(sessions) = sessions_to_update {
-            for session_id in sessions {
-                // Get the chat transcript for this session
-                match find_chat_session_by_id(db_conn, &session_id).await {
-                    Ok(transcript) => {
-                        if !transcript.is_empty() {
-                            // Generate title and summary from the transcript
-                            if let Err(e) = generate_and_update_session_info(
-                                config,
-                                db_conn,
-                                &session_id,
-                                &transcript,
-                            )
-                            .await
-                            {
-                                tracing::error!(
-                                    "Failed to generate title/summary for session {}: {}",
-                                    session_id,
-                                    e
-                                );
+        match sessions_to_update {
+            Ok(sessions) => {
+                tracing::info!("Found {} sessions to update", sessions.len());
+                for session_id in sessions {
+                    // Get the chat transcript for this session
+                    match find_chat_session_by_id(db_conn, &session_id).await {
+                        Ok(transcript) => {
+                            if !transcript.is_empty() {
+                                // Generate title and summary from the transcript
+                                if let Err(e) = generate_and_update_session_info(
+                                    config,
+                                    db_conn,
+                                    &session_id,
+                                    &transcript,
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        "Failed to generate title/summary for session {}: {}",
+                                        session_id,
+                                        e
+                                    );
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to fetch transcript for session {}: {}",
-                            session_id,
-                            e
-                        );
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to fetch transcript for session {}: {}",
+                                session_id,
+                                e
+                            );
+                        }
                     }
                 }
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch sessions to update: {}", e);
             }
         }
 
