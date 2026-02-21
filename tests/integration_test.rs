@@ -162,6 +162,7 @@ mod tests {
                     dummy_arg: openai::Property {
                         r#type: String::from("string"),
                         description: String::from("Location of the weather requested"),
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("dummy_arg")],
@@ -183,6 +184,7 @@ mod tests {
                     dummy_arg: openai::Property {
                         r#type: String::from("string"),
                         description: String::from("Some dummy arg"),
+                        r#enum: None
                     },
                 },
                 required: vec![String::from("dummy_arg")],

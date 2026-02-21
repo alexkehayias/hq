@@ -227,12 +227,6 @@ fn strip_quoted_replies(content: &str) -> String {
     quoted_lines.trim_end().to_string()
 }
 
-/// Encode a string to base64 URL-safe without padding
-fn base64_url_no_pad(input: &str) -> String {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    URL_SAFE_NO_PAD.encode(input.as_bytes())
-}
-
 /// Strip email signatures from the content
 fn strip_signature(content: &str) -> String {
     let mut result = content.to_string();
@@ -601,25 +595,6 @@ mod tests {
         // Unix line endings
         let input = "Hello world\n\nOn Tue, Jul 1, 2025 at 1:43 PM Foo wrote:\n\n> Quoted content";
         assert_eq!(strip_quoted_replies(input), "Hello world");
-    }
-
-    #[test]
-    fn test_base64_url_no_pad() {
-        // Basic encoding - URL_SAFE includes padding
-        assert_eq!(base64_url_no_pad("Hello"), "SGVsbG8=");
-        assert_eq!(base64_url_no_pad("World"), "V29ybGQ=");
-
-        // Empty string
-        assert_eq!(base64_url_no_pad(""), "");
-
-        // Special characters (URL-safe)
-        assert_eq!(
-            base64_url_no_pad("test+value/with=special"),
-            "dGVzdCt2YWx1ZS93aXRoPXNwZWNpYWw="
-        );
-
-        // Binary-like data
-        assert_eq!(base64_url_no_pad("\x00\x01\x02"), "AAEC");
     }
 
     #[test]

@@ -5,14 +5,24 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use axum::{Router, body::Body};
+use axum::{
+    body::Body,
+    Router,
+};
 
-use hq::api::AppState;
 use hq::api::app;
+use hq::api::AppState;
 use hq::core::AppConfig;
 use hq::core::db::async_db;
 use hq::core::db::initialize_db;
 use hq::search::index_all;
+
+/// Converts a response body to a string
+#[allow(dead_code)] // Otherwise test crates give dead code warning
+pub async fn body_to_string(body: Body) -> String {
+    let bytes = axum::body::to_bytes(body, 8192usize).await.unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
 
 /// Creates a test application router with temporary directories.
 ///
@@ -20,6 +30,7 @@ use hq::search::index_all;
 /// to a lock held by `tantivy` during index writing so add a
 /// `#[serial]` to the test function or run `cargo test --
 /// --test-threads=1`.
+#[allow(dead_code)] // Otherwise test crates give dead code warning
 pub async fn test_app() -> Router {
     // Create a unique directory for the test with a randomly
     // generated name using a timestamp to avoid collisions and
