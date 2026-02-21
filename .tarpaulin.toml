@@ -1,0 +1,7 @@
+[test_config]
+skip-clean = true
+color = "Auto"
+exclude-files = [
+  "tests/data/*",
+  "src/cli/*",
+]
