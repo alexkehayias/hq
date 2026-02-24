@@ -49,7 +49,7 @@
     @apply text-sm font-semibold rounded px-1 py-[2px] text-red-700 dark:text-red-200 bg-gray-200 dark:bg-gray-800 text-wrap;
   }
   pre {
-    @apply overflow-auto text-xs bg-gray-200 dark:bg-gray-800 dark:border rounded-lg p-4;
+    @apply overflow-auto text-xs bg-gray-200 dark:bg-gray-900 rounded-lg p-4;
   }
   pre code {
     @apply text-sm font-bold text-gray-700 dark:text-gray-300;
