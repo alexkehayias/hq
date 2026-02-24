@@ -28,7 +28,7 @@ impl ToolCall for NoteSearchTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: NoteSearchArgs = serde_json::from_str(args).unwrap();
 
-        let mut url = reqwest::Url::parse(&format!("{}/notes/search", self.api_base_url))
+        let mut url = reqwest::Url::parse(&format!("{}/api/notes/search", self.api_base_url))
             .expect("Invalid URL");
 
         // By default, only include search results from notes. This
