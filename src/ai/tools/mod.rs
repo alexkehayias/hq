@@ -1,3 +1,6 @@
+pub mod meeting_search;
+pub use meeting_search::MeetingSearchTool;
+
 pub mod note_search;
 pub use note_search::NoteSearchTool;
 
