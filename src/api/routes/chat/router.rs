@@ -21,8 +21,8 @@ use super::db::{chat_session_count, chat_session_list};
 use super::public;
 use crate::ai::chat::{ChatBuilder, find_chat_session_by_id};
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, MemoryTool, NoteSearchTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
+    CalendarTool, EmailUnreadTool, MemoryTool, MeetingSearchTool, NoteSearchTool,
+    TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
 };
 use crate::api::state::AppState;
 use crate::core::AppConfig;
@@ -92,8 +92,11 @@ async fn chat_handler(
     let (disconnect_notifier, mut disconnect_receiver) = broadcast::channel::<()>(1);
     let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
 
+    let db = state.read().expect("Unable to read share state").db.clone();
+
     let (
         note_search_tool,
+        meeting_search_tool,
         web_search_tool,
         email_unread_tool,
         calendar_tool,
@@ -118,9 +121,10 @@ async fn chat_handler(
         } = &shared_state.config;
         (
             NoteSearchTool::new(note_search_api_url),
+            MeetingSearchTool::new(note_search_api_url),
             WebSearchTool::new(note_search_api_url),
             EmailUnreadTool::new(note_search_api_url),
-            CalendarTool::new(note_search_api_url),
+            CalendarTool::new(db.clone(), note_search_api_url),
             WebsiteViewTool::new(),
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
@@ -134,6 +138,7 @@ async fn chat_handler(
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
+        Box::new(meeting_search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(calendar_tool),

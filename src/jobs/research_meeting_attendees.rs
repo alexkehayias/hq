@@ -37,7 +37,7 @@ impl PeriodicJob for ResearchMeetingAttendees {
 
         // Create tools for the chat
         let tools: Vec<BoxedToolCall> = vec![
-            Box::new(CalendarTool::new(note_search_api_url)),
+            Box::new(CalendarTool::new(db.clone(), note_search_api_url)),
             Box::new(WebSearchTool::new(note_search_api_url)),
             Box::new(WebsiteViewTool::new()),
         ];

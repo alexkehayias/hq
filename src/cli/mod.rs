@@ -125,7 +125,7 @@ pub async fn run() -> Result<()> {
             query::run(term, vector, &index_path, &vec_db_path).await?;
         }
         Some(Command::Chat {}) => {
-            chat::run().await?;
+            chat::run(&vec_db_path).await?;
         }
         Some(Command::Auth { service }) => {
             auth::run(service, &vec_db_path).await?;

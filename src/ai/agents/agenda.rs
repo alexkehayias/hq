@@ -15,7 +15,7 @@ pub async fn daily_agenda_response(
 ) -> (String, Vec<Message>) {
     let tasks_due_today_tool = TasksDueTodayTool::new(api_base_url);
     let tasks_scheduled_today_tool = TasksScheduledTodayTool::new(api_base_url);
-    let calendar_tool = CalendarTool::new(api_base_url);
+    let calendar_tool = CalendarTool::new(db.clone(), api_base_url);
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(tasks_due_today_tool),

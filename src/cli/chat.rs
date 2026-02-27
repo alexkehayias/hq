@@ -4,10 +4,16 @@ use rustyline::error::ReadlineError;
 use std::env;
 
 use crate::ai::chat::ChatBuilder;
-use crate::ai::tools::{CalendarTool, EmailUnreadTool, MemoryTool, NoteSearchTool, WebSearchTool};
+use crate::ai::tools::{
+    CalendarTool, EmailUnreadTool, MemoryTool, MeetingSearchTool, NoteSearchTool, WebSearchTool,
+};
+use crate::core::db::async_db;
 use crate::openai::{BoxedToolCall, Message, Role};
 
-pub async fn run() -> Result<()> {
+pub async fn run(vec_db_path: &str) -> Result<()> {
+    let db = async_db(vec_db_path)
+        .await
+        .expect("Failed to connect to db");
     let mut rl = DefaultEditor::new().expect("Editor failed");
 
     // Create tools
@@ -16,6 +22,12 @@ pub async fn run() -> Result<()> {
         NoteSearchTool::new(url)
     } else {
         NoteSearchTool::default()
+    };
+
+    let meeting_search_tool = if let Ok(url) = &note_search_api_url {
+        MeetingSearchTool::new(url)
+    } else {
+        MeetingSearchTool::default()
     };
 
     let email_unread_tool = if let Ok(url) = &note_search_api_url {
@@ -31,15 +43,17 @@ pub async fn run() -> Result<()> {
     };
 
     let calendar_tool = if let Ok(url) = &note_search_api_url {
-        CalendarTool::new(url)
+        CalendarTool::new(db.clone(), url)
     } else {
-        CalendarTool::default()
+        // This shouldn't happen - we always have a db now
+        CalendarTool::new(db.clone(), "http://localhost:2222")
     };
 
     let memory_tool = MemoryTool::default();
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
+        Box::new(meeting_search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
