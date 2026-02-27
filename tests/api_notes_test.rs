@@ -215,6 +215,30 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// Tests searching notes with tags:meeting query (used by MeetingSearchTool)
+    #[tokio::test]
+    #[serial]
+    async fn it_searches_notes_with_meeting_tag() {
+        let app = test_app().await;
+
+        // This tests the query format used by MeetingSearchTool
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/notes/search?query=tags:meeting")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"raw_query\""));
+        assert!(body.contains("\"results\""));
+    }
+
     // Note: Empty query test is intentionally omitted - it causes a panic in the AQL parser
     // which is a known bug. The endpoint should return 400 Bad Request instead.
 }
