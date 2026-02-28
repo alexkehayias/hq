@@ -247,6 +247,15 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.style.height = 'auto'; // Reset height after sending
   };
 
+  // Handle initial prompt from query parameter (after functions are defined)
+  const maybePrompt = urlParams.get('prompt');
+  if (maybePrompt) {
+    chatInput.value = decodeURIComponent(maybePrompt);
+    autoResize();
+    // Auto-send the prompt
+    sendMessage();
+  }
+
   sendButton.addEventListener('click', () => sendMessage());
   chatInput.addEventListener('keydown', (e) => {
     if (e.metaKey && e.key === 'Enter') {
