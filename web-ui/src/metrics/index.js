@@ -6,6 +6,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const timeRangeSelect = document.getElementById('timeRange');
   const retryBtn = document.getElementById('retryBtn');
 
+  // Summary metric elements
+  const totalTokensEl = document.getElementById('totalTokens');
+  const avgTokensPerDayEl = document.getElementById('avgTokensPerDay');
+  const estCostEl = document.getElementById('estCost');
+
+  // Pricing: $0.40 per 1M tokens (approx midpoint for gpt-4.1-mini input/output)
+  const COST_PER_MILLION_TOKENS = 0.4;
+
   let chartInstance = null;
 
   function showState(state) {
@@ -40,12 +48,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (data.events && data.events.length > 0) {
         renderChart(data.events);
+        updateSummaryMetrics(data.events, parseInt(limitDays, 10));
         showState('chart');
       } else {
+        updateSummaryMetrics([], 0);
         showState('empty');
       }
     } catch (error) {
       console.error('Error fetching metrics:', error);
+      updateSummaryMetrics([], 0);
       showState('error');
     }
   }
@@ -166,6 +177,43 @@ document.addEventListener('DOMContentLoaded', () => {
       .split('-')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
+  }
+
+  function updateSummaryMetrics(events, _limitDays) {
+    // Filter for token-count events
+    const tokenEvents = events.filter((e) => e.name === 'token-count');
+
+    if (tokenEvents.length === 0) {
+      totalTokensEl.textContent = '--';
+      avgTokensPerDayEl.textContent = '--';
+      estCostEl.textContent = '--';
+      return;
+    }
+
+    // Sum all token values
+    const totalTokens = tokenEvents.reduce((sum, e) => sum + e.value, 0);
+
+    // Calculate average per day (use the actual number of days with data)
+    const uniqueDays = new Set(tokenEvents.map((e) => e.timestamp));
+    const daysWithData = uniqueDays.size;
+    const avgTokensPerDay = daysWithData > 0 ? totalTokens / daysWithData : 0;
+
+    // Calculate estimated cost
+    const estCost = (totalTokens / 1_000_000) * COST_PER_MILLION_TOKENS;
+
+    // Format and display
+    totalTokensEl.textContent = formatNumber(totalTokens);
+    avgTokensPerDayEl.textContent = formatNumber(Math.round(avgTokensPerDay));
+    estCostEl.textContent = `$${estCost.toFixed(2)}`;
+  }
+
+  function formatNumber(num) {
+    if (num >= 1_000_000) {
+      return `${(num / 1_000_000).toFixed(1)}M`;
+    } else if (num >= 1_000) {
+      return `${(num / 1_000).toFixed(1)}K`;
+    }
+    return num.toString();
   }
 
   // Event listeners

@@ -41,6 +41,25 @@
           </select>
         </div>
 
+        <!-- Summary Metrics -->
+        <div class="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Summary</h2>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Total Tokens</p>
+              <p id="totalTokens" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">--</p>
+            </div>
+            <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Avg Tokens/Day</p>
+              <p id="avgTokensPerDay" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">--</p>
+            </div>
+            <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Est. Cost</p>
+              <p id="estCost" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">--</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Chart Container -->
         <div class="px-6 py-8">
           <div id="chart" class="w-full" style="height: 400px;"></div>
