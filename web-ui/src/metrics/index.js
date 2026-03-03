@@ -59,6 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
       updateSummaryMetrics([], 0);
       showState('error');
     }
+
+    chartInstance?.resize();
   }
 
   function renderChart(events) {
@@ -77,7 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
         value: event.value,
       });
     }
-    console.log(metricsByName);
 
     // Sort each metric's events by timestamp
     for (const name in metricsByName) {
@@ -221,5 +222,5 @@ document.addEventListener('DOMContentLoaded', () => {
   retryBtn.addEventListener('click', fetchMetrics);
 
   // Initial load
-  fetchMetrics().then(() => chartInstance.resize());
+  fetchMetrics();
 });
