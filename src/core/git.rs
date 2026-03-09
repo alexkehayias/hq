@@ -13,8 +13,14 @@ pub async fn maybe_clone_repo(deploy_key_path: &str, url: &str, storage_path: &s
         .expect("failed to execute process");
 
     let stdout = std::str::from_utf8(&git_clone.stdout).expect("Failed to parse stdout");
+    if !stdout.is_empty() {
+        println!("stdout: {}", stdout);
+    }
+
     let stderr = std::str::from_utf8(&git_clone.stderr).expect("Failed to parse stderr");
-    println!("stdout: {}\nstderr: {}", stdout, stderr);
+    if !stderr.is_empty() {
+        println!("stderr: {}", stderr);
+    }
 }
 
 /// Pull and reset to origin main branch

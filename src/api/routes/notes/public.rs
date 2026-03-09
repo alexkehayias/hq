@@ -41,6 +41,8 @@ pub struct SearchResult {
     pub task_closed: Option<String>,
     pub meeting_date: Option<String>,
     pub body: String,
+    #[serde(default)]
+    pub chat_role: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

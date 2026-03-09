@@ -3,13 +3,14 @@ use tokio_rusqlite::Connection;
 
 use crate::core::AppConfig;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct LastSelection {
     pub id: String,
     pub title: String,
     pub file_name: String,
 }
 
+#[derive(Clone)]
 pub struct AppState {
     // Stores the latest search hit selected by the user
     pub latest_selection: Option<LastSelection>,

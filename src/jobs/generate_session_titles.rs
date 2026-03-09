@@ -49,7 +49,8 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
                 for session_id in sessions {
                     // Get the chat transcript for this session
                     match find_chat_session_by_id(db_conn, &session_id).await {
-                        Ok(transcript) => {
+                        Ok(transcript_with_ids) => {
+                            let transcript: Vec<Message> = transcript_with_ids.into_iter().map(|(_, msg)| msg).collect();
                             if !transcript.is_empty() {
                                 // Generate title and summary from the transcript
                                 if let Err(e) = generate_and_update_session_info(

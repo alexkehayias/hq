@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use itertools::Itertools;
 use serde::Serialize;
@@ -9,8 +11,11 @@ use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
 use crate::api::public::notes::SearchResult;
+use crate::ai::chat::db::get_chat_messages_by_ids;
+use crate::openai::Role;
 use crate::search::aql::{self};
 use crate::search::fts::schema::note_schema;
+use crate::search::indexing::DocType;
 use crate::search::query::{aql_to_index_query, expr_to_sql, query_to_similarity};
 
 #[derive(Serialize)]
@@ -25,6 +30,7 @@ pub enum SearchHitType {
 pub struct SearchHit {
     pub id: String,
     pub r#type: SearchHitType,
+    pub doc_type: DocType,
     pub score: f32,
 }
 
@@ -62,10 +68,18 @@ fn fulltext_search(index_path: &str, query: &aql::Expr, limit: usize) -> Result<
                     .unwrap()
                     .to_string();
 
+                let doc_type_str = doc.get("type").unwrap()[0]
+                    .as_ref()
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                let doc_type = DocType::from_str(&doc_type_str).expect("Invalid doc type");
+
                 SearchHit {
                     id: id_val,
                     r#type: SearchHitType::FullText,
                     score: *score,
+                    doc_type
                 }
             })
             .collect();
@@ -110,6 +124,7 @@ pub async fn search_similar_notes(
           SELECT
             note_meta.id,
             note_meta.file_name,
+            note_meta.type,
             note_meta.title,
             note_meta.tags,
             note_meta.body,
@@ -124,10 +139,13 @@ pub async fn search_similar_notes(
             )?;
             let found = stmt
                 .query_map([q.as_bytes(), limit.as_bytes(), limit.as_bytes()], |r| {
+                    let doc_type_str: String = r.get(3)?;
+                    let doc_type = DocType::from_str(&doc_type_str).expect("Invalid doc type");
                     Ok(SearchHit {
-                        r#type: SearchHitType::Similarity,
                         id: r.get(0)?,
+                        r#type: SearchHitType::Similarity,
                         score: r.get(5)?,
+                        doc_type,
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchHit>, _>>()?;
@@ -170,51 +188,58 @@ pub async fn search_notes(
             .collect();
     }
 
-    // Search the db for the metadata and construct results
-    let result_ids: Vec<String> = search_hits.iter().map(|i| i.id.clone()).collect();
-    let result_ids_serialized = json!(result_ids);
-    let result_ids_str = result_ids_serialized.to_string();
+    // Need to handle retrieving search results from two different
+    // places in the database based on the doc type
+    let mut chat_message_ids: Vec<String> = Vec::new();
+    let mut non_chat_ids: Vec<String> = Vec::new();
+    for hit in &search_hits {
+        match hit.doc_type {
+             DocType::Chat => chat_message_ids.push(hit.id.clone()),
+            _ => non_chat_ids.push(hit.id.clone()),
+        }
+    }
 
-    let mut where_clauses = Vec::new();
+    // Query note_meta for non-chat results
+    let mut results: Vec<SearchResult> = if !non_chat_ids.is_empty() {
+        let result_ids_serialized = json!(non_chat_ids);
+        let result_ids_str = result_ids_serialized.to_string();
 
-    if !result_ids.is_empty() {
+        let mut where_clauses = Vec::new();
         where_clauses.push("note_meta.id in (SELECT value from json_each(?))".to_string());
-    }
 
-    if let Some(extra_sql) = expr_to_sql(query) {
-        where_clauses.push(extra_sql);
-    }
+        if let Some(extra_sql) = expr_to_sql(query) {
+            where_clauses.push(extra_sql);
+        }
 
-    let where_clause = if !where_clauses.is_empty() {
-        format!("WHERE {}", where_clauses.join(" AND "))
-    } else {
-        "".to_string()
-    };
+        let where_clause = if !where_clauses.is_empty() {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        } else {
+            "".to_string()
+        };
 
-    let sql = format!(
-        r#"
-        SELECT
-          id,
-          type,
-          category,
-          file_name,
-          title,
-          tags,
-          body,
-          status,
-          scheduled,
-          deadline,
-          closed,
-          date
-        FROM note_meta
-        {}
-        ORDER BY date DESC, deadline DESC, scheduled DESC, closed DESC
-        LIMIT {}
-    "#,
-        where_clause, limit
-    );
+        let sql = format!(
+            r#"
+            SELECT
+              id,
+              type,
+              category,
+              file_name,
+              title,
+              tags,
+              body,
+              status,
+              scheduled,
+              deadline,
+              closed,
+              date
+            FROM note_meta
+            {}
+            ORDER BY date DESC, deadline DESC, scheduled DESC, closed DESC
+            LIMIT {}
+        "#,
+            where_clause, limit
+        );
 
-    let results: Vec<SearchResult> = if !result_ids.is_empty() {
         db.call(move |conn| {
             let mut stmt = conn.prepare(&sql).unwrap();
             let found = stmt
@@ -252,6 +277,7 @@ pub async fn search_notes(
                         task_deadline,
                         task_closed,
                         meeting_date,
+                        chat_role: None,
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchResult>, _>>()?;
@@ -261,5 +287,45 @@ pub async fn search_notes(
     } else {
         Vec::new()
     };
+
+    // Query for chat results in a single batch
+    if !chat_message_ids.is_empty() {
+        if let Ok(messages) = get_chat_messages_by_ids(db, &chat_message_ids).await {
+            for (message_id, msg, session_title) in messages {
+                let role = msg.role();
+                // Only include user and assistant messages (not system/tool)
+                if *role == Role::User || *role == Role::Assistant {
+                    let title = session_title.unwrap_or_default();
+                    let body = msg.content.clone().unwrap_or_default();
+
+                    results.push(SearchResult {
+                        id: message_id,
+                        r#type: "chat".to_string(),
+                        category: String::new(),
+                        file_name: String::new(),
+                        title: if truncate {
+                            title.chars().take(140).collect()
+                        } else {
+                            title
+                        },
+                        tags: None,
+                        body: if truncate {
+                            body.chars().take(240).collect()
+                        } else {
+                            body
+                        },
+                        is_task: false,
+                        task_status: None,
+                        task_scheduled: None,
+                        task_deadline: None,
+                        task_closed: None,
+                        meeting_date: None,
+                        chat_role: Some(role.as_str().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
     Ok(results)
 }

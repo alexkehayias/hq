@@ -1,7 +1,9 @@
 use regex::Regex;
+use serde::{Serialize, Deserialize};
 use std::hash::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -12,9 +14,12 @@ use tantivy::{Index, IndexWriter, doc};
 use text_splitter::{ChunkConfig, TextSplitter};
 use tiktoken_rs::{CoreBPE, cl100k_base};
 use tokio::fs;
-use tokio_rusqlite::{Connection, Result};
+use anyhow::{Context, Result};
+use tokio_rusqlite::Connection;
 use zerocopy::IntoBytes;
 
+use crate::ai::chat::db::{get_non_background_sessions, find_chat_session_by_id, session_has_background_tag};
+use crate::openai::{Message, Role};
 use super::export::MarkdownExport;
 use super::fts::schema::note_schema;
 use super::source::{note_filter, notes};
@@ -266,11 +271,14 @@ fn parse_note(content: &str) -> Note {
     }
 }
 
-enum DocType {
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DocType {
     Note,
     Task,
     Meeting,
     Heading,
+    Chat,
 }
 
 impl DocType {
@@ -280,7 +288,17 @@ impl DocType {
             DocType::Task => "task",
             DocType::Meeting => "meeting",
             DocType::Heading => "heading",
+            DocType::Chat => "chat",
         }
+    }
+}
+
+impl FromStr for DocType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Re‑use Serde's deserializer
+        Ok(serde_json::from_str(&format!("\"{s}\""))?)
     }
 }
 
@@ -631,6 +649,185 @@ pub async fn index_all(
         .await
         .expect("Full-text indexing task failed");
     }
+
+    Ok(())
+}
+
+/// Index a single chat message into the full-text search index
+pub fn index_chat_message_full_text(
+    index_writer: &mut IndexWriter,
+    schema: &Schema,
+    message_id: &str,
+    title: Option<&str>,
+    msg: &Message,
+) -> anyhow::Result<()> {
+    // Skip system and tool messages
+    let role = msg.role();
+    if *role == Role::System || *role == Role::Tool {
+        return Ok(());
+    }
+
+    let id = schema.get_field("id").context("Failed to get 'id' field")?;
+    let r#type = schema.get_field("type").context("Failed to get 'type' field")?;
+    let title_field = schema.get_field("title").context("Failed to get 'title' field")?;
+    let body = schema.get_field("body").context("Failed to get 'body' field")?;
+    let chat_role = schema.get_field("chat_role").context("Failed to get 'chat_role' field")?;
+
+    // Delete existing doc for upsert behavior (use message_id directly)
+    let term_id = Term::from_field_text(id, message_id);
+    index_writer.delete_term(term_id);
+
+    let chat_type = DocType::Chat.to_str();
+    let role_str = role.as_str();
+
+    // Get message content - use empty string if None
+    let msg_content = msg.content.as_deref().unwrap_or("");
+
+    let doc = doc!(
+        id => message_id,
+        r#type => chat_type,
+        title_field => title.unwrap_or(""),
+        body => msg_content,
+        chat_role => role_str,
+    );
+
+    index_writer.add_document(doc).context("Failed to add document")?;
+
+    Ok(())
+}
+
+/// Index all chat messages from non-background sessions
+pub async fn index_all_chat_sessions(
+    db: &Connection,
+    index_dir_path: &str,
+) -> Result<()> {
+    // Get all non-background sessions
+    let sessions = get_non_background_sessions(db).await?;
+
+    if sessions.is_empty() {
+        tracing::info!("No non-background chat sessions found to index");
+        return Ok(());
+    }
+
+    tracing::info!("Indexing {} non-background chat sessions", sessions.len());
+
+    let index_path =
+        tantivy::directory::MmapDirectory::open(index_dir_path).expect("Index not found");
+    let schema = note_schema();
+    let idx =
+        Index::open_or_create(index_path, schema.clone()).expect("Unable to open or create index");
+    let mut index_writer: IndexWriter = idx
+        .writer(50_000_000)
+        .expect("Index writer failed to initialize");
+
+    // Collect all messages from all sessions
+    for session in &sessions {
+        let messages = find_chat_session_by_id(db, &session.id).await?;
+
+        for (message_id, msg) in messages.iter() {
+            // Skip system and tool role messages
+            let role = msg.role();
+            if *role == Role::System || *role == Role::Tool {
+                continue;
+            }
+
+            if let Err(e) = index_chat_message_full_text(
+                &mut index_writer,
+                &schema,
+                message_id,
+                session.title.as_deref(),
+                msg,
+            ) {
+                tracing::error!(
+                    "Failed to index chat message {} from session {}: {}",
+                    message_id,
+                    session.id,
+                    e
+                );
+            }
+        }
+    }
+
+    // Commit the index writer
+    tokio::task::spawn_blocking(move || {
+        index_writer
+            .commit()
+            .expect("Chat full text search index failed to commit");
+    })
+    .await
+    .expect("Chat indexing task failed");
+
+    tracing::info!("Finished indexing chat sessions");
+
+    Ok(())
+}
+
+/// Index a single chat message. Called after saving a new message via the API.
+/// This function checks if the session has background tag and skips indexing if so.
+pub async fn index_single_chat_message(
+    db: &Connection,
+    index_dir_path: &str,
+    session_id: &str,
+    msg: &Message,
+) -> Result<()> {
+    // Skip system and tool role messages
+    let role = msg.role();
+    if *role == Role::System || *role == Role::Tool {
+        return Ok(());
+    }
+
+    // Skip if session has background tag
+    let is_background = session_has_background_tag(db, session_id).await?;
+    if is_background {
+        return Ok(());
+    }
+
+    // Get session title and latest message ID for this session
+    let session_id_owned = session_id.to_string();
+    let (title, message_id): (Option<String>, String) = db.call(move |conn| {
+        let title: Option<String> = conn.query_row(
+            "SELECT title FROM session WHERE id = ?",
+            [&session_id_owned],
+            |row| row.get(0),
+        ).ok();
+
+        // Get the most recent message ID for this session
+        let message_id: String = conn.query_row(
+            "SELECT id FROM chat_message WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+            [&session_id_owned],
+            |row| row.get(0),
+        )?;
+
+        Ok((title, message_id))
+    }).await?;
+
+    // Open the index and create writer
+    let index_path =
+        tantivy::directory::MmapDirectory::open(index_dir_path).expect("Index not found");
+    let schema = note_schema();
+    let idx =
+        Index::open_or_create(index_path, schema.clone()).expect("Unable to open or create index");
+    let mut index_writer: IndexWriter = idx
+        .writer(50_000_000)
+        .expect("Index writer failed to initialize");
+
+    // Index the message using its ID
+    index_chat_message_full_text(
+        &mut index_writer,
+        &schema,
+        &message_id,
+        title.as_deref(),
+        msg,
+    )?;
+
+    // Commit
+    tokio::task::spawn_blocking(move || {
+        index_writer
+            .commit()
+            .expect("Single chat message indexing failed to commit");
+    })
+    .await
+    .expect("Chat message indexing task failed");
 
     Ok(())
 }

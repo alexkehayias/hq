@@ -20,6 +20,17 @@ pub enum Role {
     Tool,
 }
 
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::Assistant => "assistant",
+            Role::User => "user",
+            Role::Tool => "tool",
+        }
+    }
+}
+
 // Object {
 //     "content": Null,
 //     "refusal": Null,
@@ -62,6 +73,10 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn role(&self) -> &Role {
+        &self.role
+    }
+
     pub fn new(role: Role, content: &str) -> Self {
         Message {
             role,

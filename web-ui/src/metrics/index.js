@@ -11,8 +11,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const avgTokensPerDayEl = document.getElementById('avgTokensPerDay');
   const estCostEl = document.getElementById('estCost');
 
-  // Pricing: $0.40 per 1M tokens (approx midpoint for gpt-4.1-mini input/output)
-  const COST_PER_MILLION_TOKENS = 0.4;
+  // Local LLM maps to Claude Sonnet 4.5 level capability so use that
+  // as the benchmark.
+  // - $3 per 1MM input tokens
+  // - $15 per 1MM output tokens
+  // Assume 1:1 ratio of input tokens to output tokens for chat usage
+  // with tool calls plus coding agent usage.
+  const COST_PER_MILLION_TOKENS = 9.0;
 
   let chartInstance = null;
 

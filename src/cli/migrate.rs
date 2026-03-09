@@ -22,7 +22,7 @@ pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> 
         println!("Migrating search index...");
         recreate_index(&index_path);
         println!("Finished migrating search index");
-        println!("NOTE: You will need to re-populate the index by running --index --full-text");
+        println!("NOTE: You will need to re-populate the index by running `index --full-text` and `index --chat");
     }
 
     Ok(())

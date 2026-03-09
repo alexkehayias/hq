@@ -93,6 +93,16 @@
             titleContainer.appendChild(taskIconContainer);
           }
 
+          // If this is a chat result, show a chat icon
+          if (r.type === 'chat') {
+            const chatIconContainer = document.createElement('span');
+            chatIconContainer.classList.add(
+              ...['py-0.5', 'text-gray-800', 'text-xs', 'rounded-full'],
+            );
+            chatIconContainer.innerText = '💬';
+            titleContainer.appendChild(chatIconContainer);
+          }
+
           // Add in the title
           const titleTextContainer = document.createElement('span');
           titleTextContainer.classList.add(...['line-clamp-1']);

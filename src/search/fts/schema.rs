@@ -16,5 +16,6 @@ pub fn note_schema() -> Schema {
     schema_builder.add_text_field("status", TEXT | STORED);
     schema_builder.add_text_field("body", TEXT | STORED);
     schema_builder.add_text_field("file_name", TEXT | STORED);
+    schema_builder.add_text_field("chat_role", TEXT | STORED);
     schema_builder.build()
 }

@@ -51,6 +51,9 @@ enum Command {
         full_text: bool,
         #[arg(long, default_value = "false")]
         vector: bool,
+        /// Index chat messages from non-background sessions
+        #[arg(long, default_value = "false")]
+        chat: bool,
     },
     /// Rebuild all indices from source
     Rebuild {},
@@ -107,11 +110,13 @@ pub async fn run() -> Result<()> {
             all,
             full_text,
             vector,
+            chat,
         }) => {
             index::run(
                 all,
                 full_text,
                 vector,
+                chat,
                 &index_path,
                 &notes_path,
                 &vec_db_path,

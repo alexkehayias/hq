@@ -30,6 +30,7 @@ use crate::notify::{
     PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
 };
 use crate::openai::{BoxedToolCall, Message, Role};
+use crate::search::index_single_chat_message;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -39,7 +40,8 @@ async fn chat_session(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, crate::api::public::ApiError> {
     let db = state.read().expect("Unable to read share state").db.clone();
-    let transcript = find_chat_session_by_id(&db, &id).await?.to_owned();
+    let transcript_with_ids = find_chat_session_by_id(&db, &id).await?;
+    let transcript: Vec<Message> = transcript_with_ids.into_iter().map(|(_, msg)| msg).collect();
 
     if transcript.is_empty() {
         return Ok((
@@ -108,6 +110,7 @@ async fn chat_handler(
         openai_api_key,
         openai_model,
         vapid_key_path,
+        index_dir_path,
     ) = {
         let shared_state = state.read().expect("Unable to read share state");
         let AppConfig {
@@ -119,6 +122,7 @@ async fn chat_handler(
             vapid_key_path,
             ..
         } = &shared_state.config;
+        let index_dir_path = format!("{}/index", storage_path);
         (
             NoteSearchTool::new(note_search_api_url),
             MeetingSearchTool::new(note_search_api_url),
@@ -133,6 +137,7 @@ async fn chat_handler(
             openai_api_key.clone(),
             openai_model.clone(),
             vapid_key_path.clone(),
+            index_dir_path,
         )
     };
 
@@ -155,7 +160,9 @@ async fn chat_handler(
     // get_or_create_session(&db, &session_id, &[]).await?;
 
     // Try to fetch the session from the db
-    let mut transcript = find_chat_session_by_id(&db, &session_id).await?;
+    let transcript_with_ids = find_chat_session_by_id(&db, &session_id).await?;
+    let mut transcript: Vec<Message> = transcript_with_ids.into_iter().map(|(_, msg)| msg).collect();
+
     // Initialize a new transcript
     if transcript.is_empty() {
         let shared_state = state.read().expect("Unable to read share state");
@@ -173,31 +180,46 @@ async fn chat_handler(
     tokio::spawn(async move {
         let result = chat.next_msg(user_msg.clone()).await;
         match result {
-            Ok(_messages) => {
+            Ok(messages) => {
+                // Index new chat messages for full-text search
+                let db_clone = db.clone();
+                let index_dir_path_clone = index_dir_path.clone();
+                let session_id_clone = session_id.clone();
+                for msg in messages.iter() {
+                    let db_inner = db_clone.clone();
+                    let index_dir_path_inner = index_dir_path_clone.clone();
+                    let session_id_inner = session_id_clone.clone();
+                    let msg_clone = msg.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = index_single_chat_message(&db_inner, &index_dir_path_inner, &session_id_inner, &msg_clone).await {
+                            tracing::error!("Failed to index chat message: {}", e);
+                        }
+                    });
+                }
                 // Send a notification if the client disconnected
                 if tx.is_closed() {
-                    let _ = disconnect_receiver
-                        .recv()
-                        .await
-                        .map(async |()| {
-                            tracing::info!("Sending notification!");
-                            let payload = PushNotificationPayload::new(
-                                "New chat response",
-                                "New response after you disconnected.",
-                                Some(&format!("/chat/?session_id={session_id}")),
-                                None,
-                                None,
-                            );
-                            let subscriptions =
-                                find_all_notification_subscriptions(&db).await.unwrap();
-                            broadcast_push_notification(
-                                subscriptions,
-                                vapid_key_path.to_string(),
-                                payload,
-                            )
-                            .await;
-                        })?
+                    let _ = disconnect_receiver.recv().await;
+                    tracing::info!("Sending notification!");
+                    let db_for_notify = db.clone();
+                    let vapid_key_path_for_notify = vapid_key_path.to_string();
+                    let session_id_for_notify = session_id.clone();
+                    tokio::spawn(async move {
+                        let payload = PushNotificationPayload::new(
+                            "New chat response",
+                            "New response after you disconnected.",
+                            Some(&format!("/chat/?session_id={session_id_for_notify}")),
+                            None,
+                            None,
+                        );
+                        let subscriptions =
+                            find_all_notification_subscriptions(&db_for_notify).await.unwrap();
+                        broadcast_push_notification(
+                            subscriptions,
+                            vapid_key_path_for_notify,
+                            payload,
+                        )
                         .await;
+                    });
                 };
             }
             Err(e) => {

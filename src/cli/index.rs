@@ -1,5 +1,5 @@
 use crate::core::git::maybe_pull_and_reset_repo;
-use crate::search::index_all;
+use crate::search::{index_all, index_all_chat_sessions};
 use anyhow::{Result, anyhow};
 use std::env;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -8,13 +8,14 @@ pub async fn run(
     all: bool,
     full_text: bool,
     vector: bool,
+    chat: bool,
     index_path: &str,
     notes_path: &str,
     vec_db_path: &str,
 ) -> Result<()> {
-    if !all && !full_text && !vector {
+    if !all && !full_text && !vector && !chat {
         return Err(anyhow!(
-            "Missing value for index \"all\", \"full-text\", and/or \"vector\""
+            "Missing value for index \"all\", \"full-text\", \"vector\", and/or \"chat\""
         ));
     }
     // If using the CLI only and not the webserver, set up tracing to
@@ -50,6 +51,11 @@ pub async fn run(
         index_all(&db, &index_path, &notes_path, true, true, None)
             .await
             .expect("Indexing failed");
+    }
+    if chat {
+        index_all_chat_sessions(&db, &index_path)
+            .await
+            .expect("Chat indexing failed");
     }
 
     Ok(())
