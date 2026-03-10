@@ -21,7 +21,7 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
         tracing::info!("Starting session title/summary generation job");
 
         // Find sessions that don't have a title or summary
-        let sessions_to_update = db_conn
+        let sessions = db_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT DISTINCT s.id FROM session s
@@ -41,46 +41,33 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
 
                 Ok(rows)
             })
-            .await;
+            .await.expect("Session query failed");
 
-        match sessions_to_update {
-            Ok(sessions) => {
-                tracing::info!("Found {} sessions to update", sessions.len());
-                for session_id in sessions {
-                    // Get the chat transcript for this session
-                    match find_chat_session_by_id(db_conn, &session_id).await {
-                        Ok(transcript_with_ids) => {
-                            let transcript: Vec<Message> = transcript_with_ids.into_iter().map(|(_, msg)| msg).collect();
-                            if !transcript.is_empty() {
-                                // Generate title and summary from the transcript
-                                if let Err(e) = generate_and_update_session_info(
-                                    config,
-                                    db_conn,
-                                    &session_id,
-                                    &transcript,
-                                )
-                                .await
-                                {
-                                    tracing::error!(
-                                        "Failed to generate title/summary for session {}: {}",
-                                        session_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to fetch transcript for session {}: {}",
-                                session_id,
-                                e
-                            );
-                        }
-                    }
+        tracing::info!("Found {} sessions to update", sessions.len());
+
+        for session_id in sessions {
+            // Get the chat transcript for this session
+            let transcript: Vec<Message> = find_chat_session_by_id(db_conn, &session_id)
+                .await
+                .expect("Loading chat session transcript failed")
+                .into_iter().map(|(_, msg)| msg).collect();
+
+            if !transcript.is_empty() {
+                // Generate title and summary from the transcript
+                let result = generate_and_update_session_info(
+                    config,
+                    db_conn,
+                    &session_id,
+                    &transcript,
+                ).await;
+
+                if let Err(e) = result {
+                    tracing::error!(
+                        "Failed to generate title/summary for session {}: {}",
+                        session_id,
+                        e
+                    );
                 }
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch sessions to update: {}", e);
             }
         }
 

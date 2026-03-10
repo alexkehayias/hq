@@ -205,7 +205,7 @@ impl Chat {
         if let Some(msg) = resp["choices"][0]["message"]["content"].as_str() {
             messages.push(Message::new(Role::Assistant, msg));
         } else {
-            panic!("No message received. Resp:\n\n {}", resp);
+            return Err(anyhow!("No message received. Resp:\n{}", resp));
         }
 
         Ok(messages)
@@ -261,7 +261,7 @@ impl Chat {
         if let Some(msg) = resp["choices"][0]["message"]["content"].as_str() {
             messages.push(Message::new(Role::Assistant, msg));
         } else {
-            bail!("No message received. Resp:\n\n {}", resp);
+            bail!("No message received. Resp:\n{}", resp);
         }
 
         Ok(messages)
