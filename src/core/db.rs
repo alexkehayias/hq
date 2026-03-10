@@ -81,7 +81,9 @@ embedding float[384]
     p256dh TEXT NOT NULL,
     -- Private key for encrypting notifications
     auth TEXT NOT NULL,
-    encoding TEXT NOT NULL DEFAULT 'Aes126Gcm'
+    encoding TEXT NOT NULL DEFAULT 'Aes126Gcm',
+    -- Whether the subscription is still valid (not expired/invalid)
+    is_valid INTEGER NOT NULL DEFAULT 1
 );",
         [],
     );
@@ -378,6 +380,18 @@ COMMIT;",
     match add_id_column {
         Ok(_) => (),
         Err(e) => println!("Add id column to chat_message failed: {}", e),
+    };
+
+
+    // Migration: Add is_valid column if it doesn't exist (for existing databases)
+    // Ignore error - column may already exist for new tables or table was just created with the column
+    let add_is_valid_column = db.execute(
+        "ALTER TABLE push_subscription ADD COLUMN is_valid INTEGER NOT NULL DEFAULT 1",
+        [],
+    );
+    match add_is_valid_column {
+        Ok(_) => (),
+        Err(e) => println!("Add is_valid to push_notification table failed: {}", e),
     };
 
     Ok(())

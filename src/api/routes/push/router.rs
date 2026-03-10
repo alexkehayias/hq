@@ -7,7 +7,10 @@ use serde_json::Value;
 
 use super::public;
 use crate::api::state::AppState;
-use crate::notify::{PushNotificationPayload, PushSubscription, broadcast_push_notification};
+use crate::notify::{
+    mark_push_subscription_invalid, broadcast_push_notification,
+    find_all_notification_subscriptions, PushNotificationPayload,
+};
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -30,8 +33,9 @@ async fn push_subscription(
     {
         let db = state.read().unwrap().db.clone();
         db.call(move |conn| {
+            // Use INSERT OR REPLACE to handle re-subscriptions
             let mut subscription_stmt = conn.prepare(
-                "REPLACE INTO push_subscription(endpoint, p256dh, auth) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO push_subscription(endpoint, p256dh, auth, is_valid) VALUES (?, ?, ?, 1)",
             )?;
             subscription_stmt.execute(tokio_rusqlite::params![
                 subscription.endpoint,
@@ -59,24 +63,8 @@ async fn send_notification(
         .vapid_key_path
         .clone();
 
-    let subscriptions = {
-        let db = state.read().unwrap().db.clone();
-        db.call(move |conn| {
-            let mut stmt = conn.prepare("SELECT endpoint, p256dh, auth FROM push_subscription")?;
-            let result = stmt
-                .query_map([], |i| {
-                    Ok(PushSubscription {
-                        endpoint: i.get(0)?,
-                        p256dh: i.get(1)?,
-                        auth: i.get(2)?,
-                    })
-                })?
-                .filter_map(Result::ok)
-                .collect::<Vec<_>>();
-            Ok(result)
-        })
-        .await?
-    };
+    let db = state.read().unwrap().db.clone();
+    let subscriptions = find_all_notification_subscriptions(&db).await.unwrap_or_default();
 
     let notification_payload = PushNotificationPayload::new(
         "Notification",
@@ -85,7 +73,14 @@ async fn send_notification(
         None,
         Some("index_updated"),
     );
-    broadcast_push_notification(subscriptions, vapid_key_path, notification_payload).await;
+
+    let failed_subscriptions =
+        broadcast_push_notification(subscriptions, vapid_key_path, notification_payload).await;
+
+    // Mark failed subscriptions as invalid
+    for sub in failed_subscriptions {
+        let _ = mark_push_subscription_invalid(&db, &sub.endpoint).await;
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

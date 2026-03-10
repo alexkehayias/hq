@@ -27,7 +27,8 @@ use crate::ai::tools::{
 use crate::api::state::AppState;
 use crate::core::AppConfig;
 use crate::notify::{
-    PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
+    mark_push_subscription_invalid, broadcast_push_notification,
+    find_all_notification_subscriptions, PushNotificationPayload,
 };
 use crate::openai::{BoxedToolCall, Message, Role};
 use crate::search::index_single_chat_message;
@@ -213,12 +214,16 @@ async fn chat_handler(
                         );
                         let subscriptions =
                             find_all_notification_subscriptions(&db_for_notify).await.unwrap();
-                        broadcast_push_notification(
+                        let failed_subscriptions = broadcast_push_notification(
                             subscriptions,
                             vapid_key_path_for_notify,
                             payload,
                         )
                         .await;
+                        for sub in failed_subscriptions {
+                            let _ = mark_push_subscription_invalid(&db_for_notify, &sub.endpoint)
+                                .await;
+                        }
                     });
                 };
             }

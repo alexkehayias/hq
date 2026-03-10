@@ -11,7 +11,8 @@ use crate::{
     core::AppConfig,
     google::oauth::find_all_gmail_auth_emails,
     notify::{
-        PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
+        mark_push_subscription_invalid, broadcast_push_notification,
+        find_all_notification_subscriptions, PushNotificationPayload,
     },
     openai::{BoxedToolCall, Message, Role},
 };
@@ -117,6 +118,10 @@ Frank is the VP of People at Acme. He was previously HR Manager at Acme and befo
 
         // Broadcast push notification to all subscribers
         let subscriptions = find_all_notification_subscriptions(db).await.unwrap();
-        broadcast_push_notification(subscriptions, vapid_key_path.to_string(), payload).await;
+        let failed_subscriptions =
+            broadcast_push_notification(subscriptions, vapid_key_path.to_string(), payload).await;
+        for sub in failed_subscriptions {
+            let _ = mark_push_subscription_invalid(db, &sub.endpoint).await;
+        }
     }
 }
