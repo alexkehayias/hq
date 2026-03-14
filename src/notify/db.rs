@@ -3,12 +3,10 @@ use tokio_rusqlite::Connection;
 
 use super::models::PushSubscription;
 
-pub async fn find_all_notification_subscriptions(
-    db: &Connection,
-) -> Result<Vec<PushSubscription>> {
+pub async fn find_all_notification_subscriptions(db: &Connection) -> Result<Vec<PushSubscription>> {
     let subscriptions = db.call(|conn| {
-        let mut stmt =
-            conn.prepare("SELECT endpoint, p256dh, auth FROM push_subscription WHERE is_valid = 1")?;
+        let mut stmt = conn
+            .prepare("SELECT endpoint, p256dh, auth FROM push_subscription WHERE is_valid = 1")?;
         let rows = stmt
             .query_map([], |i| {
                 Ok(PushSubscription {
@@ -24,10 +22,7 @@ pub async fn find_all_notification_subscriptions(
     Ok(subscriptions.await?)
 }
 
-pub async fn mark_push_subscription_invalid(
-    db: &Connection,
-    endpoint: &str,
-) -> Result<()> {
+pub async fn mark_push_subscription_invalid(db: &Connection, endpoint: &str) -> Result<()> {
     let endpoint = endpoint.to_string();
     db.call(move |conn| {
         conn.execute(

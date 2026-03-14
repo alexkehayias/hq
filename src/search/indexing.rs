@@ -1,11 +1,12 @@
 use regex::Regex;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::hash::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
@@ -14,15 +15,16 @@ use tantivy::{Index, IndexWriter, doc};
 use text_splitter::{ChunkConfig, TextSplitter};
 use tiktoken_rs::{CoreBPE, cl100k_base};
 use tokio::fs;
-use anyhow::{Context, Result};
 use tokio_rusqlite::Connection;
 use zerocopy::IntoBytes;
 
-use crate::ai::chat::db::{get_non_background_sessions, find_chat_session_by_id, session_has_background_tag};
-use crate::openai::{Message, Role};
 use super::export::MarkdownExport;
 use super::fts::schema::note_schema;
 use super::source::{note_filter, notes};
+use crate::ai::chat::db::{
+    find_chat_session_by_id, get_non_background_sessions, session_has_background_tag,
+};
+use crate::openai::{Message, Role};
 
 #[derive(Debug, Clone)]
 struct Task {
@@ -668,10 +670,18 @@ pub fn index_chat_message_full_text(
     }
 
     let id = schema.get_field("id").context("Failed to get 'id' field")?;
-    let r#type = schema.get_field("type").context("Failed to get 'type' field")?;
-    let title_field = schema.get_field("title").context("Failed to get 'title' field")?;
-    let body = schema.get_field("body").context("Failed to get 'body' field")?;
-    let chat_role = schema.get_field("chat_role").context("Failed to get 'chat_role' field")?;
+    let r#type = schema
+        .get_field("type")
+        .context("Failed to get 'type' field")?;
+    let title_field = schema
+        .get_field("title")
+        .context("Failed to get 'title' field")?;
+    let body = schema
+        .get_field("body")
+        .context("Failed to get 'body' field")?;
+    let chat_role = schema
+        .get_field("chat_role")
+        .context("Failed to get 'chat_role' field")?;
 
     // Delete existing doc for upsert behavior (use message_id directly)
     let term_id = Term::from_field_text(id, message_id);
@@ -691,16 +701,15 @@ pub fn index_chat_message_full_text(
         chat_role => role_str,
     );
 
-    index_writer.add_document(doc).context("Failed to add document")?;
+    index_writer
+        .add_document(doc)
+        .context("Failed to add document")?;
 
     Ok(())
 }
 
 /// Index all chat messages from non-background sessions
-pub async fn index_all_chat_sessions(
-    db: &Connection,
-    index_dir_path: &str,
-) -> Result<()> {
+pub async fn index_all_chat_sessions(db: &Connection, index_dir_path: &str) -> Result<()> {
     // Get all non-background sessions
     let sessions = get_non_background_sessions(db).await?;
 
@@ -784,22 +793,26 @@ pub async fn index_single_chat_message(
 
     // Get session title and latest message ID for this session
     let session_id_owned = session_id.to_string();
-    let (title, message_id): (Option<String>, String) = db.call(move |conn| {
-        let title: Option<String> = conn.query_row(
-            "SELECT title FROM session WHERE id = ?",
-            [&session_id_owned],
-            |row| row.get(0),
-        ).ok();
+    let (title, message_id): (Option<String>, String) = db
+        .call(move |conn| {
+            let title: Option<String> = conn
+                .query_row(
+                    "SELECT title FROM session WHERE id = ?",
+                    [&session_id_owned],
+                    |row| row.get(0),
+                )
+                .ok();
 
-        // Get the most recent message ID for this session
-        let message_id: String = conn.query_row(
-            "SELECT id FROM chat_message WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
-            [&session_id_owned],
-            |row| row.get(0),
-        )?;
+            // Get the most recent message ID for this session
+            let message_id: String = conn.query_row(
+                "SELECT id FROM chat_message WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+                [&session_id_owned],
+                |row| row.get(0),
+            )?;
 
-        Ok((title, message_id))
-    }).await?;
+            Ok((title, message_id))
+        })
+        .await?;
 
     // Open the index and create writer
     let index_path =

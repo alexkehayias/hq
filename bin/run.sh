@@ -10,7 +10,7 @@ cd ..
 # Start server in background
 HOST=localhost
 PORT=2222
-cargo run -- serve --host $HOST --port $PORT &
+RUST_BACKTRACE=1 cargo run -- serve --host $HOST --port $PORT &
 PID=$!
 
 # Function to cleanup server

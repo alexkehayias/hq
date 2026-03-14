@@ -1,8 +1,10 @@
 use anyhow::{Error, Result};
 use serde::Serialize;
 use serde_json::json;
+use std::str::FromStr;
 use tokio_rusqlite::Connection;
 
+use crate::ai::chat::models::{Session, SessionMode};
 use crate::openai::Message;
 
 #[derive(Serialize)]
@@ -37,55 +39,75 @@ pub async fn insert_chat_message(
     Ok(id)
 }
 
+/// Upserts a session. If the session already exists, the `mode` will
+/// not be updated and the caller should use `set_session_mode` to
+/// change it. This allows the caller to handle switching modes if
+/// requested mode and the saved mode are not the same.
 pub async fn get_or_create_session(
     db: &Connection,
     session_id: &str,
     tags: &[&str],
-) -> Result<(), Error> {
+    mode: SessionMode,
+) -> Result<Session, Error> {
     let session_id_owned = session_id.to_owned(); // String
     let tag_names: Vec<String> = tags
         .iter()
         .map(|s| s.to_lowercase().trim().to_string())
         .collect();
+    let mode_str = mode.to_string();
 
-    db.call(move |conn| {
-        // All tag-related database calls either all succeed or it
-        // fails and rollsback to avoid inconsistent data
-        let tx = conn.transaction()?;
+    let (id, mode_str) = db
+        .call(move |conn| {
+            // All tag-related database calls either all succeed or it
+            // fails and rollsback to avoid inconsistent data
+            let tx = conn.transaction()?;
 
-        // Insert a new session record if it doesn't already exist
-        let result = tx.execute(
-            "INSERT OR IGNORE INTO session (id) VALUES (?)",
-            [&session_id_owned],
-        )?;
-        if !tag_names.is_empty() {
-            // Insert all tags first (ignore duplicates)
-            for tag in &tag_names {
-                tx.execute("INSERT OR IGNORE INTO tag (name) VALUES (?)", [tag.clone()])?;
+            // Insert a new session record if it doesn't already exist. If
+            // it does exist, use the existing session mode, do not
+            // overwrite it.
+            let (id, mode): (String, String) = tx.query_row(
+                r"INSERT INTO session (id, mode)
+VALUES (?, ?)
+ON CONFLICT(id) DO UPDATE
+SET mode = session.mode
+RETURNING id, mode",
+                rusqlite::params![session_id_owned, mode_str],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            // Handle inserting tags if they don't exist and associating
+            // tags with the session
+            if !tag_names.is_empty() {
+                // Insert all tags first (ignore duplicates)
+                for tag in &tag_names {
+                    tx.execute("INSERT OR IGNORE INTO tag (name) VALUES (?)", [tag.clone()])?;
+                }
+
+                // Insert all session_tag relationships using a single query approach
+                for tag in &tag_names {
+                    // Get the tag_id for this tag
+                    let tag_id: i64 =
+                        tx.query_row("SELECT id FROM tag WHERE name = ?", [tag.clone()], |row| {
+                            row.get(0)
+                        })?;
+
+                    // Insert the session_tag relationship if it doesn't already exist
+                    tx.execute(
+                        "INSERT OR IGNORE INTO session_tag (session_id, tag_id) VALUES (?, ?)",
+                        [&session_id_owned, &tag_id.to_string()],
+                    )?;
+                }
             }
 
-            // Insert all session_tag relationships using a single query approach
-            for tag in &tag_names {
-                // Get the tag_id for this tag
-                let tag_id: i64 =
-                    tx.query_row("SELECT id FROM tag WHERE name = ?", [tag.clone()], |row| {
-                        row.get(0)
-                    })?;
+            tx.commit()?;
+            Ok((id, mode))
+        })
+        .await?;
 
-                // Insert the session_tag relationship if it doesn't already exist
-                tx.execute(
-                    "INSERT OR IGNORE INTO session_tag (session_id, tag_id) VALUES (?, ?)",
-                    [&session_id_owned, &tag_id.to_string()],
-                )?;
-            }
-        }
-
-        tx.commit()?;
-        Ok(result)
-    })
-    .await?;
-
-    Ok(())
+    // If this is an existing session, the mode may not match with the
+    // `mode` argument. If it's a new session, the mode will always
+    // match the `mode` argument.
+    let mode = SessionMode::from_str(&mode_str)?;
+    Ok(Session { id, mode })
 }
 
 pub async fn find_chat_session_by_id(
@@ -243,4 +265,40 @@ pub async fn session_has_background_tag(db: &Connection, session_id: &str) -> Re
         Ok(result.unwrap_or(0) > 0)
     });
     Ok(has_tag.await?)
+}
+
+/// Get the mode for a session
+pub async fn get_session_mode(db: &Connection, session_id: &str) -> Result<SessionMode, Error> {
+    let s_id = session_id.to_owned();
+    let mode = db
+        .call(move |conn| {
+            let mut stmt = conn
+                .prepare("SELECT mode FROM session WHERE id = ?")
+                .expect("Invalid sql");
+            let val: String = stmt.query_row([s_id], |row| row.get::<_, String>(0))?;
+            Ok(SessionMode::from_str(&val).unwrap())
+        })
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    Ok(mode)
+}
+
+/// Set the mode for a session
+pub async fn set_session_mode(
+    db: &Connection,
+    session_id: &str,
+    mode: SessionMode,
+) -> Result<(), Error> {
+    let s_id = session_id.to_owned();
+    let mode_str = mode.to_string();
+    db.call(move |conn| {
+        conn.execute(
+            "UPDATE session SET mode = ? WHERE id = ?",
+            rusqlite::params![mode_str, s_id],
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(anyhow::Error::from)
 }

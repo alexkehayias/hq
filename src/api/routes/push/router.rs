@@ -8,8 +8,8 @@ use serde_json::Value;
 use super::public;
 use crate::api::state::AppState;
 use crate::notify::{
-    mark_push_subscription_invalid, broadcast_push_notification,
-    find_all_notification_subscriptions, PushNotificationPayload,
+    PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
+    mark_push_subscription_invalid,
 };
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -64,7 +64,9 @@ async fn send_notification(
         .clone();
 
     let db = state.read().unwrap().db.clone();
-    let subscriptions = find_all_notification_subscriptions(&db).await.unwrap_or_default();
+    let subscriptions = find_all_notification_subscriptions(&db)
+        .await
+        .unwrap_or_default();
 
     let notification_payload = PushNotificationPayload::new(
         "Notification",

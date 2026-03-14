@@ -5,21 +5,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use axum::{
-    body::Body,
-    Router,
-};
+use axum::{Router, body::Body};
 
 use hq::ai::chat::db::{get_or_create_session, insert_chat_message};
-use hq::api::app;
 use hq::api::AppState;
+use hq::api::app;
 use hq::core::AppConfig;
 use hq::core::db::async_db;
 use hq::core::db::initialize_db;
 use hq::openai::{Message, Role};
-use hq::search::{
-    index_all, index_all_chat_sessions,
-};
+use hq::search::{index_all, index_all_chat_sessions};
 
 /// Converts a response body to a string
 #[allow(dead_code)] // Otherwise test crates give dead code warning
@@ -190,7 +185,10 @@ pub async fn create_and_index_chat_message(
     content: &str,
 ) {
     // Create the session
-    get_or_create_session(db, session_id, &[]).await.unwrap();
+    use hq::ai::chat::models::SessionMode;
+    get_or_create_session(db, session_id, &[], SessionMode::Chat)
+        .await
+        .unwrap();
 
     // Create and insert the message
     let msg = Message::new(role, content);

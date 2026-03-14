@@ -184,7 +184,7 @@ mod tests {
                     dummy_arg: openai::Property {
                         r#type: String::from("string"),
                         description: String::from("Some dummy arg"),
-                        r#enum: None
+                        r#enum: None,
                     },
                 },
                 required: vec![String::from("dummy_arg")],

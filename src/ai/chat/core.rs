@@ -6,7 +6,7 @@ use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
 use super::db::{get_or_create_session, insert_chat_message};
-use super::models::Transcript;
+use super::models::{SessionMode, Transcript};
 use crate::openai::{
     BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
 };
@@ -147,7 +147,7 @@ impl Chat {
             // for each turn in the chat, it avoids filling up the DB
             // with sessions that have no messages e.g. a chat that
             // resulted in an error on the first turn.
-            get_or_create_session(db, session_id, tags).await?;
+            get_or_create_session(db, session_id, tags, SessionMode::Chat).await?;
 
             // Save the input message
             insert_chat_message(db, session_id, &msg).await?;

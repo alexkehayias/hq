@@ -6,7 +6,7 @@ pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> 
     // Run the DB migration script
     if db {
         println!("Migrating db...");
-        let db = async_db(&vec_db_path)
+        let db = async_db(vec_db_path)
             .await
             .expect("Failed to connect to db");
         db.call(|conn| {
@@ -20,9 +20,11 @@ pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> 
     // Delete and recreate the index
     if index {
         println!("Migrating search index...");
-        recreate_index(&index_path);
+        recreate_index(index_path);
         println!("Finished migrating search index");
-        println!("NOTE: You will need to re-populate the index by running `index --full-text` and `index --chat");
+        println!(
+            "NOTE: You will need to re-populate the index by running `index --full-text` and `index --chat"
+        );
     }
 
     Ok(())

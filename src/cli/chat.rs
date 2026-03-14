@@ -5,7 +5,7 @@ use std::env;
 
 use crate::ai::chat::ChatBuilder;
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, MemoryTool, MeetingSearchTool, NoteSearchTool, WebSearchTool,
+    CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool, WebSearchTool,
 };
 use crate::core::db::async_db;
 use crate::openai::{BoxedToolCall, Message, Role};

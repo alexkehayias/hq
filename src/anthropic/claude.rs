@@ -207,12 +207,15 @@ impl ClaudeCodeSession {
                 anyhow!("Failed to capture stdout from ccr process")
             })?;
             let mut lines = BufReader::new(stdout).lines();
+            let mut dbg_lines: Vec<String> = Vec::new();
 
             while let Some(line) = lines.next_line().await? {
                 // Skip empty lines
                 if line.trim().is_empty() {
                     continue;
                 }
+
+                dbg_lines.push(line.clone());
 
                 // Parse as the wrapper type first to check if it's a stream_event
                 match serde_json::from_str::<StreamEventWrapper>(&line) {
@@ -242,7 +245,9 @@ impl ClaudeCodeSession {
             let status = child.wait().await?;
 
             if !status.success() {
+                let debug_output = dbg_lines.join("/n");
                 tracing::warn!("ccr process exited with status: {}", status);
+                tracing::warn!("stdout: {}", debug_output);
             }
         })
     }

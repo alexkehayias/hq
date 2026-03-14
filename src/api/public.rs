@@ -4,14 +4,13 @@ use axum::response::{IntoResponse, Response};
 use http::StatusCode;
 
 // Errors
-
 pub struct ApiError(anyhow::Error);
 
 /// Convert `AppError` into an Axum compatible response.
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         // Always log the error
-        tracing::error!("{}", self.0);
+        tracing::error!("{}\n{}", self.0, self.0.backtrace());
 
         // Respond with an error status
         (

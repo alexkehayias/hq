@@ -10,8 +10,8 @@ use tantivy::{Index, ReloadPolicy};
 use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
-use crate::api::public::notes::SearchResult;
 use crate::ai::chat::db::get_chat_messages_by_ids;
+use crate::api::public::notes::SearchResult;
 use crate::openai::Role;
 use crate::search::aql::{self};
 use crate::search::fts::schema::note_schema;
@@ -79,7 +79,7 @@ fn fulltext_search(index_path: &str, query: &aql::Expr, limit: usize) -> Result<
                     id: id_val,
                     r#type: SearchHitType::FullText,
                     score: *score,
-                    doc_type
+                    doc_type,
                 }
             })
             .collect();
@@ -194,7 +194,7 @@ pub async fn search_notes(
     let mut non_chat_ids: Vec<String> = Vec::new();
     for hit in &search_hits {
         match hit.doc_type {
-             DocType::Chat => chat_message_ids.push(hit.id.clone()),
+            DocType::Chat => chat_message_ids.push(hit.id.clone()),
             _ => non_chat_ids.push(hit.id.clone()),
         }
     }

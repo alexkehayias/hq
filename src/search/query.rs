@@ -82,7 +82,10 @@ pub fn aql_to_index_query(expr: &Expr, schema: &Schema) -> Option<Box<dyn Query>
                             ),
                         ]))
                     } else if *phrase {
-                        let terms = value.split(" ").map(|i| Term::from_field_text(*query_field, i)).collect::<Vec<Term>>();
+                        let terms = value
+                            .split(" ")
+                            .map(|i| Term::from_field_text(*query_field, i))
+                            .collect::<Vec<Term>>();
                         let mut query = PhraseQuery::new(terms);
                         query.set_slop(2);
                         Box::new(query)

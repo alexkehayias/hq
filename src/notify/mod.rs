@@ -13,7 +13,7 @@ use web_push::{
 #[derive(Debug)]
 pub enum PushSendResult {
     Success,
-    InvalidSubscription, // Subscription is no longer valid (410 Gone)
+    InvalidSubscription,   // Subscription is no longer valid (410 Gone)
     RetryableError(Error), // Temporary error that could be retried
 }
 
@@ -96,14 +96,7 @@ pub async fn broadcast_push_notification(
         tasks.spawn(async move {
             (
                 sub,
-                send_push_notification(
-                    vapid,
-                    endpoint,
-                    p256dh,
-                    auth,
-                    payload_clone,
-                )
-                .await,
+                send_push_notification(vapid, endpoint, p256dh, auth, payload_clone).await,
             )
         });
     }

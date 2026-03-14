@@ -1,5 +1,7 @@
 //! The core models for managing a stateful chat with an LLM.
 use crate::openai::Message;
+use anyhow::Error;
+use serde::{Deserialize, Serialize};
 
 // TODO: Should there be an app specific `Message` object instead of
 // building around OpenAI?
@@ -33,9 +35,40 @@ impl Transcript {
     }
 }
 
-// TODO: Consider a session model to keep track of things like
-// metrics, rate limits, registries.
-// pub struct Session {
-//     id: String,
-//     transcript: Transcript,
-// }
+/// Session mode determines how messages are processed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionMode {
+    /// Regular chat mode using OpenAI API
+    Chat,
+    /// Code agent mode using Claude Code CLI
+    Agent,
+}
+
+impl Default for SessionMode {
+    fn default() -> Self {
+        Self::Chat
+    }
+}
+
+impl std::fmt::Display for SessionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionMode::Chat => write!(f, "chat"),
+            SessionMode::Agent => write!(f, "agent"),
+        }
+    }
+}
+
+impl std::str::FromStr for SessionMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(serde_json::from_str(&format!("\"{s}\""))?)
+    }
+}
+
+pub struct Session {
+    pub id: String,
+    pub mode: SessionMode,
+}

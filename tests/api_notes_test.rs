@@ -257,8 +257,9 @@ mod tests {
             &state.config.storage_path,
             "searchable-chat-session",
             Role::User,
-            "This is a test message about elephants and the circus"
-        ).await;
+            "This is a test message about elephants and the circus",
+        )
+        .await;
 
         // Search for the unique term from the chat message
         let response = app
@@ -275,14 +276,25 @@ mod tests {
 
         let body = body_to_string(response.into_body()).await;
         // Should find results containing the chat message
-        assert!(body.contains("\"results\""), "Expected results in response: {}", body);
+        assert!(
+            body.contains("\"results\""),
+            "Expected results in response: {}",
+            body
+        );
 
         // The result should have type "chat"
-        assert!(body.contains("\"type\":\"chat\""), "Expected chat type in results: {}", body);
+        assert!(
+            body.contains("\"type\":\"chat\""),
+            "Expected chat type in results: {}",
+            body
+        );
 
         // The result should contain our searchable text
-        assert!(body.contains("elephants") || body.contains("circus"),
-            "Expected searchable terms in results: {}", body);
+        assert!(
+            body.contains("elephants") || body.contains("circus"),
+            "Expected searchable terms in results: {}",
+            body
+        );
     }
 
     /// Tests searching returns chat messages with correct role field
@@ -297,8 +309,9 @@ mod tests {
             &state.config.storage_path,
             "role-test-session",
             Role::User,
-            "Tell me about quantum physics and relativity"
-        ).await;
+            "Tell me about quantum physics and relativity",
+        )
+        .await;
 
         // Search for a term from the chat message
         let response = app
@@ -315,12 +328,24 @@ mod tests {
 
         let body = body_to_string(response.into_body()).await;
         // Should have results
-        assert!(body.contains("\"results\""), "Expected results in response: {}", body);
+        assert!(
+            body.contains("\"results\""),
+            "Expected results in response: {}",
+            body
+        );
 
         // Should have chat type
-        assert!(body.contains("\"type\":\"chat\""), "Expected chat type: {}", body);
+        assert!(
+            body.contains("\"type\":\"chat\""),
+            "Expected chat type: {}",
+            body
+        );
 
         // Should have a role field (user or assistant)
-        assert!(body.contains("\"chat_role\""), "Expected chat_role field: {}", body);
+        assert!(
+            body.contains("\"chat_role\""),
+            "Expected chat_role field: {}",
+            body
+        );
     }
 }

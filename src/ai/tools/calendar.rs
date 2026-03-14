@@ -35,15 +35,18 @@ impl ToolCall for CalendarTool {
         let fn_args: CalendarArgs = serde_json::from_str(args).unwrap();
 
         // Get all authorized email addresses from the database
-        let emails: Vec<String> = self.db.call(|conn| {
-            let mut stmt = conn.prepare("SELECT id FROM auth WHERE service = 'gmail'")?;
-            let rows = stmt.query_map([], |row| row.get(0))?;
-            let mut emails = Vec::new();
-            for email in rows {
-                emails.push(email?);
-            }
-            Ok(emails)
-        }).await?;
+        let emails: Vec<String> = self
+            .db
+            .call(|conn| {
+                let mut stmt = conn.prepare("SELECT id FROM auth WHERE service = 'gmail'")?;
+                let rows = stmt.query_map([], |row| row.get(0))?;
+                let mut emails = Vec::new();
+                for email in rows {
+                    emails.push(email?);
+                }
+                Ok(emails)
+            })
+            .await?;
 
         if emails.is_empty() {
             return Ok("No authorized calendar accounts found.".to_string());
@@ -118,7 +121,9 @@ impl CalendarTool {
     pub fn new(db: Connection, api_base_url: &str) -> Self {
         let function = Function {
             name: String::from("get_calendar_events"),
-            description: String::from("Fetch upcoming calendar events for all authorized accounts."),
+            description: String::from(
+                "Fetch upcoming calendar events for all authorized accounts.",
+            ),
             parameters: Parameters {
                 r#type: String::from("object"),
                 properties: CalendarProps {

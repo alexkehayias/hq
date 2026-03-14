@@ -48,10 +48,7 @@ impl MemoryTool {
                     operation: Property {
                         r#type: String::from("string"),
                         description: String::from("The operation to perform: 'read' or 'write'."),
-                        r#enum: Some(vec![
-                            String::from("read"),
-                            String::from("write"),
-                        ]),
+                        r#enum: Some(vec![String::from("read"), String::from("write")]),
                     },
                     content: Some(Property {
                         r#type: String::from("string"),
@@ -293,7 +290,9 @@ mod tests {
             operation.get("enum").is_some(),
             "operation should have enum"
         );
-        let enum_values = operation["enum"].as_array().expect("enum should be an array");
+        let enum_values = operation["enum"]
+            .as_array()
+            .expect("enum should be an array");
         assert!(
             enum_values.contains(&serde_json::json!("read")),
             "enum should contain 'read'"

@@ -129,7 +129,9 @@ embedding float[384]
     -- Title of the session
     title TEXT,
     -- Summary text for the session
-    summary TEXT);",
+    summary TEXT,
+    -- Mode of the session: 'chat' or 'agent'
+    mode TEXT NOT NULL DEFAULT 'chat');",
         [],
     );
 
@@ -279,6 +281,15 @@ COMMIT;",
         ),
     };
 
+    // 2026-02-21 Add mode column to session table (migration)
+    let add_session_mode_column =
+        db.execute_batch("ALTER TABLE session ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat';");
+
+    match add_session_mode_column {
+        Ok(_) => (),
+        Err(e) => println!("Add mode column to session table failed: {}", e),
+    };
+
     // 2025-11-27 Add tag table and session_tag linking table
     let create_tag_table = db.execute(
         "CREATE TABLE IF NOT EXISTS tag (
@@ -381,7 +392,6 @@ COMMIT;",
         Ok(_) => (),
         Err(e) => println!("Add id column to chat_message failed: {}", e),
     };
-
 
     // Migration: Add is_valid column if it doesn't exist (for existing databases)
     // Ignore error - column may already exist for new tables or table was just created with the column

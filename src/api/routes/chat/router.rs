@@ -4,6 +4,7 @@ use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use axum::Json;
 use axum::{
     Router,
     extract::{Path, State},
@@ -14,21 +15,30 @@ use axum::{
 use axum_extra::extract::Query;
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
-use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
-use super::public;
-use crate::ai::chat::{ChatBuilder, find_chat_session_by_id};
+// Re-export public types for this module
+pub use super::public::{
+    ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatTranscriptResponse,
+};
+use crate::ai::chat::commands::{ParsedCommand, get_help_text, parse_slash_command};
+use crate::ai::chat::models::SessionMode;
+use crate::ai::chat::{
+    ChatBuilder, find_chat_session_by_id, get_or_create_session, set_session_mode,
+};
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, MemoryTool, MeetingSearchTool, NoteSearchTool,
+    CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
     TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
 };
+use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
+use crate::api::utils::DetectDisconnect;
 use crate::core::AppConfig;
 use crate::notify::{
-    mark_push_subscription_invalid, broadcast_push_notification,
-    find_all_notification_subscriptions, PushNotificationPayload,
+    PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
+    mark_push_subscription_invalid,
 };
 use crate::openai::{BoxedToolCall, Message, Role};
 use crate::search::index_single_chat_message;
@@ -42,7 +52,10 @@ async fn chat_session(
 ) -> Result<impl IntoResponse, crate::api::public::ApiError> {
     let db = state.read().expect("Unable to read share state").db.clone();
     let transcript_with_ids = find_chat_session_by_id(&db, &id).await?;
-    let transcript: Vec<Message> = transcript_with_ids.into_iter().map(|(_, msg)| msg).collect();
+    let transcript: Vec<Message> = transcript_with_ids
+        .into_iter()
+        .map(|(_, msg)| msg)
+        .collect();
 
     if transcript.is_empty() {
         return Ok((
@@ -52,14 +65,14 @@ async fn chat_session(
             .into_response());
     }
 
-    Ok(axum::Json(public::ChatTranscriptResponse { transcript }).into_response())
+    Ok(axum::Json(ChatTranscriptResponse { transcript }).into_response())
 }
 
 /// Get a list of all chat sessions
 async fn chat_list(
     State(state): State<SharedState>,
-    Query(params): Query<public::ChatSessionsQuery>,
-) -> Result<axum::Json<public::ChatSessionsResponse>, crate::api::public::ApiError> {
+    Query(params): Query<ChatSessionsQuery>,
+) -> Result<axum::Json<ChatSessionsResponse>, crate::api::public::ApiError> {
     let db = state.read().expect("Unable to read share state").db.clone();
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
@@ -71,7 +84,7 @@ async fn chat_list(
         chat_session_list(&db, &include_tags, &exclude_tags, limit, offset).await?;
     let total_pages = (total_sessions as f64 / limit as f64).ceil() as i64;
 
-    Ok(axum::Json(public::ChatSessionsResponse {
+    Ok(axum::Json(ChatSessionsResponse {
         sessions: paged_sessions,
         page,
         limit,
@@ -80,20 +93,114 @@ async fn chat_list(
     }))
 }
 
+/// Handle messages in agent mode using Claude Code
+async fn handle_agent_mode(
+    state: SharedState,
+    session_id: String,
+    user_msg: Message,
+    _tx: mpsc::UnboundedSender<String>,
+    mut disconnect_receiver: broadcast::Receiver<()>,
+    resume: bool,
+) -> Result<axum::response::Response, crate::api::public::ApiError> {
+    use crate::api::utils::DetectDisconnect;
+
+    let db = state.read().expect("Unable to read share state").db.clone();
+    let _vapid_key_path = state
+        .read()
+        .expect("Unable to read shared state")
+        .config
+        .vapid_key_path
+        .clone();
+
+    // Create UUID from session_id for Claude Code
+    let uuid = Uuid::parse_str(&session_id).unwrap_or_else(|_| Uuid::new_v4());
+
+    // Create Claude Code session with default tools (Read, Edit, Bash)
+    let claude_session = ClaudeCodeSession::with_default_tools(uuid);
+
+    // Store user message in transcript
+    crate::ai::chat::insert_chat_message(&db, &session_id, &user_msg).await?;
+
+    // Start the agent conversation
+    let mut events = if resume {
+        claude_session.resume(user_msg.content.as_deref().unwrap_or(""))
+    } else {
+        claude_session.start(user_msg.content.as_deref().unwrap_or(""))
+    };
+
+    let (sse_tx, sse_rx) = mpsc::unbounded_channel::<String>();
+    let (disconnect_notifier, _) = broadcast::channel::<()>(1);
+
+    // Spawn task to process events and forward to SSE channel
+    tokio::spawn(async move {
+        let mut full_response = String::new();
+
+        while let Some(event_result) = tokio_stream::StreamExt::next(&mut events).await {
+            match event_result {
+                Ok(StreamEvent::ContentBlockDelta { delta }) => {
+                    if let Delta::TextDelta { text } = delta {
+                        full_response.push_str(&text);
+                        // Send in same format as chat API
+                        let chunk = json!({
+                            "choices": [{
+                                "delta": { "content": text }
+                            }]
+                        });
+                        let _ = sse_tx.send(chunk.to_string());
+                    }
+                }
+                Ok(StreamEvent::MessageStop) => {
+                    // Store assistant response in transcript
+                    let assistant_msg = Message::new(Role::Assistant, &full_response);
+                    let _ = crate::ai::chat::insert_chat_message(&db, &session_id, &assistant_msg)
+                        .await;
+                }
+                Ok(_) => {
+                    // Other events we don't need to forward
+                }
+                Err(e) => {
+                    tracing::error!("Claude Code error: {}", e);
+                    let err_chunk = json!({
+                        "choices": [{
+                            "finish_reason": "error",
+                            "delta": { "content": format!("Error: {}", e) }
+                        }]
+                    });
+                    let _ = sse_tx.send(err_chunk.to_string());
+                }
+            }
+        }
+
+        // Send notification if client disconnected
+        if sse_tx.is_closed() {
+            let _ = disconnect_receiver.recv().await.map(|()| {
+                tracing::info!("Sending notification for agent response!");
+            });
+        }
+    });
+
+    let sse_stream = tokio_stream::StreamExt::map(UnboundedReceiverStream::new(sse_rx), |chunk| {
+        Ok::<Event, Infallible>(Event::default().data(chunk))
+    });
+    let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+
+    Ok(Sse::new(wrapped_sse_stream)
+        .keep_alive(
+            KeepAlive::default()
+                .text("keep-alive")
+                .interval(Duration::from_millis(100)),
+        )
+        .into_response())
+}
+
 /// Initiate or add to a chat session and stream the response
 async fn chat_handler(
     State(state): State<SharedState>,
-    axum::Json(payload): axum::Json<public::ChatRequest>,
+    Json(payload): Json<ChatRequest>,
 ) -> Result<impl IntoResponse, crate::api::public::ApiError> {
-    use crate::api::utils::DetectDisconnect;
-
     let session_id = payload.session_id;
     let (tx, rx) = mpsc::unbounded_channel::<String>();
-
-    let sse_stream = UnboundedReceiverStream::new(rx)
-        .map(|chunk| Ok::<Event, Infallible>(Event::default().data(chunk)));
     let (disconnect_notifier, mut disconnect_receiver) = broadcast::channel::<()>(1);
-    let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
 
     let db = state.read().expect("Unable to read share state").db.clone();
 
@@ -157,12 +264,143 @@ async fn chat_handler(
 
     let db = state.read().expect("Unable to read share state").db.clone();
 
+    // Parse message using slash command system
+    let parsed = parse_slash_command(&payload.message);
+    let session = get_or_create_session(&db, &session_id, &[], SessionMode::Chat).await?;
+    let current_mode = session.mode;
+
+    // Handle mode transitions
+    match (&current_mode, &parsed) {
+        (SessionMode::Chat, ParsedCommand::Code { prompt }) => {
+            // Transition from chat to agent mode
+            set_session_mode(&db, &session_id, SessionMode::Agent).await?;
+            let user_msg = Message::new(Role::User, prompt);
+            return handle_agent_mode(state, session_id, user_msg, tx, disconnect_receiver, false)
+                .await;
+        }
+        (SessionMode::Agent, ParsedCommand::Exit) => {
+            // Exit agent mode back to chat
+            set_session_mode(&db, &session_id, SessionMode::Chat).await?;
+
+            // Store the user's /exit message
+            let user_msg = Message::new(Role::User, "/exit");
+            crate::ai::chat::insert_chat_message(&db, &session_id, &user_msg).await?;
+
+            // Store the assistant's exit response
+            let exit_response = "Exited agent mode. How else can I help?";
+            let assistant_msg = Message::new(Role::Assistant, exit_response);
+            crate::ai::chat::insert_chat_message(&db, &session_id, &assistant_msg).await?;
+
+            tx.send(
+                json!({
+                    "choices": [{
+                        "delta": { "content": exit_response }
+                    }]
+                })
+                .to_string(),
+            )?;
+
+            // Return early to avoid falling through to chat logic
+            let sse_stream =
+                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                    Ok::<Event, Infallible>(Event::default().data(chunk))
+                });
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
+        }
+        (SessionMode::Agent, ParsedCommand::None(msg)) => {
+            // Continue in agent mode
+            let user_msg = Message::new(Role::User, msg);
+            return handle_agent_mode(state, session_id, user_msg, tx, disconnect_receiver, true)
+                .await;
+        }
+        (SessionMode::Agent, ParsedCommand::Code { prompt }) => {
+            // Already in agent mode but got another /code command
+            let user_msg = Message::new(Role::User, prompt);
+            return handle_agent_mode(state, session_id, user_msg, tx, disconnect_receiver, true)
+                .await;
+        }
+        (SessionMode::Chat, ParsedCommand::Exit) => {
+            // Already in chat mode, /exit is a no-op - store messages for consistency
+            let user_msg = Message::new(Role::User, "/exit");
+            crate::ai::chat::insert_chat_message(&db, &session_id, &user_msg).await?;
+
+            let exit_msg = "Already in chat mode. How can I help?";
+            let assistant_msg = Message::new(Role::Assistant, exit_msg);
+            crate::ai::chat::insert_chat_message(&db, &session_id, &assistant_msg).await?;
+
+            tx.send(
+                json!({
+                    "choices": [{
+                        "delta": { "content": exit_msg }
+                    }]
+                })
+                .to_string(),
+            )?;
+            // Return early - don't fall through to chat logic
+            let sse_stream =
+                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                    Ok::<Event, Infallible>(Event::default().data(chunk))
+                });
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
+        }
+        (SessionMode::Chat, ParsedCommand::None(_)) => {
+            // Continue in chat mode - fall through to existing logic
+        }
+        (_, ParsedCommand::Help) => {
+            // Show help text - same in both modes
+            let help_msg = get_help_text();
+            tx.send(
+                json!({
+                    "choices": [{
+                        "delta": { "content": help_msg }
+                    }]
+                })
+                .to_string(),
+            )?;
+            // Return early - don't fall through
+            let sse_stream =
+                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                    Ok::<Event, Infallible>(Event::default().data(chunk))
+                });
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
+        }
+    }
+
+    // Create SSE stream after mode detection (for non-early-return cases)
+    let sse_stream = tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+        Ok::<Event, Infallible>(Event::default().data(chunk))
+    });
+    let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+
     // Create session in database if it doesn't already exist
-    // get_or_create_session(&db, &session_id, &[]).await?;
 
     // Try to fetch the session from the db
     let transcript_with_ids = find_chat_session_by_id(&db, &session_id).await?;
-    let mut transcript: Vec<Message> = transcript_with_ids.into_iter().map(|(_, msg)| msg).collect();
+    let mut transcript: Vec<Message> = transcript_with_ids
+        .into_iter()
+        .map(|(_, msg)| msg)
+        .collect();
 
     // Initialize a new transcript
     if transcript.is_empty() {
@@ -192,7 +430,14 @@ async fn chat_handler(
                     let session_id_inner = session_id_clone.clone();
                     let msg_clone = msg.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = index_single_chat_message(&db_inner, &index_dir_path_inner, &session_id_inner, &msg_clone).await {
+                        if let Err(e) = index_single_chat_message(
+                            &db_inner,
+                            &index_dir_path_inner,
+                            &session_id_inner,
+                            &msg_clone,
+                        )
+                        .await
+                        {
                             tracing::error!("Failed to index chat message: {}", e);
                         }
                     });
@@ -212,8 +457,9 @@ async fn chat_handler(
                             None,
                             None,
                         );
-                        let subscriptions =
-                            find_all_notification_subscriptions(&db_for_notify).await.unwrap();
+                        let subscriptions = find_all_notification_subscriptions(&db_for_notify)
+                            .await
+                            .unwrap();
                         let failed_subscriptions = broadcast_push_notification(
                             subscriptions,
                             vapid_key_path_for_notify,
@@ -221,8 +467,8 @@ async fn chat_handler(
                         )
                         .await;
                         for sub in failed_subscriptions {
-                            let _ = mark_push_subscription_invalid(&db_for_notify, &sub.endpoint)
-                                .await;
+                            let _ =
+                                mark_push_subscription_invalid(&db_for_notify, &sub.endpoint).await;
                         }
                     });
                 };

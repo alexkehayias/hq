@@ -41,7 +41,8 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
 
                 Ok(rows)
             })
-            .await.expect("Session query failed");
+            .await
+            .expect("Session query failed");
 
         tracing::info!("Found {} sessions to update", sessions.len());
 
@@ -50,16 +51,15 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
             let transcript: Vec<Message> = find_chat_session_by_id(db_conn, &session_id)
                 .await
                 .expect("Loading chat session transcript failed")
-                .into_iter().map(|(_, msg)| msg).collect();
+                .into_iter()
+                .map(|(_, msg)| msg)
+                .collect();
 
             if !transcript.is_empty() {
                 // Generate title and summary from the transcript
-                let result = generate_and_update_session_info(
-                    config,
-                    db_conn,
-                    &session_id,
-                    &transcript,
-                ).await;
+                let result =
+                    generate_and_update_session_info(config, db_conn, &session_id, &transcript)
+                        .await;
 
                 if let Err(e) = result {
                     tracing::error!(
