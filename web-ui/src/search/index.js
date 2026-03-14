@@ -176,7 +176,7 @@
               modal.id = 'note-modal';
               modal.className =
                 'fixed inset-0 flex items-center justify-center bg-black bg-opacity-85 z-[10000]';
-              modal.innerHTML = `<div id="note-modal-content" class="relative bg-white max-w-2xl w-[95vw] max-h-[90vh] rounded-lg shadow-xl p-8 overflow-auto"></div>`;
+              modal.innerHTML = `<div id="note-modal-content" class="relative bg-white dark:bg-gray-800 max-w-2xl w-[95vw] max-h-[90vh] rounded-lg shadow-xl p-8 overflow-auto"></div>`;
               document.body.appendChild(modal);
               addedModal = true;
             }
@@ -216,7 +216,7 @@
               closeBtn.id = 'modal-close-btn';
               closeBtn.innerText = '×';
               closeBtn.className =
-                'absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black cursor-pointer';
+                'absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black dark:hover:text-white cursor-pointer';
               closeBtn.onclick = dismissModal;
               content.appendChild(closeBtn);
             }
@@ -249,7 +249,7 @@
                 html += `<div class="markdown leading-relaxed text-base text-gray-800">${messageHtml || ''}</div>`;
                 // Insert and keep the close button on top
                 content.innerHTML =
-                  `<button id="modal-close-btn" class="absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black cursor-pointer">×</button>` +
+                  `<button id="modal-close-btn" class="absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black dark:hover:text-white cursor-pointer">×</button>` +
                   html;
                 content.querySelector('#modal-close-btn').onclick =
                   dismissModal;
