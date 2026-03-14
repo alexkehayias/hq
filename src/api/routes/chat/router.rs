@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use axum::Json;
+use axum::response::Response;
 use axum::{
     Router,
     extract::{Path, State},
@@ -15,18 +16,15 @@ use axum::{
 use axum_extra::extract::Query;
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
+use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
-// Re-export public types for this module
-pub use super::public::{
-    ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatTranscriptResponse,
-};
 use crate::ai::chat::commands::{ParsedCommand, get_help_text, parse_slash_command};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
-    ChatBuilder, find_chat_session_by_id, get_or_create_session, set_session_mode,
+    ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode
 };
 use crate::ai::tools::{
     CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
@@ -42,6 +40,10 @@ use crate::notify::{
 };
 use crate::openai::{BoxedToolCall, Message, Role};
 use crate::search::index_single_chat_message;
+// Re-export public types for this module
+pub use super::public::{
+    ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatTranscriptResponse,
+};
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -72,7 +74,7 @@ async fn chat_session(
 async fn chat_list(
     State(state): State<SharedState>,
     Query(params): Query<ChatSessionsQuery>,
-) -> Result<axum::Json<ChatSessionsResponse>, crate::api::public::ApiError> {
+) -> Result<Json<ChatSessionsResponse>, crate::api::public::ApiError> {
     let db = state.read().expect("Unable to read share state").db.clone();
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
@@ -101,9 +103,7 @@ async fn handle_agent_mode(
     _tx: mpsc::UnboundedSender<String>,
     mut disconnect_receiver: broadcast::Receiver<()>,
     resume: bool,
-) -> Result<axum::response::Response, crate::api::public::ApiError> {
-    use crate::api::utils::DetectDisconnect;
-
+) -> Result<Response, crate::api::public::ApiError> {
     let db = state.read().expect("Unable to read share state").db.clone();
     let _vapid_key_path = state
         .read()
@@ -119,7 +119,7 @@ async fn handle_agent_mode(
     let claude_session = ClaudeCodeSession::with_default_tools(uuid);
 
     // Store user message in transcript
-    crate::ai::chat::insert_chat_message(&db, &session_id, &user_msg).await?;
+    insert_chat_message(&db, &session_id, &user_msg).await?;
 
     // Start the agent conversation
     let mut events = if resume {
@@ -152,7 +152,7 @@ async fn handle_agent_mode(
                 Ok(StreamEvent::MessageStop) => {
                     // Store assistant response in transcript
                     let assistant_msg = Message::new(Role::Assistant, &full_response);
-                    let _ = crate::ai::chat::insert_chat_message(&db, &session_id, &assistant_msg)
+                    let _ = insert_chat_message(&db, &session_id, &assistant_msg)
                         .await;
                 }
                 Ok(_) => {
@@ -284,12 +284,12 @@ async fn chat_handler(
 
             // Store the user's /exit message
             let user_msg = Message::new(Role::User, "/exit");
-            crate::ai::chat::insert_chat_message(&db, &session_id, &user_msg).await?;
+            insert_chat_message(&db, &session_id, &user_msg).await?;
 
             // Store the assistant's exit response
             let exit_response = "Exited agent mode. How else can I help?";
             let assistant_msg = Message::new(Role::Assistant, exit_response);
-            crate::ai::chat::insert_chat_message(&db, &session_id, &assistant_msg).await?;
+            insert_chat_message(&db, &session_id, &assistant_msg).await?;
 
             tx.send(
                 json!({
@@ -302,7 +302,7 @@ async fn chat_handler(
 
             // Return early to avoid falling through to chat logic
             let sse_stream =
-                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
                     Ok::<Event, Infallible>(Event::default().data(chunk))
                 });
             let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
@@ -329,11 +329,11 @@ async fn chat_handler(
         (SessionMode::Chat, ParsedCommand::Exit) => {
             // Already in chat mode, /exit is a no-op - store messages for consistency
             let user_msg = Message::new(Role::User, "/exit");
-            crate::ai::chat::insert_chat_message(&db, &session_id, &user_msg).await?;
+            insert_chat_message(&db, &session_id, &user_msg).await?;
 
             let exit_msg = "Already in chat mode. How can I help?";
             let assistant_msg = Message::new(Role::Assistant, exit_msg);
-            crate::ai::chat::insert_chat_message(&db, &session_id, &assistant_msg).await?;
+            insert_chat_message(&db, &session_id, &assistant_msg).await?;
 
             tx.send(
                 json!({
