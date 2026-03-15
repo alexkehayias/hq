@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use futures::stream::BoxStream;
 use serde::Deserialize;
 use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
 /// Default tools allowed for Claude Code sessions
@@ -202,7 +203,6 @@ impl ClaudeCodeSession {
             let mut child = cmd.spawn()?;
 
             // Read stdout line by line
-            use tokio::io::{AsyncBufReadExt, BufReader};
             let stdout = child.stdout.take().ok_or_else(|| {
                 anyhow!("Failed to capture stdout from ccr process")
             })?;

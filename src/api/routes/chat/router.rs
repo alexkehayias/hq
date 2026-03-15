@@ -1,6 +1,7 @@
 //! Router for the chat API
 
 use std::convert::Infallible;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -21,7 +22,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
-use crate::ai::chat::commands::{ParsedCommand, get_help_text, parse_slash_command};
+use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
     ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode
@@ -118,9 +119,6 @@ async fn handle_agent_mode(
     // Create Claude Code session with default tools (Read, Edit, Bash)
     let claude_session = ClaudeCodeSession::with_default_tools(uuid);
 
-    // Store user message in transcript
-    insert_chat_message(&db, &session_id, &user_msg).await?;
-
     // Start the agent conversation
     let mut events = if resume {
         claude_session.resume(user_msg.content.as_deref().unwrap_or(""))
@@ -152,8 +150,9 @@ async fn handle_agent_mode(
                 Ok(StreamEvent::MessageStop) => {
                     // Store assistant response in transcript
                     let assistant_msg = Message::new(Role::Assistant, &full_response);
-                    let _ = insert_chat_message(&db, &session_id, &assistant_msg)
-                        .await;
+                    // Store user message in transcript
+                    insert_chat_message(&db, &session_id, &user_msg).await.expect("Inserting user message failed");
+                    insert_chat_message(&db, &session_id, &assistant_msg).await.expect("Inserting assistant message failed");
                 }
                 Ok(_) => {
                     // Other events we don't need to forward
@@ -265,20 +264,21 @@ async fn chat_handler(
     let db = state.read().expect("Unable to read share state").db.clone();
 
     // Parse message using slash command system
-    let parsed = parse_slash_command(&payload.message);
+    let slash_cmd_str = payload.message.as_str();
+    let slash_command = SlashCommand::from_str(slash_cmd_str)?;
     let session = get_or_create_session(&db, &session_id, &[], SessionMode::Chat).await?;
     let current_mode = session.mode;
 
     // Handle mode transitions
-    match (&current_mode, &parsed) {
-        (SessionMode::Chat, ParsedCommand::Code { prompt }) => {
+    match (&current_mode, &slash_command) {
+        (SessionMode::Chat, SlashCommand::Code { prompt }) => {
             // Transition from chat to agent mode
-            set_session_mode(&db, &session_id, SessionMode::Agent).await?;
+            set_session_mode(&db, &session_id, SessionMode::Code).await?;
             let user_msg = Message::new(Role::User, prompt);
             return handle_agent_mode(state, session_id, user_msg, tx, disconnect_receiver, false)
                 .await;
         }
-        (SessionMode::Agent, ParsedCommand::Exit) => {
+        (SessionMode::Code, SlashCommand::Exit) => {
             // Exit agent mode back to chat
             set_session_mode(&db, &session_id, SessionMode::Chat).await?;
 
@@ -314,27 +314,21 @@ async fn chat_handler(
                 )
                 .into_response());
         }
-        (SessionMode::Agent, ParsedCommand::None(msg)) => {
+        (SessionMode::Code, SlashCommand::None(msg)) => {
             // Continue in agent mode
             let user_msg = Message::new(Role::User, msg);
             return handle_agent_mode(state, session_id, user_msg, tx, disconnect_receiver, true)
                 .await;
         }
-        (SessionMode::Agent, ParsedCommand::Code { prompt }) => {
+        (SessionMode::Code, SlashCommand::Code { prompt }) => {
             // Already in agent mode but got another /code command
             let user_msg = Message::new(Role::User, prompt);
             return handle_agent_mode(state, session_id, user_msg, tx, disconnect_receiver, true)
                 .await;
         }
-        (SessionMode::Chat, ParsedCommand::Exit) => {
+        (SessionMode::Chat, SlashCommand::Exit) => {
             // Already in chat mode, /exit is a no-op - store messages for consistency
-            let user_msg = Message::new(Role::User, "/exit");
-            insert_chat_message(&db, &session_id, &user_msg).await?;
-
             let exit_msg = "Already in chat mode. How can I help?";
-            let assistant_msg = Message::new(Role::Assistant, exit_msg);
-            insert_chat_message(&db, &session_id, &assistant_msg).await?;
-
             tx.send(
                 json!({
                     "choices": [{
@@ -357,10 +351,33 @@ async fn chat_handler(
                 )
                 .into_response());
         }
-        (SessionMode::Chat, ParsedCommand::None(_)) => {
+        (SessionMode::Chat, SlashCommand::None(_)) => {
             // Continue in chat mode - fall through to existing logic
         }
-        (_, ParsedCommand::Help) => {
+        (_, SlashCommand::Error(err_msg)) => {
+            tx.send(
+                json!({
+                    "choices": [{
+                        "delta": { "content": err_msg }
+                    }]
+                })
+                .to_string(),
+            )?;
+            // Return early - don't fall through
+            let sse_stream =
+                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                    Ok::<Event, Infallible>(Event::default().data(chunk))
+                });
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
+        }
+        (_, SlashCommand::Help) => {
             // Show help text - same in both modes
             let help_msg = get_help_text();
             tx.send(

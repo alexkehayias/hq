@@ -42,7 +42,7 @@ pub enum SessionMode {
     /// Regular chat mode using OpenAI API
     Chat,
     /// Code agent mode using Claude Code CLI
-    Agent,
+    Code,
 }
 
 impl Default for SessionMode {
@@ -55,7 +55,7 @@ impl std::fmt::Display for SessionMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionMode::Chat => write!(f, "chat"),
-            SessionMode::Agent => write!(f, "agent"),
+            SessionMode::Code => write!(f, "code"),
         }
     }
 }

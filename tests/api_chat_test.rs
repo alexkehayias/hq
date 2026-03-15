@@ -384,7 +384,7 @@ mod tests {
         let mode = get_session_mode(&db, "test-mode-agent")
             .await
             .expect("Failed to get session mode");
-        assert_eq!(mode, SessionMode::Agent);
+        assert_eq!(mode, SessionMode::Code);
     }
 
     /// Tests that /exit command switches session mode from Agent to Chat
@@ -398,7 +398,7 @@ mod tests {
 
         // First, create a session in agent mode directly
         let db = state.db.clone();
-        get_or_create_session(&db, "test-mode-exit", &[], SessionMode::Agent)
+        get_or_create_session(&db, "test-mode-exit", &[], SessionMode::Code)
             .await
             .expect("Failed to create session");
 
@@ -406,7 +406,7 @@ mod tests {
         let mode_before = get_session_mode(&db, "test-mode-exit")
             .await
             .expect("Failed to get session mode");
-        assert_eq!(mode_before, SessionMode::Agent);
+        assert_eq!(mode_before, SessionMode::Code);
 
         // Now send /exit command
         let response = app
@@ -495,7 +495,7 @@ mod tests {
 
         // Create a session in agent mode
         let db = state.db.clone();
-        get_or_create_session(&db, "test-exit-messages", &[], SessionMode::Agent)
+        get_or_create_session(&db, "test-exit-messages", &[], SessionMode::Code)
             .await
             .expect("Failed to create session");
 
@@ -532,72 +532,13 @@ mod tests {
         );
 
         // First message should be user's /exit
-        let (id1, msg1) = &messages[messages.len() - 2];
+        let (_id1, msg1) = &messages[messages.len() - 2];
         assert_eq!(*msg1.role(), Role::User);
         assert!(msg1.content.as_ref().expect("content").contains("/exit"));
 
         // Second message should be assistant's response
-        let (id2, msg2) = &messages[messages.len() - 1];
+        let (_id2, msg2) = &messages[messages.len() - 1];
         assert_eq!(*msg2.role(), Role::Assistant);
         assert!(msg2.content.as_ref().expect("content").contains("Exited agent mode"));
-    }
-
-    /// Tests that /exit in chat mode also stores messages
-    #[tokio::test]
-    #[serial]
-    async fn it_stores_messages_after_exit_in_chat_mode() {
-        use hq::ai::chat::db::{find_chat_session_by_id, get_or_create_session};
-        use hq::ai::chat::models::SessionMode;
-        use hq::openai::Role;
-
-        let (app, state) = test_app_with_state().await;
-
-        // Create a session in chat mode
-        let db = state.db.clone();
-        get_or_create_session(&db, "test-exit-chat-mode", &[], SessionMode::Chat)
-            .await
-            .expect("Failed to create session");
-
-        // Send /exit command while in chat mode
-        let _response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/chat")
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "session_id": "test-exit-chat-mode",
-                            "message": "/exit"
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // Verify messages were stored in the database
-        let db = state.db.clone();
-        let messages = find_chat_session_by_id(&db, "test-exit-chat-mode")
-            .await
-            .expect("Failed to find chat session");
-
-        // Should have at least 2 messages: user /exit and assistant response
-        assert!(
-            messages.len() >= 2,
-            "Expected at least 2 messages, got {}",
-            messages.len()
-        );
-
-        // First message should be user's /exit
-        let (id1, msg1) = &messages[messages.len() - 2];
-        assert_eq!(*msg1.role(), Role::User);
-        assert!(msg1.content.as_ref().expect("content").contains("/exit"));
-
-        // Second message should be assistant's response
-        let (id2, msg2) = &messages[messages.len() - 1];
-        assert_eq!(*msg2.role(), Role::Assistant);
-        assert!(msg2.content.as_ref().expect("content").contains("Already in chat mode"));
     }
 }
