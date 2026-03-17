@@ -102,11 +102,10 @@ pub async fn broadcast_push_notification(
     }
 
     while let Some(result) = tasks.join_next().await {
-        if let Ok((sub, send_result)) = result {
-            if matches!(send_result, PushSendResult::InvalidSubscription) {
+        if let Ok((sub, send_result)) = result
+            && matches!(send_result, PushSendResult::InvalidSubscription) {
                 failed_subscriptions.push(sub);
             }
-        }
     }
 
     failed_subscriptions

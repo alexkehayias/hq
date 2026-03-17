@@ -24,7 +24,8 @@ use super::db::{chat_session_count, chat_session_list};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
-    ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode
+    ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message,
+    set_session_mode,
 };
 use crate::ai::tools::{
     CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
@@ -150,8 +151,12 @@ async fn handle_agent_mode(
                     // Store assistant response in transcript
                     let assistant_msg = Message::new(Role::Assistant, &full_response);
                     // Store user message in transcript
-                    insert_chat_message(&db, &session_id, &user_msg).await.expect("Inserting user message failed");
-                    insert_chat_message(&db, &session_id, &assistant_msg).await.expect("Inserting assistant message failed");
+                    insert_chat_message(&db, &session_id, &user_msg)
+                        .await
+                        .expect("Inserting user message failed");
+                    insert_chat_message(&db, &session_id, &assistant_msg)
+                        .await
+                        .expect("Inserting assistant message failed");
                 }
                 Ok(_) => {
                     // Other events we don't need to forward
@@ -299,10 +304,9 @@ async fn chat_handler(
             )?;
 
             // Return early to avoid falling through to chat logic
-            let sse_stream =
-                StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
-                    Ok::<Event, Infallible>(Event::default().data(chunk))
-                });
+            let sse_stream = StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                Ok::<Event, Infallible>(Event::default().data(chunk))
+            });
             let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
             return Ok(Sse::new(wrapped_sse_stream)
                 .keep_alive(

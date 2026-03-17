@@ -58,7 +58,7 @@ pub async fn run(service: ServiceKind, vec_db_path: &str) -> Result<()> {
                 exchange_code_for_token(&client_id, &client_secret, code, &redirect_uri).await?;
 
             // Store the refresh token in the DB and use that to fetch an access token from now on.
-            let db = async_db(&vec_db_path)
+            let db = async_db(vec_db_path)
                 .await
                 .expect("Failed to connect to db");
             let refresh_token = token

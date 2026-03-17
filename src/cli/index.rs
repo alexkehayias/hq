@@ -31,29 +31,29 @@ pub async fn run(
     // Clone the notes repo
     let deploy_key_path =
         env::var("HQ_NOTES_DEPLOY_KEY_PATH").expect("Missing env var HQ_NOTES_REPO_URL");
-    maybe_pull_and_reset_repo(&deploy_key_path, &notes_path).await;
+    maybe_pull_and_reset_repo(&deploy_key_path, notes_path).await;
 
-    let db = crate::core::db::async_db(&vec_db_path)
+    let db = crate::core::db::async_db(vec_db_path)
         .await
         .expect("Failed to connect to async db");
 
     if full_text {
-        index_all(&db, &index_path, &notes_path, true, false, None)
+        index_all(&db, index_path, notes_path, true, false, None)
             .await
             .expect("Indexing failed");
     }
     if vector {
-        index_all(&db, &index_path, &notes_path, false, true, None)
+        index_all(&db, index_path, notes_path, false, true, None)
             .await
             .expect("Indexing failed");
     }
     if all {
-        index_all(&db, &index_path, &notes_path, true, true, None)
+        index_all(&db, index_path, notes_path, true, true, None)
             .await
             .expect("Indexing failed");
     }
     if chat {
-        index_all_chat_sessions(&db, &index_path)
+        index_all_chat_sessions(&db, index_path)
             .await
             .expect("Chat indexing failed");
     }

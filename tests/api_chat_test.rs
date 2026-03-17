@@ -539,6 +539,11 @@ mod tests {
         // Second message should be assistant's response
         let (_id2, msg2) = &messages[messages.len() - 1];
         assert_eq!(*msg2.role(), Role::Assistant);
-        assert!(msg2.content.as_ref().expect("content").contains("Exited agent mode"));
+        assert!(
+            msg2.content
+                .as_ref()
+                .expect("content")
+                .contains("Exited agent mode")
+        );
     }
 }

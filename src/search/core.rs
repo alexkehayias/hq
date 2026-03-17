@@ -287,40 +287,40 @@ pub async fn search_notes(
     };
 
     // Query for chat results in a single batch
-    if !chat_message_ids.is_empty() {
-        if let Ok(messages) = get_chat_messages_by_ids(db, &chat_message_ids).await {
-            for (message_id, msg, session_title) in messages {
-                let role = msg.role();
-                // Only include user and assistant messages (not system/tool)
-                if *role == Role::User || *role == Role::Assistant {
-                    let title = session_title.unwrap_or_default();
-                    let body = msg.content.clone().unwrap_or_default();
+    if !chat_message_ids.is_empty()
+        && let Ok(messages) = get_chat_messages_by_ids(db, &chat_message_ids).await
+    {
+        for (message_id, msg, session_title) in messages {
+            let role = msg.role();
+            // Only include user and assistant messages (not system/tool)
+            if *role == Role::User || *role == Role::Assistant {
+                let title = session_title.unwrap_or_default();
+                let body = msg.content.clone().unwrap_or_default();
 
-                    results.push(SearchResult {
-                        id: message_id,
-                        r#type: "chat".to_string(),
-                        category: String::new(),
-                        file_name: String::new(),
-                        title: if truncate {
-                            title.chars().take(140).collect()
-                        } else {
-                            title
-                        },
-                        tags: None,
-                        body: if truncate {
-                            body.chars().take(240).collect()
-                        } else {
-                            body
-                        },
-                        is_task: false,
-                        task_status: None,
-                        task_scheduled: None,
-                        task_deadline: None,
-                        task_closed: None,
-                        meeting_date: None,
-                        chat_role: Some(role.as_str().to_string()),
-                    });
-                }
+                results.push(SearchResult {
+                    id: message_id,
+                    r#type: "chat".to_string(),
+                    category: String::new(),
+                    file_name: String::new(),
+                    title: if truncate {
+                        title.chars().take(140).collect()
+                    } else {
+                        title
+                    },
+                    tags: None,
+                    body: if truncate {
+                        body.chars().take(240).collect()
+                    } else {
+                        body
+                    },
+                    is_task: false,
+                    task_status: None,
+                    task_scheduled: None,
+                    task_deadline: None,
+                    task_closed: None,
+                    meeting_date: None,
+                    chat_role: Some(role.as_str().to_string()),
+                });
             }
         }
     }

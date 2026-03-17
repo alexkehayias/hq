@@ -6,8 +6,8 @@
 use anyhow::{Result, anyhow};
 use futures::stream::BoxStream;
 use serde::Deserialize;
-use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use uuid::Uuid;
 
 /// Default tools allowed for Claude Code sessions

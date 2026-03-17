@@ -38,18 +38,15 @@ impl Transcript {
 /// Session mode determines how messages are processed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SessionMode {
     /// Regular chat mode using OpenAI API
+    #[default]
     Chat,
     /// Code agent mode using Claude Code CLI
     Code,
 }
 
-impl Default for SessionMode {
-    fn default() -> Self {
-        Self::Chat
-    }
-}
 
 impl std::fmt::Display for SessionMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

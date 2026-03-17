@@ -20,10 +20,10 @@ pub async fn run(
     if db {
         println!("Initializing db...");
         // Initialize the vector DB
-        fs::create_dir_all(&vec_db_path)
+        fs::create_dir_all(vec_db_path)
             .unwrap_or_else(|err| println!("Ignoring vector DB create failed: {}", err));
 
-        let db = async_db(&vec_db_path)
+        let db = async_db(vec_db_path)
             .await
             .expect("Failed to connect to db");
         db.call(|conn| {
@@ -37,7 +37,7 @@ pub async fn run(
     if index {
         println!("Initializing search index...");
         // Create the index directory if it doesn't already exist
-        fs::create_dir_all(&index_path)
+        fs::create_dir_all(index_path)
             .unwrap_or_else(|err| println!("Ignoring index directory create failed: {}", err));
         println!("Finished initializing search index...");
     }
@@ -49,7 +49,7 @@ pub async fn run(
         let repo_url =
             std::env::var("HQ_NOTES_REPO_URL").expect("Missing env var HQ_NOTES_REPO_URL");
         println!("Cloning notes repo from git...");
-        maybe_clone_repo(&deploy_key_path, &repo_url, &notes_path).await;
+        maybe_clone_repo(&deploy_key_path, &repo_url, notes_path).await;
         println!("Finished cloning and resetting notes from git");
     }
 

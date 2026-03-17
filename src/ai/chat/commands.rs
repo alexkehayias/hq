@@ -1,6 +1,6 @@
 //! Slash commands for chat sessions using Clap for parsing.
-use std::str::FromStr;
 use clap::{CommandFactory, Parser, Subcommand};
+use std::str::FromStr;
 
 /// Result of parsing a slash command
 #[derive(Debug, PartialEq)]
@@ -56,7 +56,6 @@ impl FromStr for SlashCommand {
     }
 }
 
-
 /// Slash commands parser for chat sessions.
 ///
 /// This uses Clap to parse user messages that start with `/`, providing
@@ -90,10 +89,7 @@ pub enum Command {
 pub fn get_help_text() -> String {
     let mut cmd = SlashCommandParser::command();
     // Generate short help without the binary name prefix
-    format!(
-        "Available slash commands:\n\n{}",
-        cmd.render_help()
-    )
+    format!("Available slash commands:\n\n{}", cmd.render_help())
 }
 
 #[cfg(test)]
@@ -104,11 +100,9 @@ mod tests {
     fn test_parse_code_with_prompt() {
         let result = SlashCommand::from_str("/code fix this bug");
         assert!(result.is_ok());
-        let _ = result.map(|slash_cmd| {
-            match slash_cmd {
-                SlashCommand::Code { prompt } => assert_eq!(prompt, "fix this bug"),
-                other => panic!("Expected Code command, got {:?}", other),
-            }
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Code { prompt } => assert_eq!(prompt, "fix this bug"),
+            other => panic!("Expected Code command, got {:?}", other),
         });
     }
 
@@ -123,11 +117,9 @@ mod tests {
     fn test_parse_regular_message() {
         let result = SlashCommand::from_str("Hello, how are you?");
         assert!(result.is_ok());
-        let _ = result.map(|slash_cmd| {
-            match slash_cmd {
-                SlashCommand::None(msg) => assert_eq!(msg, "Hello, how are you?"),
-                _ => panic!("Expected None"),
-            }
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::None(msg) => assert_eq!(msg, "Hello, how are you?"),
+            _ => panic!("Expected None"),
         });
     }
 
@@ -135,11 +127,9 @@ mod tests {
     fn test_parse_invalid_command() {
         let result = SlashCommand::from_str("/unknown");
         assert!(result.is_ok());
-        let _ = result.map(|slash_cmd| {
-            match slash_cmd {
-                SlashCommand::Error(msg) => assert!(msg.contains("error")),
-                _ => panic!("Expected None"),
-            }
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Error(msg) => assert!(msg.contains("error")),
+            _ => panic!("Expected None"),
         });
     }
 
@@ -147,11 +137,9 @@ mod tests {
     fn test_whitespace_handling() {
         let result = SlashCommand::from_str("  /code   hello world  ");
         assert!(result.is_ok());
-        let _ = result.map(|slash_cmd| {
-            match slash_cmd {
-                SlashCommand::Code { prompt } => assert_eq!(prompt, "hello world"),
-                _ => panic!("Expected Code command"),
-            }
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Code { prompt } => assert_eq!(prompt, "hello world"),
+            _ => panic!("Expected Code command"),
         });
     }
 }
