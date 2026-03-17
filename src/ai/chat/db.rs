@@ -1,7 +1,6 @@
 use anyhow::{Error, Result};
 use serde::Serialize;
 use serde_json::json;
-use std::str::FromStr;
 use tokio_rusqlite::Connection;
 
 use crate::ai::chat::models::{Session, SessionMode};
@@ -106,7 +105,7 @@ RETURNING id, mode",
     // If this is an existing session, the mode may not match with the
     // `mode` argument. If it's a new session, the mode will always
     // match the `mode` argument.
-    let mode = SessionMode::from_str(&mode_str)?;
+    let mode = mode_str.parse()?;
     Ok(Session { id, mode })
 }
 
@@ -276,7 +275,7 @@ pub async fn get_session_mode(db: &Connection, session_id: &str) -> Result<Sessi
                 .prepare("SELECT mode FROM session WHERE id = ?")
                 .expect("Invalid sql");
             let val: String = stmt.query_row([s_id], |row| row.get::<_, String>(0))?;
-            Ok(SessionMode::from_str(&val).unwrap())
+            Ok(val.parse().expect("Parsing session mode failed"))
         })
         .await
         .map_err(anyhow::Error::from)?;

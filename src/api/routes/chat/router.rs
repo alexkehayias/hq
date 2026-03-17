@@ -1,7 +1,6 @@
 //! Router for the chat API
 
 use std::convert::Infallible;
-use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -264,13 +263,12 @@ async fn chat_handler(
     let db = state.read().expect("Unable to read share state").db.clone();
 
     // Parse message using slash command system
-    let slash_cmd_str = payload.message.as_str();
-    let slash_command = SlashCommand::from_str(slash_cmd_str)?;
+    let slash_cmd = payload.message.parse()?;
     let session = get_or_create_session(&db, &session_id, &[], SessionMode::Chat).await?;
     let current_mode = session.mode;
 
     // Handle mode transitions
-    match (&current_mode, &slash_command) {
+    match (&current_mode, &slash_cmd) {
         (SessionMode::Chat, SlashCommand::Code { prompt }) => {
             // Transition from chat to agent mode
             set_session_mode(&db, &session_id, SessionMode::Code).await?;

@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use itertools::Itertools;
 use serde::Serialize;
@@ -73,7 +71,7 @@ fn fulltext_search(index_path: &str, query: &aql::Expr, limit: usize) -> Result<
                     .as_str()
                     .unwrap()
                     .to_string();
-                let doc_type = DocType::from_str(&doc_type_str).expect("Invalid doc type");
+                let doc_type = doc_type_str.parse().expect("Invalid doc type");
 
                 SearchHit {
                     id: id_val,
@@ -140,7 +138,7 @@ pub async fn search_similar_notes(
             let found = stmt
                 .query_map([q.as_bytes(), limit.as_bytes(), limit.as_bytes()], |r| {
                     let doc_type_str: String = r.get(3)?;
-                    let doc_type = DocType::from_str(&doc_type_str).expect("Invalid doc type");
+                    let doc_type = doc_type_str.parse().expect("Invalid doc type");
                     Ok(SearchHit {
                         id: r.get(0)?,
                         r#type: SearchHitType::Similarity,
