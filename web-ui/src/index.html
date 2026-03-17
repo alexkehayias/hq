@@ -11,8 +11,8 @@
     <meta name="theme-color" content="#ffffff">
     <link rel="apple-touch-icon" href="/icon512_maskable.png">
   </head>
-  <body class="min-h-dvh bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-    <div class="min-h-dvh flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 py-12">
+  <body class="min-h-dvh bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
+    <div class="min-h-dvh flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 py-12" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
       <!-- Welcome Card -->
       <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
         <!-- Header -->
@@ -72,6 +72,23 @@
               </div>
             </div>
             <svg class="h-5 w-5 text-gray-400 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </a>
+
+          <a href="/metrics/" class="group flex items-center justify-between w-full px-5 py-4 bg-gray-50 dark:bg-gray-700 hover:bg-orange-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200">
+            <div class="flex items-center space-x-4">
+              <div class="bg-orange-100 dark:bg-orange-900 p-3 rounded-lg group-hover:scale-110 transition-transform">
+                <svg class="h-6 w-6 text-orange-600 dark:text-orange-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+                </svg>
+              </div>
+              <div class="text-left">
+                <h2 class="font-semibold text-gray-900 dark:text-white">Metrics</h2>
+                <p class="text-sm text-gray-500 dark:text-gray-400">View usage analytics</p>
+              </div>
+            </div>
+            <svg class="h-5 w-5 text-gray-400 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
             </svg>
           </a>
