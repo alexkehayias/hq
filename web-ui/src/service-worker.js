@@ -10,6 +10,8 @@ const urlsToCache = [
   '/chat/index.js',
   '/chat/sessions/index.html',
   '/chat/sessions/index.js',
+  '/metrics/index.html',
+  '/metrics/index.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -22,25 +24,35 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Network-first strategy: always try network first, fall back to cache if offline
   event.respondWith(
-    caches.match(event.request).then((response) => {
-      // Cache hit - return response
-      if (response) {
+    fetch(event.request)
+      .then((response) => {
+        // Only cache GET requests (POST/PUT/DELETE are not cacheable)
+        if (event.request.method === 'GET') {
+          // Clone the response before caching it
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+        }
         return response;
-      }
-      return fetch(event.request);
-    }),
+      })
+      .catch(() => {
+        // If network fails, try the cache
+        return caches.match(event.request);
+      }),
   );
 });
 
 self.addEventListener('activate', (event) => {
-  const cacheWhitelist = [CACHE_NAME];
+  const cacheAllowlist = [CACHE_NAME];
 
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
+          if (cacheAllowlist.indexOf(cacheName) === -1) {
             return caches.delete(cacheName);
           } else {
             return null;
