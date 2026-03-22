@@ -309,7 +309,8 @@ pub async fn completion_stream(
         .timeout(Duration::from_secs(60 * 5))
         .json(&payload)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
     let mut stream = response.bytes_stream();
 

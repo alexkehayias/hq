@@ -1,3 +1,6 @@
+pub mod bash;
+pub use bash::UnsafeBashTool;
+
 pub mod meeting_search;
 pub use meeting_search::MeetingSearchTool;
 
@@ -21,3 +24,6 @@ pub use tasks::{TasksDueTodayTool, TasksScheduledTodayTool};
 
 pub mod memory;
 pub use memory::MemoryTool;
+
+pub mod skills;
+pub use skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SearchSkillsTool};

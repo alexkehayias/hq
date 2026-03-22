@@ -70,6 +70,10 @@ impl Chat {
             .call(tool_call_args)
             .await?;
 
+        // TODO: if the tool call result is too large, write it to a
+        // file and change the response text to a summary that points
+        // to the file to use other tools to inspect if needed.
+
         let tool_call_request = vec![FunctionCall {
             function: FunctionCallFn {
                 arguments: tool_call_args.to_string(),

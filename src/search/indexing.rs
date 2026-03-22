@@ -771,29 +771,27 @@ pub async fn index_all_chat_sessions(db: &Connection, index_dir_path: &str) -> R
     Ok(())
 }
 
-/// Index a single chat message. Called after saving a new message via the API.
-/// This function checks if the session has background tag and skips indexing if so.
-pub async fn index_single_chat_message(
+/// Index multiple chat messages in a single task with one writer and commit.
+///
+/// This avoids the LockFailure error that occurs when multiple IndexWriters
+/// try to access the same index simultaneously.
+pub async fn index_chat_messages(
     db: &Connection,
     index_dir_path: &str,
     session_id: &str,
-    msg: &Message,
+    messages: Vec<Message>,
 ) -> Result<()> {
-    // Skip system and tool role messages
-    let role = msg.role();
-    if *role == Role::System || *role == Role::Tool {
-        return Ok(());
-    }
-
     // Skip if session has background tag
     let is_background = session_has_background_tag(db, session_id).await?;
     if is_background {
         return Ok(());
     }
 
-    // Get session title and latest message ID for this session
+    let messages_len = messages.len();
+
+    // Get session title and message IDs for this session
     let session_id_owned = session_id.to_string();
-    let (title, message_id): (Option<String>, String) = db
+    let (title, message_ids): (Option<String>, Vec<String>) = db
         .call(move |conn| {
             let title: Option<String> = conn
                 .query_row(
@@ -803,18 +801,41 @@ pub async fn index_single_chat_message(
                 )
                 .ok();
 
-            // Get the most recent message ID for this session
-            let message_id: String = conn.query_row(
-                "SELECT id FROM chat_message WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
-                [&session_id_owned],
-                |row| row.get(0),
+            // Get all message IDs for this session (we'll index the new ones)
+            let mut stmt = conn.prepare(
+                "SELECT id FROM chat_message WHERE session_id = ? ORDER BY rowid DESC LIMIT ?",
             )?;
+            let message_ids: Vec<String> = stmt
+                .query_map([&session_id_owned, &messages_len.to_string()], |row| {
+                    row.get(0)
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
 
-            Ok((title, message_id))
+            Ok((title, message_ids))
         })
         .await?;
 
-    // Open the index and create writer
+    // Reverse to get oldest first (to match message order)
+    let mut message_ids: Vec<String> = message_ids.into_iter().rev().collect();
+    // Pad with placeholder IDs if needed
+    while message_ids.len() < messages_len {
+        message_ids.push(format!("msg_{}", message_ids.len()));
+    }
+
+    // Filter messages to index (skip system and tool)
+    let messages_to_index: Vec<(String, Message)> = messages
+        .into_iter()
+        .filter(|msg| *msg.role() != Role::System && *msg.role() != Role::Tool)
+        .zip(message_ids.iter())
+        .map(|(msg, id)| (id.clone(), msg))
+        .collect();
+
+    if messages_to_index.is_empty() {
+        return Ok(());
+    }
+
+    // Open the index and create ONE writer for all messages
     let index_path =
         tantivy::directory::MmapDirectory::open(index_dir_path).expect("Index not found");
     let schema = note_schema();
@@ -824,23 +845,25 @@ pub async fn index_single_chat_message(
         .writer(50_000_000)
         .expect("Index writer failed to initialize");
 
-    // Index the message using its ID
-    index_chat_message_full_text(
-        &mut index_writer,
-        &schema,
-        &message_id,
-        title.as_deref(),
-        msg,
-    )?;
+    // Index all messages using the same writer
+    for (message_id, msg) in &messages_to_index {
+        index_chat_message_full_text(
+            &mut index_writer,
+            &schema,
+            message_id,
+            title.as_deref(),
+            msg,
+        )?;
+    }
 
-    // Commit
+    // Commit once after all messages are indexed
     tokio::task::spawn_blocking(move || {
         index_writer
             .commit()
-            .expect("Single chat message indexing failed to commit");
+            .expect("Chat messages batch indexing failed to commit");
     })
     .await
-    .expect("Chat message indexing task failed");
+    .expect("Chat message batch indexing task failed");
 
     Ok(())
 }

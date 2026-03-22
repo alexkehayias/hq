@@ -6,6 +6,7 @@ pub struct AppConfig {
     pub index_path: String,
     pub vec_db_path: String,
     pub storage_path: String,
+    pub skills_path: String,
     pub deploy_key_path: String,
     pub vapid_key_path: String,
     pub note_search_api_url: String,
@@ -26,6 +27,7 @@ impl Default for AppConfig {
         let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
         let index_path = format!("{}/index", storage_path);
         let notes_path = format!("{}/notes", storage_path);
+        let skills_path = format!("{}/skills", storage_path);
         let vec_db_path = format!("{}/db", storage_path);
         let deploy_key_path =
             env::var("HQ_NOTES_DEPLOY_KEY_PATH").expect("Missing env var HQ_NOTES_REPO_URL");
@@ -55,6 +57,7 @@ impl Default for AppConfig {
             index_path,
             vec_db_path: vec_db_path.clone(),
             storage_path: storage_path.clone(),
+            skills_path,
             deploy_key_path,
             vapid_key_path,
             note_search_api_url: note_search_api_url.clone(),

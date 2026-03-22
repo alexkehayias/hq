@@ -27,9 +27,11 @@ use crate::ai::chat::{
     ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message,
     set_session_mode,
 };
+use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
-    TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
+    CalendarTool, EmailUnreadTool, ListSkillsTool, LoadSkillTool, MeetingSearchTool, MemoryTool,
+    NoteSearchTool, ReadSkillFileTool, SearchSkillsTool, TasksDueTodayTool,
+    TasksScheduledTodayTool, UnsafeBashTool, WebSearchTool, WebsiteViewTool,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -40,7 +42,7 @@ use crate::notify::{
     mark_push_subscription_invalid,
 };
 use crate::openai::{BoxedToolCall, Message, Role};
-use crate::search::index_single_chat_message;
+use crate::search::index_chat_messages;
 // Re-export public types for this module
 pub use super::public::{
     ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatTranscriptResponse,
@@ -217,6 +219,7 @@ async fn chat_handler(
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
         memory_tool,
+        skill_registry,
         openai_api_hostname,
         openai_api_key,
         openai_model,
@@ -227,6 +230,7 @@ async fn chat_handler(
         let AppConfig {
             note_search_api_url,
             storage_path,
+            skills_path,
             openai_api_hostname,
             openai_api_key,
             openai_model,
@@ -244,6 +248,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             MemoryTool::new(storage_path),
+            SkillRegistry::new(skills_path).ok(),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
             openai_model.clone(),
@@ -252,7 +257,7 @@ async fn chat_handler(
         )
     };
 
-    let tools: Vec<BoxedToolCall> = vec![
+    let mut all_tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
         Box::new(meeting_search_tool),
         Box::new(web_search_tool),
@@ -261,8 +266,25 @@ async fn chat_handler(
         Box::new(website_view_tool),
         Box::new(tasks_due_today_tool),
         Box::new(tasks_scheduled_today_tool),
+        #[cfg(debug_assertions)]
         Box::new(memory_tool),
+        #[cfg(debug_assertions)]
+        Box::new(UnsafeBashTool::new()),
     ];
+
+    // Add skill tools if there is a skills in the registry
+    let mut skill_tools: Vec<BoxedToolCall> = vec![];
+    if let Some(ref registry) = skill_registry
+        && registry.count() > 0
+    {
+        skill_tools.push(Box::new(ListSkillsTool::new(registry.clone())));
+        skill_tools.push(Box::new(SearchSkillsTool::new(registry.clone())));
+        skill_tools.push(Box::new(LoadSkillTool::new(registry.clone())));
+        skill_tools.push(Box::new(ReadSkillFileTool::new(registry.clone())));
+    }
+    all_tools.extend(skill_tools);
+
+    let tools = all_tools;
     let user_msg = Message::new(Role::User, &payload.message);
 
     let db = state.read().expect("Unable to read share state").db.clone();
@@ -424,7 +446,36 @@ async fn chat_handler(
     // Initialize a new transcript
     if transcript.is_empty() {
         let shared_state = state.read().expect("Unable to read share state");
-        let default_system_msg = Message::new(Role::System, &shared_state.config.system_message);
+
+        // NOTE: The system message is effectively immutable. Adding
+        // new skills and continuing a chat session may cause it to
+        // not be found.
+        let mut system_content = shared_state.config.system_message.clone();
+
+        // Append skill instructions if there are skills in the registry
+        if let Some(ref registry) = skill_registry {
+            let skill_count = registry.count();
+            if skill_count > 0 {
+                let skill_names: Vec<String> = registry
+                    .list_skills()
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect();
+
+                let skills_section = format!(
+                    "\n\n## Available Skills\n\
+                    You have access to the following skills. **Always use relevant skills first before using tools.**\n\
+                    - {}\n\
+                    \nTo use a skill, first load it using the `load_skill` tool, then follow the instructions in the loaded skill.\n",
+                    skill_names.join("\n- ")
+                );
+                system_content.push_str(&skills_section);
+            }
+        }
+
+        tracing::debug!("System message: {}", &system_content);
+
+        let default_system_msg = Message::new(Role::System, &system_content);
         transcript.push(default_system_msg.clone());
     }
 
@@ -437,30 +488,26 @@ async fn chat_handler(
 
     tokio::spawn(async move {
         let result = chat.next_msg(user_msg.clone()).await;
+
         match result {
             Ok(messages) => {
-                // Index new chat messages for full-text search
+                // Index new chat messages for full-text search (batch, single writer)
                 let db_clone = db.clone();
                 let index_dir_path_clone = index_dir_path.clone();
                 let session_id_clone = session_id.clone();
-                for msg in messages.iter() {
-                    let db_inner = db_clone.clone();
-                    let index_dir_path_inner = index_dir_path_clone.clone();
-                    let session_id_inner = session_id_clone.clone();
-                    let msg_clone = msg.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = index_single_chat_message(
-                            &db_inner,
-                            &index_dir_path_inner,
-                            &session_id_inner,
-                            &msg_clone,
-                        )
-                        .await
-                        {
-                            tracing::error!("Failed to index chat message: {}", e);
-                        }
-                    });
-                }
+                tokio::spawn(async move {
+                    if let Err(e) = index_chat_messages(
+                        &db_clone,
+                        &index_dir_path_clone,
+                        &session_id_clone,
+                        messages.clone(),
+                    )
+                    .await
+                    {
+                        tracing::error!("Failed to index chat messages: {}", e);
+                    }
+                });
+
                 // Send a notification if the client disconnected
                 if tx.is_closed() {
                     let _ = disconnect_receiver.recv().await;
