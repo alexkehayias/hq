@@ -69,8 +69,10 @@ docker run -p 2222:2222 -d hq:latest
 4. Store the public key in the GitHub repo (Settings -> Deploy Keys)
 5. Generate GitHub known hosts `sudo bash -c "ssh-keyscan -t rsa github.com >> /var/lib/dokku/data/storage/hq/.ssh/known_hosts"`
 7. Create data directory to persist indices between deploys `mkdir /var/lib/dokku/data/storage/hq/data && dokku storage:mount hq /var/lib/dokku/data/storage/hq:/root/data`
-8. Generate a VAPID key pair, private key with `openssl ecparam -genkey -name prime256v1 -out private_key.pem`, and public key with `openssl ec -in private_key.pem -pubout -outform DER|tail -c 65|base64|tr '/+' '_-'|tr -d '\n'` (remove the trailing `=` in the public key and hard code it into `index.js`)
-9. Add the following environment variables using `dokku config:set hq {ENV_VAR}`:
+8. Create skills directory `mkdir /var/lib/dokku/data/storage/hq/data/skills`
+9. Create workspace directory for memory `mkdir /var/lib/dokku/data/storage/hq/data/workspace`
+10. Generate a VAPID key pair, private key with `openssl ecparam -genkey -name prime256v1 -out private_key.pem`, and public key with `openssl ec -in private_key.pem -pubout -outform DER|tail -c 65|base64|tr '/+' '_-'|tr -d '\n'` (remove the trailing `=` in the public key and hard code it into `index.js`)
+11. Add the following environment variables using `dokku config:set hq {ENV_VAR}`:
 - `HQ_NOTES_REPO_URL` to the GitHub repo with notes
 - `HQ_NOTES_DEPLOY_KEY_PATH` to `/root/.ssh`
 - `HQ_STORAGE_PATH` to allow indices to persist between deploys
@@ -81,12 +83,13 @@ docker run -p 2222:2222 -d hq:latest
 - `HQ_LOCAL_LLM_HOST` for the OpenAI API hostname (defaults to "https://api.openai.com" if not set)
 - `HQ_CALENDAR_EMAIL` to us for meeting prep
 - `HQ_LOCAL_LLM_MODEL` for the OpenAI model to use (defaults to "gpt-4.1-mini" if not set)
+- `HQ_SYSTEM_MESSAGE` to customize the base system message for chat sessions
 - `OPENAI_API_KEY` for OpenAI API authentication (ignored when using a local LLM server)
 - `DOKKU_DOCKERFILE_START_CMD` to `serve --host 0.0.0.0 --port 2222`
-10. On local, add remote `git remote add dokku dokku@<dokku-host>:hq`
-11. Push to build and start `git push dokku main`
-12. Increase the default proxy timeout `dokku nginx:set hq proxy-read-timeout 5m`
-13. Redeploy the app so the `nginx` changes take effect `dokku deploy hq`
+12. On local, add remote `git remote add dokku dokku@<dokku-host>:hq`
+13. Push to build and start `git push dokku main`
+14. Increase the default proxy timeout `dokku nginx:set hq proxy-read-timeout 5m` and max body size `dokku nginx:set lm-proxy client-max-body-size 10m`
+15. Redeploy the app so the `nginx` changes take effect `dokku deploy hq`
 
 ## Queries
 
