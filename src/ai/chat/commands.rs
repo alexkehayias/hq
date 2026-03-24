@@ -11,6 +11,8 @@ pub enum SlashCommand {
     Exit,
     /// Show available commands (help)
     Help,
+    /// List all skills or show a specific skill's content
+    Skill { name: Option<String> },
     /// Parse error for a specific slash command
     Error(String),
     /// Not a slash command - regular chat message
@@ -46,6 +48,14 @@ impl FromStr for SlashCommand {
                     })
                 }
                 Command::Exit => Ok(SlashCommand::Exit),
+                Command::Skills { name } => {
+                    let joined_name = if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.join(" "))
+                    };
+                    Ok(SlashCommand::Skill { name: joined_name })
+                }
             },
             Err(e) => {
                 // For parse errors, we'll handle them in the router
@@ -83,6 +93,14 @@ pub enum Command {
     /// Exit current mode and return to chat
     #[command(override_usage = "/exit")]
     Exit,
+    /// List all available skills or show a specific skill's content
+    #[command(override_usage = "/skills <SKILL_NAME>")]
+    #[command(after_help = "List all skills: /skills\nShow a specific skill: /skills test-repo")]
+    Skills {
+        /// Optional skill name to show (if not provided, lists all skills)
+        #[arg(required = false, num_args = 1..)]
+        name: Vec<String>,
+    },
 }
 
 /// Get a help message for available commands.
@@ -140,6 +158,36 @@ mod tests {
         let _ = result.map(|slash_cmd| match slash_cmd {
             SlashCommand::Code { prompt } => assert_eq!(prompt, "hello world"),
             _ => panic!("Expected Code command"),
+        });
+    }
+
+    #[test]
+    fn test_parse_skill_list_all() {
+        let result = SlashCommand::from_str("/skills");
+        assert!(result.is_ok());
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Skill { name } => assert!(name.is_none()),
+            other => panic!("Expected Skill command, got {:?}", other),
+        });
+    }
+
+    #[test]
+    fn test_parse_skill_with_name() {
+        let result = SlashCommand::from_str("/skills test-repo");
+        assert!(result.is_ok());
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Skill { name } => assert_eq!(name, Some("test-repo".to_string())),
+            other => panic!("Expected Skill command, got {:?}", other),
+        });
+    }
+
+    #[test]
+    fn test_parse_skill_with_name_and_args() {
+        let result = SlashCommand::from_str("/skills test-repo with args");
+        assert!(result.is_ok());
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Skill { name } => assert_eq!(name, Some("test-repo with args".to_string())),
+            other => panic!("Expected Skill command, got {:?}", other),
         });
     }
 }

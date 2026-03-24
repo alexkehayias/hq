@@ -11,7 +11,7 @@ mod tests {
     use serial_test::serial;
     use tower::util::ServiceExt;
 
-    use crate::test_utils::{body_to_string, test_app, test_app_with_state};
+    use crate::test_utils::{body_to_string, test_app, test_app_with_state, test_app_with_skills};
 
     /// Tests getting chat sessions returns empty list initially
     #[tokio::test]
@@ -545,5 +545,150 @@ mod tests {
                 .expect("content")
                 .contains("Exited agent mode")
         );
+    }
+
+    /// Tests /skills command lists skills when no skill name is provided (empty registry)
+    #[tokio::test]
+    #[serial]
+    async fn it_lists_skills_with_empty_registry() {
+        let app = test_app().await;
+
+        // Send /skills command without a skill name
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": "test-skill-empty",
+                            "message": "/skills"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return OK (200)
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests /skills command with a specific skill name when registry is unavailable
+    #[tokio::test]
+    #[serial]
+    async fn it_shows_skill_not_found_when_registry_unavailable() {
+        let app = test_app().await;
+
+        // Send /skills with a skill name
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": "test-skill-not-found",
+                            "message": "/skills test-repo"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return OK (200) - the command parses but skill isn't found
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests /skills command lists available skills when registry is populated
+    #[tokio::test]
+    #[serial]
+    async fn it_lists_skills_with_populated_registry() {
+        let app = test_app_with_skills().await;
+
+        // Send /skills command without a skill name
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": "test-skill-list",
+                            "message": "/skills"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return OK (200)
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests /skills <name> command shows specific skill content
+    #[tokio::test]
+    #[serial]
+    async fn it_shows_specific_skill_content() {
+        let app = test_app_with_skills().await;
+
+        // Send /skills with a specific skill name
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": "test-skill-show",
+                            "message": "/skills test-repo"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return OK (200)
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests /skills with non-existent skill name shows error message
+    #[tokio::test]
+    #[serial]
+    async fn it_shows_error_for_nonexistent_skill() {
+        let app = test_app_with_skills().await;
+
+        // Send /skills with a non-existent skill name
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": "test-skill-nonexistent",
+                            "message": "/skills nonexistent-skill"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return OK (200) - but with error message in response body
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -109,7 +109,7 @@ impl Skill {
         Ok(Self {
             path,
             frontmatter,
-            body: body_content.to_string(),
+            body: body_content.trim().to_string(),
         })
     }
 
@@ -185,8 +185,7 @@ This skill helps you work with PDF files.
 ## Usage
 
 Run the extraction script:
-scripts/extract.py
-"#;
+scripts/extract.py"#;
 
         let path = PathBuf::from("/skills/pdf-processing");
         let skill = Skill::parse_from_content(path, content).unwrap();
@@ -215,15 +214,14 @@ name: simple-skill
 description: A simple skill for testing.
 ---
 
-Just do it.
-"#;
+Just do it."#;
 
         let path = PathBuf::from("/skills/simple-skill");
         let skill = Skill::parse_from_content(path, content).unwrap();
 
         assert_eq!(skill.frontmatter.name, "simple-skill");
         assert!(skill.frontmatter.license.is_none());
-        assert_eq!(skill.body, "Just do it.\n");
+        assert_eq!(skill.body, "Just do it.");
     }
 
     #[test]
@@ -233,8 +231,7 @@ name: PDF-Processing
 description: Invalid name with uppercase.
 ---
 
-Content here.
-"#;
+Content here."#;
 
         let path = PathBuf::from("/skills/PDF-Processing");
         assert!(Skill::parse_from_content(path, content).is_err());
@@ -247,8 +244,7 @@ name: test-skill
 description: ""
 ---
 
-Content here.
-"#;
+Content here."#;
 
         let path = PathBuf::from("/skills/test-skill");
         assert!(Skill::parse_from_content(path, content).is_err());
@@ -262,8 +258,7 @@ name: test-skill
 description: {}
 ---
 
-Content here.
-"#,
+Content here."#,
             "a".repeat(1025)
         );
 
@@ -278,8 +273,7 @@ name: pdf-processing
 description: A skill.
 ---
 
-Content here.
-"#;
+Content here."#;
 
         let path = PathBuf::from("/skills/different-name");
         assert!(Skill::parse_from_content(path, content).is_err());

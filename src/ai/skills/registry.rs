@@ -79,7 +79,7 @@ impl SkillRegistry {
         }
 
         tracing::info!(
-            "Loaded {} skill summary/ies from '{}'",
+            "Loaded {} skill summaries from '{}'",
             self.summaries.len(),
             dir_path.display()
         );

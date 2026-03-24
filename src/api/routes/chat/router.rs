@@ -375,6 +375,80 @@ async fn chat_handler(
                 )
                 .into_response());
         }
+        (SessionMode::Code, SlashCommand::Skill { name: _name }) => {
+            tracing::warn!("Attempted to activate a skill within coding agent session mode which is not allowed.");
+        }
+        (SessionMode::Chat, SlashCommand::Skill { name }) => {
+            // List all skills or show a specific skill's content
+            let response = if let Some(ref registry) = skill_registry {
+                if let Some(skill_name) = name {
+                    // Show specific skill content
+                    let skill_result = registry.load_skill(skill_name);
+
+                    match skill_result {
+                        Ok(skill) => {
+                            let skill_msg = format!(
+                                "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
+                                name = skill_name,
+                                path = skill.path.display(),
+                                content = skill.full_content(),
+                            );
+
+                            // Skills are "activated" by adding them to the
+                            // context via a User role message. Here we
+                            // persist the message so that it can be pulled
+                            // into the transcript
+                            let user_msg = Message::new(Role::User, &skill_msg);
+                            insert_chat_message(&db, &session_id, &user_msg).await?;
+
+                            skill_msg
+                        }
+                        Err(e) => {
+                            e.to_string()
+                        }
+                    }
+
+                } else {
+                    // List all skills
+                    let skills = registry.list_skills();
+                    if skills.is_empty() {
+                        "No skills available.".to_string()
+                    } else {
+                        let skill_list: Vec<String> = skills
+                            .iter()
+                            .map(|s| format!("- **{}**: {}", s.name, s.description))
+                            .collect();
+                        format!(
+                            "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
+                            skill_list.join("\n")
+                        )
+                    }
+                }
+            } else {
+                "Skill registry not available.".to_string()
+            };
+            tx.send(
+                json!({
+                    "choices": [{
+                        "delta": { "content": response }
+                    }]
+                })
+                .to_string(),
+            )?;
+            // Return early - don't fall through
+            let sse_stream =
+                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                    Ok::<Event, Infallible>(Event::default().data(chunk))
+                });
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
+        }
         (SessionMode::Chat, SlashCommand::None(_)) => {
             // Continue in chat mode - fall through to existing logic
         }
@@ -445,12 +519,14 @@ async fn chat_handler(
 
     // Initialize a new transcript
     if transcript.is_empty() {
-        let shared_state = state.read().expect("Unable to read share state");
-
         // NOTE: The system message is effectively immutable. Adding
         // new skills and continuing a chat session may cause it to
         // not be found.
-        let mut system_content = shared_state.config.system_message.clone();
+        let mut system_content = state.read()
+            .expect("Unable to read share state")
+            .config
+            .system_message
+            .clone();
 
         // Append skill instructions if there are skills in the registry
         if let Some(ref registry) = skill_registry {
@@ -459,14 +535,14 @@ async fn chat_handler(
                 let skill_names: Vec<String> = registry
                     .list_skills()
                     .iter()
-                    .map(|s| s.name.clone())
+                    .map(|s| format!("{}: {}", s.name, s.description))
                     .collect();
 
                 let skills_section = format!(
                     "\n\n## Available Skills\n\
                     You have access to the following skills. **Always use relevant skills first before using tools.**\n\
                     - {}\n\
-                    \nTo use a skill, first load it using the `load_skill` tool, then follow the instructions in the loaded skill.\n",
+                    \nTo use a skill, first load it using the `load_skill` tool. Loaded skills appear in the transcript enclosed in a `<skill>` tag so you can refer to them. You don't need to load a skill more than once. Skills are just instructions, they may reference other tools but you can't call a skill as a tool. Follow loaded skill instructions very carefully.",
                     skill_names.join("\n- ")
                 );
                 system_content.push_str(&skills_section);
@@ -475,8 +551,11 @@ async fn chat_handler(
 
         tracing::debug!("System message: {}", &system_content);
 
-        let default_system_msg = Message::new(Role::System, &system_content);
-        transcript.push(default_system_msg.clone());
+        // Save the system message and add it as the first message in
+        // the transcript
+        let system_msg = Message::new(Role::System, &system_content);
+        insert_chat_message(&db, &session_id, &system_msg).await?;
+        transcript.push(system_msg);
     }
 
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
