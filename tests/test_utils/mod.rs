@@ -1,7 +1,7 @@
 //! Test utilities for integration tests
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -175,6 +175,96 @@ pub async fn test_app_with_state() -> (Router, AppState) {
     };
     let app_state = AppState::new(db, app_config);
     (app(Arc::new(RwLock::new(app_state.clone()))), app_state)
+}
+
+/// Creates a test skill in the given directory.
+#[allow(dead_code)]
+pub fn create_test_skill(base_dir: &Path, name: &str, description: &str) -> PathBuf {
+    use std::fs;
+    let skill_dir = base_dir.join(name);
+    fs::create_dir_all(&skill_dir).expect("Failed to create skill directory");
+
+    let skill_content = format!(
+        r#"---
+name: {}
+description: {}
+---
+
+This is the body content of {}.
+It contains instructions for using this skill.
+"#,
+        name, description, name
+    );
+
+    fs::write(skill_dir.join("SKILL.md"), skill_content).expect("Failed to write SKILL.md");
+
+    skill_dir
+}
+
+/// Creates a test app with skills directory populated with test skills.
+#[allow(dead_code)]
+pub async fn test_app_with_skills() -> Router {
+    use std::fs;
+
+    // Create a unique directory for the test
+    let temp_dir = env::temp_dir();
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+    let dir = temp_dir.join(ts);
+    fs::create_dir_all(&dir).expect("Failed to create base directory");
+
+    // Create the required directories
+    let notes_path = dir.join("notes");
+    let index_path = dir.join("index");
+    let vec_db_path = dir.join("db");
+    let skills_path = dir.join("skills");
+    fs::create_dir_all(&notes_path).expect("Failed to create notes directory");
+    fs::create_dir_all(&index_path).expect("Failed to create index directory");
+    fs::create_dir_all(&vec_db_path).expect("Failed to create db directory");
+    fs::create_dir_all(&skills_path).expect("Failed to create skills directory");
+
+    // Create test skills
+    create_test_skill(&skills_path, "test-repo", "A test skill for repositories");
+    create_test_skill(&skills_path, "pdf-processing", "Process and extract data from PDF files");
+
+    let db_path_str = dir.join("db");
+    let db_path_str = db_path_str.to_str().unwrap();
+
+    let db = async_db(db_path_str)
+        .await
+        .expect("Failed to connect to async db");
+    db.call(|conn| {
+        initialize_db(conn).expect("Failed to migrate db");
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    index_dummy_notes_async(&db, dir.clone()).await;
+
+    let app_config = AppConfig {
+        notes_path: notes_path.display().to_string(),
+        index_path: index_path.display().to_string(),
+        vec_db_path: vec_db_path.to_str().unwrap().to_string(),
+        storage_path: dir.display().to_string(),
+        skills_path: skills_path.display().to_string(),
+        deploy_key_path: String::from("test_deploy_key_path"),
+        vapid_key_path: String::from("test_vapid_key_path"),
+        note_search_api_url: String::from("http://localhost:2222"),
+        gmail_api_client_id: String::from("test_client_id"),
+        gmail_api_client_secret: String::from("test_client_secret"),
+        google_search_api_key: String::from("test_google_search_key"),
+        google_search_cx_id: String::from("test_cx_id"),
+        openai_model: String::from("gpt-4o"),
+        openai_api_hostname: String::from("https://api.openai.com"),
+        openai_api_key: String::from("test-api-key"),
+        system_message: String::from("You are a helpful assistant."),
+    };
+    let app_state = AppState::new(db, app_config);
+    app(Arc::new(RwLock::new(app_state)))
 }
 
 /// Creates a chat message and indexes it for full-text search.
