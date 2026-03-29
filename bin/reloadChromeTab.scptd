@@ -1,5 +1,5 @@
 tell application "Google Chrome"
-	reload active tab of window 1
+	reload (tabs of window 1 whose URL contains "localhost:2222")
 end tell
 
 # add current time to message
