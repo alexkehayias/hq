@@ -201,12 +201,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                   const parsed = JSON.parse(data);
                   const content = parsed.choices[0].delta.content;
-                  const reasoning = parsed.choices[0].delta.reasoning;
+                  const reasoning =
+                    parsed.choices[0].delta.reasoning ||
+                    parsed.choices[0].delta.reasoning_content;
+
+                  // TODO: Handle rendering tool calls
                   const _toolCalls = parsed.choices[0].delta.tool_calls;
                   const _toolCallsFinished =
                     parsed.choices[0].finish_reason === 'tool_calls';
-
-                  // TODO: Handle rendering tool calls
 
                   // Handle content delta
                   if (content) {

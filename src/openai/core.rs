@@ -2,6 +2,7 @@ use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 
 use anyhow::{Error, Result};
+use tracing;
 use async_trait::async_trait;
 use erased_serde;
 use futures_util::StreamExt;
@@ -256,6 +257,13 @@ enum Delta {
 
     Reasoning { reasoning: String },
 
+    // Qwen uses "reasoning_content" instead of "reasoning"
+    ReasoningContent { reasoning_content: String },
+
+    // Some models send role along with content (e.g., first chunk has role)
+    #[allow(dead_code)]
+    ContentWithRole { role: String, content: Option<String> },
+
     ToolCall { tool_calls: Vec<ToolCallChunk> },
 
     Stop {},
@@ -302,6 +310,7 @@ pub async fn completion_stream(
         payload["tools"] = json!(tools);
     }
     let url = format!("{}/v1/chat/completions", api_hostname.trim_end_matches("/"));
+
     let response = reqwest::Client::new()
         .post(url)
         .bearer_auth(api_key)
@@ -309,8 +318,13 @@ pub async fn completion_stream(
         .timeout(Duration::from_secs(60 * 5))
         .json(&payload)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("API returned error status {}: {}", status, body);
+    }
 
     let mut stream = response.bytes_stream();
 
@@ -354,7 +368,10 @@ pub async fn completion_stream(
             // Forward the chunk to the receiver channel
             // (The result is ignored here because we want to complete
             // processing the response)
-            let _ = tx.send(data.to_string());
+            let send_result = tx.send(data.to_string());
+            if send_result.is_err() {
+                tracing::warn!("Failed to send chunk to channel (receiver likely dropped)");
+            }
 
             // Handle the end of the stream
             if data == "[DONE]" {
@@ -374,12 +391,28 @@ pub async fn completion_stream(
                     }
                     reasoning_buf += &reasoning.clone();
                 }
+                // Qwen3.5 sends back `reasoning_content`. This may
+                // also be a breaking API change from LM Studio
+                Delta::ReasoningContent { reasoning_content } => {
+                    if choice.finish_reason.is_some() {
+                        break 'outer;
+                    }
+                    reasoning_buf += &reasoning_content.clone();
+                }
                 Delta::Content { content } => {
                     if choice.finish_reason.is_some() {
                         break 'outer;
                     }
 
                     content_buf += &content.clone();
+                }
+                Delta::ContentWithRole { role: _, content } => {
+                    if choice.finish_reason.is_some() {
+                        break 'outer;
+                    }
+                    if let Some(c) = content {
+                        content_buf += &c.clone();
+                    }
                 }
                 Delta::ToolCall {
                     tool_calls: tool_call_deltas,
@@ -424,6 +457,11 @@ pub async fn completion_stream(
         }
     }
 
+    // Check for leftover data in buffer that wasn't processed
+    if !buffer.is_empty() {
+        tracing::warn!("Leftover data in buffer after processing: {:?}", buffer);
+    }
+
     // Handle if this is a tool call or a content message
     if !tool_calls.is_empty() {
         let tool_call_message = tool_calls.values().collect::<Vec<_>>();
@@ -438,6 +476,7 @@ pub async fn completion_stream(
             {"message": {"content": content_buf}}
         ]
     });
+
     Ok(out)
 }
 
@@ -637,6 +676,17 @@ mod tests {
         match delta {
             Delta::Reasoning { reasoning } => assert_eq!(reasoning, "Thinking..."),
             _ => panic!("Expected Reasoning variant"),
+        }
+    }
+
+    #[test]
+    fn test_delta_reasoning_content_deserialization() {
+        // Qwen uses "reasoning_content" instead of "reasoning"
+        let json = r#"{"reasoning_content":"Thinking..."}"#;
+        let delta: Delta = serde_json::from_str(json).unwrap();
+        match delta {
+            Delta::ReasoningContent { reasoning_content } => assert_eq!(reasoning_content, "Thinking..."),
+            _ => panic!("Expected ReasoningContent variant"),
         }
     }
 
