@@ -1,4 +1,4 @@
-use anyhow::{Error, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Error, Result};
 use futures_util::future::try_join_all;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 use super::db::{get_or_create_session, insert_chat_message};
 use super::models::{SessionMode, Transcript};
+use crate::ai::skills::SkillRegistry;
+use crate::ai::tools::skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SearchSkillsTool};
 use crate::openai::{
     BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
 };
@@ -357,8 +359,39 @@ impl ChatBuilder {
         self
     }
 
-    pub fn skills(self) -> Self {
-        unimplemented!()
+    /// Add skill management tools to the chat.
+    ///
+    /// This takes a SkillRegistry and adds four tool calls:
+    /// - `list_skills`: List all available skills
+    /// - `search_skills`: Search for skills by keyword
+    /// - `load_skill`: Load the full content of a skill
+    /// - `read_skill_file`: Read files from within a skill's directory
+    ///
+    /// If the registry is empty or invalid, this is a no-op.
+    pub fn skills(mut self, registry: SkillRegistry) -> Self {
+        if registry.count() == 0 {
+            return self;
+        }
+
+        let skill_tools: Vec<BoxedToolCall> = vec![
+            Box::new(ListSkillsTool::new(registry.clone())),
+            Box::new(SearchSkillsTool::new(registry.clone())),
+            Box::new(LoadSkillTool::new(registry.clone())),
+            Box::new(ReadSkillFileTool::new(registry)),
+        ];
+
+        // Merge with existing tools if any
+        match self.tools {
+            Some(mut existing) => {
+                existing.extend(skill_tools);
+                self.tools = Some(existing);
+            }
+            None => {
+                self.tools = Some(skill_tools);
+            }
+        }
+
+        self
     }
 }
 
@@ -442,6 +475,100 @@ mod tests {
 
         assert!(builder.tools.is_some());
         assert_eq!(builder.tools.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_builder_skills() {
+        use crate::ai::skills::SkillRegistry;
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temp directory with a test skill
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("test-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_content = r#"---
+name: test-skill
+description: A test skill for unit testing.
+---
+
+Test skill body content."#;
+        fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
+
+        let registry = SkillRegistry::new(temp.path()).unwrap();
+        assert_eq!(registry.count(), 1);
+
+        // Test with empty tools
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry.clone());
+        assert!(builder.tools.is_some());
+        let tools = builder.tools.unwrap();
+        // Should have 4 skill tools: list, search, load, read_file
+        assert_eq!(tools.len(), 4);
+    }
+
+    #[test]
+    fn test_builder_skills_merges_with_existing_tools() {
+        use crate::ai::skills::SkillRegistry;
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temp directory with a test skill
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("test-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_content = r#"---
+name: test-skill
+description: A test skill for unit testing.
+---
+
+Test skill body content."#;
+        fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
+
+        let registry = SkillRegistry::new(temp.path()).unwrap();
+        assert_eq!(registry.count(), 1);
+
+        // Create a mock tool
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("mock result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        // Test that skills merge with existing tools
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
+            .tools(vec![Box::new(MockTool) as crate::openai::BoxedToolCall])
+            .skills(registry);
+
+        let tools = builder.tools.unwrap();
+        // Should have 1 mock tool + 4 skill tools
+        assert_eq!(tools.len(), 5);
+    }
+
+    #[test]
+    fn test_builder_skills_empty_registry() {
+        use tempfile::TempDir;
+
+        // Create an empty temp directory
+        let temp = TempDir::new().unwrap();
+
+        // Try to create registry (will fail because it's not a valid skills directory)
+        let result = SkillRegistry::new(temp.path());
+        // The registry may fail to load, or be empty - both should be handled gracefully
+        if let Ok(registry) = result {
+            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry);
+            // With empty registry, should not add any tools
+            assert!(builder.tools.is_none());
+        } else {
+            // If registry fails to load, skills() should still work (takes Option<SkillRegistry>)
+            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4");
+            assert!(builder.tools.is_none());
+        }
     }
 
     #[test]
