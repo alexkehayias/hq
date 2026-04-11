@@ -7,7 +7,6 @@ module.exports = {
     extend: {},
   },
   plugins: [
-    require('@tailwindcss/forms'),
     plugin(({ addUtilities }) => {
       addUtilities({
         '.scrollbar-none': {

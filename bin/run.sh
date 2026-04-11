@@ -2,8 +2,16 @@
 set -euo pipefail
 
 cd ./web-ui
-../bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
-../bin/biome check
+
+ARCH=$(uname -m)
+if [ "$ARCH" = "arm64" ]; then
+    ../bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
+    ../bin/biome check
+else
+    pnpx tailwindcss@3.4.11 -i ./src/input.css -o ./src/output.css -m
+    pnpx biome check
+fi
+
 cd ..
 # cargo test
 
