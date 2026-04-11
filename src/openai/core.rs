@@ -335,7 +335,18 @@ pub async fn completion_stream(
 
     'outer: while let Some(chunk) = stream.next().await {
         let chunk = chunk.expect("Invalid chunk");
-        let chunk_str = std::str::from_utf8(&chunk)?;
+        let chunk_str = match std::str::from_utf8(&chunk) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to decode chunk as UTF-8: {}. Chunk bytes (len={}): {:?}",
+                    e,
+                    chunk.len(),
+                    &chunk[..chunk.len().min(100)]
+                );
+                return Err(anyhow::anyhow!("Failed to decode chunk as UTF-8: {}", e));
+            }
+        };
 
         // Append new data to buffer. This is necessary to handle SSE
         // fragmentation over HTTP/2 frames.
