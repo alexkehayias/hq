@@ -40,9 +40,6 @@
   p {
     @apply text-gray-700 dark:text-gray-300 leading-relaxed;
   }
-  p a {
-    @apply text-gray-900 dark:text-gray-100 underline;
-  }
   p code,
   ul code,
   ol code {
@@ -59,6 +56,15 @@
   }
   ol li {
     @apply list-decimal list-outside ml-4 pl-1 mt-2 text-gray-700 dark:text-gray-300;
+  }
+  a {
+    @apply text-blue-600 dark:text-blue-400 underline;
+  }
+  a:hover {
+    @apply text-blue-800 dark:text-blue-300;
+  }
+  blockquote {
+    @apply border-l-4 border-gray-300 dark:border-gray-600 pl-4 py-1 my-6 text-gray-600 dark:text-gray-400 italic bg-gray-50 dark:bg-gray-800/50 rounded-r;
   }
   table {
     @apply w-full border-collapse overflow-x-auto block rounded-lg bg-white dark:bg-gray-900;
