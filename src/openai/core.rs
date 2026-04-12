@@ -315,7 +315,7 @@ pub async fn completion_stream(
         .post(url)
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(60 * 5))
+        .timeout(Duration::from_secs(60 * 10))
         .json(&payload)
         .send()
         .await?;
