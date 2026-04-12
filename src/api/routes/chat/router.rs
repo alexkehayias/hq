@@ -146,7 +146,12 @@ async fn handle_agent_mode(
                                 "delta": { "content": text }
                             }]
                         });
-                        let _ = sse_tx.send(chunk.to_string());
+                        // Skip sending if client disconnected
+                        if !sse_tx.is_closed() {
+                            let _ = sse_tx.send(chunk.to_string());
+                        } else {
+                            break;
+                        }
                     }
                 }
                 Ok(StreamEvent::MessageStop) => {
@@ -171,7 +176,10 @@ async fn handle_agent_mode(
                             "delta": { "content": format!("Error: {}", e) }
                         }]
                     });
-                    let _ = sse_tx.send(err_chunk.to_string());
+                    // Skip sending if client disconnected
+                    if !sse_tx.is_closed() {
+                        let _ = sse_tx.send(err_chunk.to_string());
+                    }
                 }
             }
         }
@@ -230,6 +238,7 @@ async fn chat_handler(
         let AppConfig {
             note_search_api_url,
             storage_path,
+            index_path,
             skills_path,
             openai_api_hostname,
             openai_api_key,
@@ -237,7 +246,6 @@ async fn chat_handler(
             vapid_key_path,
             ..
         } = &shared_state.config;
-        let index_dir_path = format!("{}/index", storage_path);
         (
             NoteSearchTool::new(note_search_api_url),
             MeetingSearchTool::new(note_search_api_url),
@@ -253,7 +261,7 @@ async fn chat_handler(
             openai_api_key.clone(),
             openai_model.clone(),
             vapid_key_path.clone(),
-            index_dir_path,
+            index_path.clone(),
         )
     };
 
@@ -316,14 +324,14 @@ async fn chat_handler(
             let assistant_msg = Message::new(Role::Assistant, exit_response);
             insert_chat_message(&db, &session_id, &assistant_msg).await?;
 
-            tx.send(
+            let _ = tx.send(
                 json!({
                     "choices": [{
                         "delta": { "content": exit_response }
                     }]
                 })
                 .to_string(),
-            )?;
+            );
 
             // Return early to avoid falling through to chat logic
             let sse_stream = StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
@@ -353,14 +361,14 @@ async fn chat_handler(
         (SessionMode::Chat, SlashCommand::Exit) => {
             // Already in chat mode, /exit is a no-op - store messages for consistency
             let exit_msg = "Already in chat mode. How can I help?";
-            tx.send(
+            let _ = tx.send(
                 json!({
                     "choices": [{
                         "delta": { "content": exit_msg }
                     }]
                 })
                 .to_string(),
-            )?;
+            );
             // Return early - don't fall through to chat logic
             let sse_stream =
                 tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
@@ -427,14 +435,14 @@ async fn chat_handler(
             } else {
                 "Skill registry not available.".to_string()
             };
-            tx.send(
+            let _ = tx.send(
                 json!({
                     "choices": [{
                         "delta": { "content": response }
                     }]
                 })
                 .to_string(),
-            )?;
+            );
             // Return early - don't fall through
             let sse_stream =
                 tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
@@ -453,14 +461,14 @@ async fn chat_handler(
             // Continue in chat mode - fall through to existing logic
         }
         (_, SlashCommand::Error(err_msg)) => {
-            tx.send(
+            let _ = tx.send(
                 json!({
                     "choices": [{
                         "delta": { "content": err_msg }
                     }]
                 })
                 .to_string(),
-            )?;
+            );
             // Return early - don't fall through
             let sse_stream =
                 tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
@@ -478,14 +486,14 @@ async fn chat_handler(
         (_, SlashCommand::Help) => {
             // Show help text - same in both modes
             let help_msg = get_help_text();
-            tx.send(
+            let _ = tx.send(
                 json!({
                     "choices": [{
                         "delta": { "content": help_msg }
                     }]
                 })
                 .to_string(),
-            )?;
+            );
             // Return early - don't fall through
             let sse_stream =
                 tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
@@ -632,7 +640,10 @@ async fn chat_handler(
                     ]
                 })
                 .to_string();
-                tx.send(completion_chunk)?;
+                // Skip sending if client disconnected
+                if !tx.is_closed() {
+                    let _ = tx.send(completion_chunk);
+                }
             }
         }
         Ok::<(), anyhow::Error>(())
