@@ -22,6 +22,7 @@ pub struct EmailUnreadArgs {
 pub struct EmailUnreadTool {
     pub r#type: ToolType,
     pub function: Function<EmailUnreadProps>,
+    #[serde(skip_serializing)]
     api_base_url: String,
 }
 

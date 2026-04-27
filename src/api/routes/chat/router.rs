@@ -31,7 +31,7 @@ use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::{
     CalendarTool, EmailUnreadTool, ListSkillsTool, LoadSkillTool, MeetingSearchTool, MemoryTool,
     NoteSearchTool, ReadSkillFileTool, SearchSkillsTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, UnsafeBashTool, WebSearchTool, WebsiteViewTool,
+    TasksScheduledTodayTool, BashTool, WebSearchTool, WebsiteViewTool,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -227,6 +227,7 @@ async fn chat_handler(
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
         memory_tool,
+        bash_tool,
         skill_registry,
         openai_api_hostname,
         openai_api_key,
@@ -256,6 +257,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             MemoryTool::new(storage_path),
+            BashTool::new(storage_path, &session_id),
             SkillRegistry::new(skills_path).ok(),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
@@ -276,8 +278,7 @@ async fn chat_handler(
         Box::new(tasks_scheduled_today_tool),
         #[cfg(debug_assertions)]
         Box::new(memory_tool),
-        #[cfg(debug_assertions)]
-        Box::new(UnsafeBashTool::new()),
+        Box::new(bash_tool),
     ];
 
     // Add skill tools if there is a skills in the registry

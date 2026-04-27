@@ -1,9 +1,12 @@
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
+use bashkit::{Bash, PosixFs, RealFs, RealFsMode};
 use serde::{Deserialize, Serialize};
-use std::process::Stdio;
-use tokio::process::Command;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::fs;
+
 
 #[derive(Serialize)]
 pub struct BashProps {
@@ -25,39 +28,46 @@ pub struct BashOutput {
     pub stdout: String,
     /// The standard error from the command.
     pub stderr: String,
-    /// Whether the command was killed due to timeout.
-    pub timed_out: bool,
+    /// Whether the output was truncated due to size limits.
+    pub truncated: bool,
 }
 
+/// Provides virtual bash shell with filesystem read write access to
+/// the session workspace. Subsequent `BashTool` calls can access
+/// files from previous calls in the same session.
 #[derive(Serialize)]
-pub struct UnsafeBashTool {
+pub struct BashTool {
     pub r#type: ToolType,
     pub function: Function<BashProps>,
+    #[serde(skip_serializing)]
+    workspace_path: PathBuf,
 }
 
 #[async_trait]
-impl ToolCall for UnsafeBashTool {
+impl ToolCall for BashTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: BashArgs = serde_json::from_str(args).unwrap();
 
-        // Run the command with a clean environment (no env vars)
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg(&fn_args.command)
-            .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-            .env("HOME", std::env::var("HOME").unwrap_or_default())
-            .env("USER", std::env::var("USER").unwrap_or_default())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await?;
+        // Make sure the session workspace exists and create it if it
+        // doesn't. This is idempotent.
+        if !&self.workspace_path.exists(){
+            fs::create_dir(&self.workspace_path).await?;
+        }
+
+        let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite).expect("Failed to create RealFs");
+        let fs = Arc::new(PosixFs::new(backend));
+
+        // Run the command using bashkit with real filesystem access
+        let mut bash = Bash::builder()
+            .fs(fs)
+            .build();
+        let output = bash.exec(&fn_args.command).await?;
 
         let result = BashOutput {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            timed_out: false,
+            exit_code: output.exit_code,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            truncated: output.stdout_truncated || output.stderr_truncated,
         };
 
         Ok(serde_json::to_string(&result)?)
@@ -68,8 +78,13 @@ impl ToolCall for UnsafeBashTool {
     }
 }
 
-impl UnsafeBashTool {
-    pub fn new() -> Self {
+impl BashTool {
+    pub fn new(storage_path: &str, session_id: &str) -> Self {
+        // Only allow access to the session's directory in the
+        // workspace to avoid potential security issues from
+        // overwriting files in another session
+        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+
         let parameters = Parameters {
             r#type: String::from("object"),
             properties: BashProps {
@@ -98,23 +113,28 @@ impl UnsafeBashTool {
         Self {
             r#type: ToolType::Function,
             function,
+            workspace_path
         }
-    }
-}
-
-impl Default for UnsafeBashTool {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use uuid::Uuid;
+
+    fn temp_bash_tool() -> BashTool {
+        let binding = env::temp_dir();
+        let temp_dir = binding.to_string_lossy();
+        std::fs::create_dir(format!("{}/workspace", temp_dir)).ok();
+        let session_id = Uuid::new_v4().to_string();
+        BashTool::new(&temp_dir, &session_id)
+    }
 
     #[tokio::test]
     async fn test_bash_echo() {
-        let tool = UnsafeBashTool::new();
+        let tool = temp_bash_tool();
         let result = tool.call(r#"{"command": "echo hello"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -124,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_stderr() {
-        let tool = UnsafeBashTool::new();
+        let tool = temp_bash_tool();
         let result = tool.call(r#"{"command": "echo error >&2"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -134,7 +154,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_exit_code() {
-        let tool = UnsafeBashTool::new();
+        let tool = temp_bash_tool();
         let result = tool.call(r#"{"command": "exit 42"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -143,12 +163,185 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_no_env_vars() {
-        let tool = UnsafeBashTool::new();
+        let tool = temp_bash_tool();
         let result = tool.call(r#"{"command": "echo $PATH"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
         // Should have a clean PATH, not the full system PATH
         assert_eq!(output.exit_code, 0);
         // The clean PATH should be set but different from the full system path
+    }
+
+    #[tokio::test]
+    async fn test_bash_variables() {
+        let tool = temp_bash_tool();
+        let result = tool
+            .call(r#"{"command": "NAME=World; echo \"Hello, $NAME\""}"#)
+            .await
+            .unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim(), "Hello, World");
+    }
+
+    #[tokio::test]
+    async fn test_bash_pipeline() {
+        let tool = temp_bash_tool();
+        let result = tool
+            .call(r#"{"command": "echo -e 'apple\nbanana\ncherry' | grep a"}"#)
+            .await
+            .unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim(), "apple\nbanana");
+    }
+
+    #[tokio::test]
+    async fn test_bash_arithmetic() {
+        let tool = temp_bash_tool();
+        let result = tool.call(r#"{"command": "echo $((2 + 2 * 3))"}"#).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        // 2 + (2 * 3) = 8
+        assert_eq!(output.stdout.trim(), "8");
+    }
+
+    #[tokio::test]
+    async fn test_bash_function() {
+        let tool = temp_bash_tool();
+        let result = tool
+            .call(r#"{"command": "greet() { echo \"Hello, $1!\"; }; greet World"}"#)
+            .await
+            .unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim(), "Hello, World!");
+    }
+
+    #[tokio::test]
+    async fn test_bash_truncated_field() {
+        let tool = temp_bash_tool();
+        let result = tool.call(r#"{"command": "echo hello"}"#).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        // Small output should not be truncated
+        assert!(!output.truncated);
+    }
+
+    #[tokio::test]
+    async fn test_bash_function_name() {
+        let tool = temp_bash_tool();
+        assert_eq!(tool.function_name(), "bash");
+    }
+
+    #[tokio::test]
+    async fn test_bash_filesystem() {
+        use bashkit::Bash;
+
+        // Use a single Bash instance to persist virtual filesystem state
+        let mut bash = Bash::new();
+
+        // Create a file in the virtual filesystem
+        let output = bash.exec("echo 'Hello, World!' > /tmp/test.txt").await.unwrap();
+        assert_eq!(output.exit_code, 0);
+
+        // Read the file back
+        let output = bash.exec("cat /tmp/test.txt").await.unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim(), "Hello, World!");
+    }
+
+    #[tokio::test]
+    async fn test_bash_mkdir() {
+        use bashkit::Bash;
+
+        // Use a single Bash instance to persist virtual filesystem state
+        let mut bash = Bash::new();
+
+        // Create a directory
+        let output = bash.exec("mkdir -p /tmp/mydir").await.unwrap();
+        assert_eq!(output.exit_code, 0);
+
+        // Create a file in that directory
+        let output = bash.exec("echo 'content' > /tmp/mydir/file.txt").await.unwrap();
+        assert_eq!(output.exit_code, 0);
+
+        // Verify the file exists
+        let output = bash.exec("ls /tmp/mydir/file.txt").await.unwrap();
+        assert_eq!(output.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bash_session_isolation() {
+        use std::env;
+
+        // Create two separate tool instances with different session IDs
+        let binding = env::temp_dir();
+        let temp_dir = binding.to_string_lossy().to_string();
+        let session1_id = Uuid::new_v4().to_string();
+        let session2_id = Uuid::new_v4().to_string();
+
+        let tool1 = BashTool::new(&temp_dir, &session1_id);
+        let tool2 = BashTool::new(&temp_dir, &session2_id);
+
+        // Session 1 creates a file in its workspace directory
+        let session1_workspace = format!("{}/workspace/{}", temp_dir, session1_id);
+        let cmd1 = format!("mkdir -p '{}' && echo 'secret' > '{}/test.txt'", session1_workspace, session1_workspace);
+        let args1 = serde_json::json!({ "command": cmd1 }).to_string();
+        let result = tool1.call(&args1).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+        assert_eq!(output.exit_code, 0);
+
+        // Session 2 should NOT be able to read the file from session 1's workspace
+        let _session2_workspace = format!("{}/workspace/{}", temp_dir, session2_id);
+        let cmd2 = format!("cat '{}/test.txt'", session1_workspace);
+        let args2 = serde_json::json!({ "command": cmd2 }).to_string();
+        let result = tool2.call(&args2).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        // Should fail (non-zero exit code) because session 2 cannot access session 1's files
+        assert_ne!(output.exit_code, 0, "Session 2 should not be able to read session 1's files");
+    }
+
+    #[tokio::test]
+    async fn test_bash_session_isolation_write() {
+        use std::env;
+
+        // Create two separate tool instances with different session IDs
+        let binding = env::temp_dir();
+        let temp_dir = binding.to_string_lossy().to_string();
+        let session1_id = Uuid::new_v4().to_string();
+        let session2_id = Uuid::new_v4().to_string();
+
+        let tool1 = BashTool::new(&temp_dir, &session1_id);
+        let tool2 = BashTool::new(&temp_dir, &session2_id);
+
+        // Create session 1's workspace with a file
+        let session1_workspace = format!("{}/workspace/{}", temp_dir, session1_id);
+        let cmd1 = format!("mkdir -p '{}' && echo 'original' > '{}/file.txt'", session1_workspace, session1_workspace);
+        let args1 = serde_json::json!({ "command": cmd1 }).to_string();
+        let result = tool1.call(&args1).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+        assert_eq!(output.exit_code, 0);
+
+        // Session 2 should NOT be able to write to session 1's workspace
+        let cmd2 = format!("echo 'test' > '{}/file.txt'", session1_workspace);
+        let args2 = serde_json::json!({ "command": cmd2 }).to_string();
+        let result = tool2.call(&args2).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+
+        // Should fail because session 2 cannot write to session 1's workspace
+        assert_ne!(output.exit_code, 0, "Session 2 should not be able to write to session 1's workspace");
+
+        // Verify the original content is still intact
+        let cmd3 = format!("cat '{}/file.txt'", session1_workspace);
+        let args3 = serde_json::json!({ "command": cmd3 }).to_string();
+        let result = tool1.call(&args3).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+        assert_eq!(output.stdout.trim(), "original");
     }
 }

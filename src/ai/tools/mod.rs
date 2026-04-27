@@ -1,5 +1,5 @@
 pub mod bash;
-pub use bash::UnsafeBashTool;
+pub use bash::BashTool;
 
 pub mod meeting_search;
 pub use meeting_search::MeetingSearchTool;
