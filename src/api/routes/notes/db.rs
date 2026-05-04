@@ -7,9 +7,9 @@ pub async fn get_note_by_id(
     db: &Connection,
     id: String,
 ) -> Result<ViewNoteResponse, anyhow::Error> {
-    db.call(move |conn| {
-        let result = conn
-            .prepare(
+    let result = db
+        .call(move |conn: &mut rusqlite::Connection| -> Result<ViewNoteResponse, tokio_rusqlite::Error> {
+            let mut stmt = conn.prepare(
                 r"
           SELECT
             id,
@@ -17,25 +17,27 @@ pub async fn get_note_by_id(
             body,
             tags
           FROM note_meta
-          WHERE id = ?
+          WHERE id = ?1
           LIMIT 1
         ",
-            )
-            .expect("Failed to prepare sql statement")
-            .query_map([id], |i| {
+            )?;
+            let mut rows = stmt.query_map([id.clone()], |i| {
                 Ok(ViewNoteResponse {
                     id: i.get(0)?,
                     title: i.get(1)?,
                     body: i.get(2)?,
                     tags: i.get(3)?,
                 })
-            })
-            .unwrap()
-            .last()
-            .unwrap()
-            .unwrap();
-        Ok(result)
-    })
-    .await
-    .map_err(|e| e.into())
+            })?;
+            match rows.next() {
+                Some(Ok(note)) => Ok(note),
+                Some(Err(e)) => Err(tokio_rusqlite::Error::from(e)),
+                None => {
+                    let msg = "Note not found";
+                    Err(tokio_rusqlite::Error::from(rusqlite::Error::InvalidParameterName(msg.into())))
+                }
+            }
+        })
+        .await;
+    result.map_err(anyhow::Error::from)
 }

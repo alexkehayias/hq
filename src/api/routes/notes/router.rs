@@ -5,6 +5,8 @@ use std::sync::{Arc, RwLock};
 use axum::{
     Router,
     extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
 };
 use axum_extra::extract::Query;
@@ -85,10 +87,15 @@ async fn index_notes(
 async fn view_note(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> Result<axum::Json<public::ViewNoteResponse>, crate::api::public::ApiError> {
+) -> Result<axum::response::Response, crate::api::public::ApiError> {
     let db = state.read().unwrap().db.clone();
-    let note_result = notes_db::get_note_by_id(&db, id).await?;
-    Ok(axum::Json(note_result))
+    match notes_db::get_note_by_id(&db, id).await {
+        Ok(note) => Ok(axum::Json(note).into_response()),
+        Err(e) if e.to_string().contains("Note not found") => {
+            Ok((StatusCode::NOT_FOUND, "Note not found").into_response())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Create the notes router
