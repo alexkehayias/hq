@@ -198,7 +198,7 @@ mod tests {
         assert!(body.contains("\"id\""));
     }
 
-    /// Tests viewing a note by ID that doesn't exist returns 500 (not ideal, but current behavior)
+    /// Tests viewing a note by ID that doesn't exist returns 404
     #[tokio::test]
     #[serial]
     async fn it_returns_error_for_nonexistent_note() {
@@ -214,8 +214,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Currently returns 500 due to unhandled None in db.rs (should be 404)
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     /// Tests searching notes with tags:meeting query (used by MeetingSearchTool)
