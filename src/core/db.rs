@@ -438,6 +438,42 @@ COMMIT;",
         Err(e) => println!("Add is_valid to push_notification table failed: {}", e),
     };
 
+    // 2026-05-07 Add eval tables
+    let create_eval_run_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS eval_run (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT,
+    started_at TEXT,
+    completed_at TEXT
+);",
+        [],
+    );
+
+    match create_eval_run_table {
+        Ok(_) => (),
+        Err(e) => println!("Create eval_run table failed: {}", e),
+    };
+
+    let create_eval_result_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS eval_result (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES eval_run(id),
+    case_id TEXT NOT NULL,
+    input TEXT NOT NULL,
+    output TEXT,
+    passed INTEGER NOT NULL,
+    error TEXT
+);",
+        [],
+    );
+
+    match create_eval_result_table {
+        Ok(_) => (),
+        Err(e) => println!("Create eval_result table failed: {}", e),
+    };
+
     Ok(())
 }
 

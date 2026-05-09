@@ -4,6 +4,7 @@ use std::env;
 
 pub mod auth;
 pub mod chat;
+pub mod eval;
 pub mod index;
 pub mod init;
 pub mod job;
@@ -76,6 +77,19 @@ enum Command {
         #[arg(long, value_enum)]
         id: JobId,
     },
+    /// Run an eval
+    Eval {
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        api_key: String,
+        #[arg(long, default_value = "https://api.openai.com")]
+        api_hostname: String,
+        #[arg(long)]
+        db: Option<String>,
+    },
 }
 
 #[derive(Parser)]
@@ -137,6 +151,9 @@ pub async fn run() -> Result<()> {
         }
         Some(Command::Job { id }) => {
             job::run(id).await?;
+        }
+        Some(Command::Eval { file, model, api_key, api_hostname, db }) => {
+            eval::run_eval(file, model, api_key, api_hostname, db).await?;
         }
         None => {}
     }
