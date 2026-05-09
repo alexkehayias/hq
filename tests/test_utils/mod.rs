@@ -3,7 +3,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
 
 use axum::{Router, body::Body};
 
@@ -31,16 +30,10 @@ pub async fn body_to_string(body: Body) -> String {
 /// --test-threads=1`.
 #[allow(dead_code)] // Otherwise test crates give dead code warning
 pub async fn test_app() -> Router {
-    // Create a unique directory for the test with a randomly
-    // generated name using a timestamp to avoid collisions and
-    // vulnerabilities
+    // Create a unique directory for the test using a UUID to avoid
+    // collisions between tests running in the same second
     let temp_dir = env::temp_dir();
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        .to_string();
-    let dir = temp_dir.join(ts);
+    let dir = temp_dir.join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&dir).expect("Failed to create base directory");
 
     // Create the directory from each path
@@ -120,16 +113,10 @@ async fn index_dummy_notes_async(db: &tokio_rusqlite::Connection, temp_dir: Path
 /// This is primarily used for tests that need to insert data directly.
 #[allow(dead_code)]
 pub async fn test_app_with_state() -> (Router, AppState) {
-    // Create a unique directory for the test with a randomly
-    // generated name using a timestamp to avoid collisions and
-    // vulnerabilities
+    // Create a unique directory for the test using a UUID to avoid
+    // collisions between tests running in the same second
     let temp_dir = env::temp_dir();
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        .to_string();
-    let dir = temp_dir.join(ts);
+    let dir = temp_dir.join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&dir).expect("Failed to create base directory");
 
     // Create the directory from each path
@@ -206,14 +193,10 @@ It contains instructions for using this skill.
 pub async fn test_app_with_skills() -> Router {
     use std::fs;
 
-    // Create a unique directory for the test
+    // Create a unique directory for the test using a UUID to avoid
+    // collisions between tests running in the same second
     let temp_dir = env::temp_dir();
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        .to_string();
-    let dir = temp_dir.join(ts);
+    let dir = temp_dir.join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&dir).expect("Failed to create base directory");
 
     // Create the required directories
