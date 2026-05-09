@@ -90,10 +90,8 @@ async fn view_note(
 ) -> Result<axum::response::Response, crate::api::public::ApiError> {
     let db = state.read().unwrap().db.clone();
     match notes_db::get_note_by_id(&db, id).await {
-        Ok(note) => Ok(axum::Json(note).into_response()),
-        Err(e) if e.to_string().contains("Note not found") => {
-            Ok((StatusCode::NOT_FOUND, "Note not found").into_response())
-        }
+        Ok(Some(note)) => Ok(axum::Json(note).into_response()),
+        Ok(None) => Ok((StatusCode::NOT_FOUND, "Note not found").into_response()),
         Err(e) => Err(e.into()),
     }
 }
