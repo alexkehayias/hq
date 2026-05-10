@@ -1,28 +1,47 @@
+use std::env;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
 use crate::core::db;
 use crate::eval::run;
 
-pub async fn run_eval(
-    file: String,
-    model: String,
-    api_key: String,
+pub async fn run(
+    db_path: String,
     api_hostname: String,
-    db_path: Option<String>,
+    api_key: String,
+    model: String,
+    file: String,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
-    let storage_path = std::env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
-    let path = db_path.unwrap_or(format!("{}/db", storage_path));
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
-    let conn = db::async_db(&path).await?;
+    tracing::info!("Eval config — model: {}, api_hostname: {}", model, api_hostname);
 
-    let run_result = run::run_eval(
-        &conn,
-        &file,
-        &model,
-        &api_key,
-        &api_hostname,
-    )
-    .await?;
+    if dry_run {
+        run::run_eval_dry(
+            &api_hostname,
+            &api_key,
+            &model,
+            &file,
+        ).await?;
+    } else {
+        let conn = db::async_db(&db_path).await?;
+        let run_result = run::run_eval(
+            &conn,
+            &api_hostname,
+            &api_key,
+            &model,
+            &file,
+        )
+        .await?;
 
-    run::print_results(&conn, &run_result.id).await?;
+        run::print_results(&conn, &run_result.id).await?;
+    }
 
     Ok(())
 }

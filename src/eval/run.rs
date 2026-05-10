@@ -1,9 +1,10 @@
 use std::path::Path;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
+use crate::ai::chat::ChatBuilder;
 use crate::eval::{EvalCase, EvalExpected, EvalRun};
 use crate::eval::db;
-use crate::openai::{Message, Role, completion};
+use crate::openai::{Message, Role};
 
 pub async fn load_cases_from_jsonl(path: &Path) -> anyhow::Result<Vec<EvalCase>> {
     let content = tokio::fs::read_to_string(path).await?;
@@ -30,12 +31,32 @@ fn check_expected(output: &str, expected: &EvalExpected) -> bool {
     true
 }
 
+async fn run_case(
+    api_hostname: &str,
+    api_key: &str,
+    model: &str,
+    case: &EvalCase,
+) -> anyhow::Result<String> {
+    let msg = Message::new(Role::User, &case.prompt);
+    let mut chat = ChatBuilder::new(api_hostname, api_key, model)
+        .transcript(vec![msg.clone()])
+        .build();
+
+    let messages = chat.next_msg(msg).await?;
+
+    messages
+        .iter()
+        .find(|m| m.role() == &Role::Assistant)
+        .and_then(|m| m.content.clone())
+        .ok_or_else(|| anyhow::anyhow!("No assistant response for case {}", case.id))
+}
+
 pub async fn run_eval(
     conn: &Connection,
-    file_path: &str,
-    model: &str,
-    api_key: &str,
     api_hostname: &str,
+    api_key: &str,
+    model: &str,
+    file_path: &str,
 ) -> anyhow::Result<EvalRun> {
     let path = Path::new(file_path);
     let name = path
@@ -54,21 +75,23 @@ pub async fn run_eval(
         let result_id = Uuid::new_v4().to_string();
         let case_id = case.id.clone();
 
-        let messages = vec![Message::new(Role::User, &case.prompt)];
+        tracing::info!("Running eval case: {}", case_id);
 
-        match completion(&messages, &None, api_hostname, api_key, model).await {
-            Ok(response) => {
-                let output = response["choices"]
-                    .as_array()
-                    .and_then(|arr| arr.first())
-                    .and_then(|c| c["message"]["content"].as_str())
-                    .unwrap_or("")
-                    .to_string();
-
+        match run_case(api_hostname, api_key, model, &case).await {
+            Ok(output) => {
                 let passed = check_expected(&output, &case.expected);
+                if !passed {
+                    tracing::warn!(
+                        "Eval case FAILED: {} — expected to contain {:?}, got: {}",
+                        case_id,
+                        case.expected.contains,
+                        output
+                    );
+                }
                 db::insert_result(conn, &result_id, &run_id, &case_id, &case.prompt, Some(&output), passed, None).await?;
             }
             Err(e) => {
+                tracing::error!("Eval case ERROR: {} — {}", case_id, e);
                 db::insert_result(conn, &result_id, &run_id, &case_id, &case.prompt, None, false, Some(&e.to_string())).await?;
             }
         }
@@ -77,6 +100,56 @@ pub async fn run_eval(
     db::update_run_status(conn, &run_id, "completed").await?;
 
     Ok(db::get_run(conn, &run_id).await?.expect("eval run must exist after insertion"))
+}
+
+pub async fn run_eval_dry(
+    api_hostname: &str,
+    api_key: &str,
+    model: &str,
+    file_path: &str,
+) -> anyhow::Result<()> {
+    let path = Path::new(file_path);
+    let cases = load_cases_from_jsonl(path).await?;
+    let mut total = 0;
+    let mut passed_count = 0;
+
+    println!("\n=== Eval Run Summary (dry run) ===");
+    println!("Model: {}", model);
+    println!("\n=== Results ===");
+
+    for case in cases {
+        let case_id = case.id.clone();
+        tracing::info!("Running eval case: {}", case_id);
+
+        match run_case(api_hostname, api_key, model, &case).await {
+            Ok(output) => {
+                let passed = check_expected(&output, &case.expected);
+                total += 1;
+                if passed {
+                    passed_count += 1;
+                } else {
+                    tracing::warn!(
+                        "Eval case FAILED: {} — expected to contain {:?}, got: {}",
+                        case_id,
+                        case.expected.contains,
+                        output
+                    );
+                }
+                let status = if passed { "PASS" } else { "FAIL" };
+                println!("[{}] {}", status, case_id);
+            }
+            Err(e) => {
+                total += 1;
+                tracing::error!("Eval case ERROR: {} — {}", case_id, e);
+                println!("[FAIL] {}", case_id);
+                println!("  Error: {}", e);
+            }
+        }
+    }
+
+    println!("\nTotal: {} | Passed: {} | Failed: {}", total, passed_count, total - passed_count);
+
+    Ok(())
 }
 
 pub async fn print_results(conn: &Connection, run_id: &str) -> anyhow::Result<()> {
