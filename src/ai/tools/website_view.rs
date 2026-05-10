@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
@@ -53,7 +55,11 @@ impl ToolCall for WebsiteViewTool {
         // params?
 
         // Fetch the HTML content from the URL
-        let response = reqwest::Client::new().get(&clean_url).send().await;
+        let response = reqwest::Client::new()
+            .get(&clean_url)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await;
 
         // Handle request errors like timeouts
         let content = match response {
