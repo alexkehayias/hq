@@ -288,7 +288,7 @@ struct CompletionChunk {
     #[allow(dead_code)]
     model: String,
     #[allow(dead_code)]
-    system_fingerprint: String,
+    system_fingerprint: Option<String>,
     choices: Vec<CompletionChunkChoice>,
 }
 
