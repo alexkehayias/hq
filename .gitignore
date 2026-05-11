@@ -1,6 +1,5 @@
 /target
 /.index
-/Cargo.lock
 /web-ui/node_modules
 /notes
 /db
