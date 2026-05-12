@@ -1,8 +1,8 @@
 use std::env;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::core::db;
-use crate::eval::run;
+use crate::core::db::async_db;
+use crate::eval::runner;
 
 pub async fn run(
     db_path: String,
@@ -23,16 +23,16 @@ pub async fn run(
     tracing::info!("Eval config — model: {}, api_hostname: {}", model, api_hostname);
 
     if dry_run {
-        run::run_eval_dry(
+        runner::run_eval_dry(
             &api_hostname,
             &api_key,
             &model,
             &file,
         ).await?;
     } else {
-        let conn = db::async_db(&db_path).await?;
-        let run_result = run::run_eval(
-            &conn,
+        let db = async_db(&db_path).await?;
+        let run_result = runner::run_eval(
+            &db,
             &api_hostname,
             &api_key,
             &model,
@@ -40,7 +40,7 @@ pub async fn run(
         )
         .await?;
 
-        run::print_results(&conn, &run_result.id).await?;
+        runner::print_results(&db, &run_result.id).await?;
     }
 
     Ok(())

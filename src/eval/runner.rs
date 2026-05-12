@@ -1,12 +1,14 @@
 use std::path::Path;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
+use anyhow::{anyhow, Result};
+
 use crate::ai::chat::ChatBuilder;
-use crate::eval::{EvalCase, EvalExpected, EvalRun};
-use crate::eval::db;
+use crate::eval::models::{EvalCase, EvalExpected, EvalRun};
+use crate::eval::db::{get_run, get_run_results, insert_result, insert_run, update_run_status};
 use crate::openai::{Message, Role};
 
-pub async fn load_cases_from_jsonl(path: &Path) -> anyhow::Result<Vec<EvalCase>> {
+pub async fn load_cases_from_jsonl(path: &Path) -> Result<Vec<EvalCase>> {
     let content = tokio::fs::read_to_string(path).await?;
     let mut cases = Vec::new();
 
@@ -36,7 +38,7 @@ async fn run_case(
     api_key: &str,
     model: &str,
     case: &EvalCase,
-) -> anyhow::Result<String> {
+) -> Result<String> {
     let msg = Message::new(Role::User, &case.prompt);
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)
         .transcript(vec![msg.clone()])
@@ -48,16 +50,16 @@ async fn run_case(
         .iter()
         .find(|m| m.role() == &Role::Assistant)
         .and_then(|m| m.content.clone())
-        .ok_or_else(|| anyhow::anyhow!("No assistant response for case {}", case.id))
+        .ok_or_else(|| anyhow!("No assistant response for case {}", case.id))
 }
 
 pub async fn run_eval(
-    conn: &Connection,
+    db: &Connection,
     api_hostname: &str,
     api_key: &str,
     model: &str,
     file_path: &str,
-) -> anyhow::Result<EvalRun> {
+) -> Result<EvalRun> {
     let path = Path::new(file_path);
     let name = path
         .file_stem()
@@ -66,10 +68,10 @@ pub async fn run_eval(
         .to_string();
 
     let run_id = Uuid::new_v4().to_string();
-    db::insert_run(conn, &run_id, &name, model).await?;
+    insert_run(db, &run_id, &name, model).await?;
 
     let cases = load_cases_from_jsonl(path).await?;
-    db::update_run_status(conn, &run_id, "running").await?;
+    update_run_status(db, &run_id, "running").await?;
 
     for case in cases {
         let result_id = Uuid::new_v4().to_string();
@@ -88,18 +90,18 @@ pub async fn run_eval(
                         output
                     );
                 }
-                db::insert_result(conn, &result_id, &run_id, &case_id, &case.prompt, Some(&output), passed, None).await?;
+                insert_result(db, &result_id, &run_id, &case_id, &case.prompt, Some(&output), passed, None).await?;
             }
             Err(e) => {
                 tracing::error!("Eval case ERROR: {} — {}", case_id, e);
-                db::insert_result(conn, &result_id, &run_id, &case_id, &case.prompt, None, false, Some(&e.to_string())).await?;
+                insert_result(db, &result_id, &run_id, &case_id, &case.prompt, None, false, Some(&e.to_string())).await?;
             }
         }
     }
 
-    db::update_run_status(conn, &run_id, "completed").await?;
+    update_run_status(db, &run_id, "completed").await?;
 
-    Ok(db::get_run(conn, &run_id).await?.expect("eval run must exist after insertion"))
+    Ok(get_run(db, &run_id).await?.expect("eval run must exist after insertion"))
 }
 
 pub async fn run_eval_dry(
@@ -107,7 +109,7 @@ pub async fn run_eval_dry(
     api_key: &str,
     model: &str,
     file_path: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let path = Path::new(file_path);
     let cases = load_cases_from_jsonl(path).await?;
     let mut total = 0;
@@ -152,8 +154,8 @@ pub async fn run_eval_dry(
     Ok(())
 }
 
-pub async fn print_results(conn: &Connection, run_id: &str) -> anyhow::Result<()> {
-    let run = db::get_run(conn, run_id).await?;
+pub async fn print_results(db: &Connection, run_id: &str) -> Result<()> {
+    let run = get_run(db, run_id).await?;
     if let Some(r) = run {
         println!("\n=== Eval Run Summary ===");
         println!("Name: {}", r.name);
@@ -166,7 +168,7 @@ pub async fn print_results(conn: &Connection, run_id: &str) -> anyhow::Result<()
         }
     }
 
-    let results = db::get_run_results(conn, run_id).await?;
+    let results = get_run_results(db, run_id).await?;
     let total = results.len();
     let passed_count = results.iter().filter(|r| r.passed).count();
 

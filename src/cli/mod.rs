@@ -84,12 +84,6 @@ enum Command {
         /// Override the model from config
         #[arg(long)]
         model: Option<String>,
-        /// Override the API key from config
-        #[arg(long)]
-        api_key: Option<String>,
-        /// Override the API hostname from config
-        #[arg(long)]
-        api_hostname: Option<String>,
         /// Run without saving results to the database
         #[arg(long, default_value = "false")]
         dry_run: bool,
@@ -156,11 +150,11 @@ pub async fn run() -> Result<()> {
         Some(Command::Job { id }) => {
             job::run(id).await?;
         }
-        Some(Command::Eval { api_hostname, api_key, model, file, dry_run }) => {
+        Some(Command::Eval { model, file, dry_run }) => {
 
-            let api_key = api_key.unwrap_or_else(|| env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string()));
-            let api_hostname = api_hostname.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string()));
-            let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string()));
+            let api_key = env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let api_hostname = env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
         }
