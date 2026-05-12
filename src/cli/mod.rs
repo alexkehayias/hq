@@ -4,6 +4,7 @@ use std::env;
 
 pub mod auth;
 pub mod chat;
+pub mod eval;
 pub mod index;
 pub mod init;
 pub mod job;
@@ -76,6 +77,17 @@ enum Command {
         #[arg(long, value_enum)]
         id: JobId,
     },
+    /// Run an eval
+    Eval {
+        #[arg(long)]
+        file: String,
+        /// Override the model from config
+        #[arg(long)]
+        model: Option<String>,
+        /// Run without saving results to the database
+        #[arg(long, default_value = "false")]
+        dry_run: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -137,6 +149,14 @@ pub async fn run() -> Result<()> {
         }
         Some(Command::Job { id }) => {
             job::run(id).await?;
+        }
+        Some(Command::Eval { model, file, dry_run }) => {
+
+            let api_key = env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let api_hostname = env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
+
+            eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
         }
         None => {}
     }
