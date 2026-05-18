@@ -54,13 +54,15 @@ impl ToolCall for BashTool {
             fs::create_dir(&self.workspace_path).await?;
         }
 
+        // Mount the workspace directory from the host to the agent at
+        // the root. This avoids issues with the agent trying to look
+        // for files higher in the filesystem and not being able to
+        // access them.
         let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite).expect("Failed to create RealFs");
         let fs = Arc::new(PosixFs::new(backend));
+        let mut bash = Bash::new();
+        bash.mount("/", fs)?;
 
-        // Run the command using bashkit with real filesystem access
-        let mut bash = Bash::builder()
-            .fs(fs)
-            .build();
         let output = bash.exec(&fn_args.command).await?;
 
         let result = BashOutput {

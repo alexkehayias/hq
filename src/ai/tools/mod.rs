@@ -26,4 +26,4 @@ pub mod memory;
 pub use memory::MemoryTool;
 
 pub mod skills;
-pub use skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SearchSkillsTool};
+pub use skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, WorkOnSkillTool};

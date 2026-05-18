@@ -30,8 +30,8 @@ use crate::ai::chat::{
 use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::{
     CalendarTool, EmailUnreadTool, ListSkillsTool, LoadSkillTool, MeetingSearchTool, MemoryTool,
-    NoteSearchTool, ReadSkillFileTool, SearchSkillsTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, BashTool, WebSearchTool, WebsiteViewTool,
+    NoteSearchTool, ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, TasksDueTodayTool,
+    TasksScheduledTodayTool, BashTool, WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -234,6 +234,8 @@ async fn chat_handler(
         openai_model,
         vapid_key_path,
         index_dir_path,
+        skills_path_owned,
+        storage_path_owned,
     ) = {
         let shared_state = state.read().expect("Unable to read share state");
         let AppConfig {
@@ -258,12 +260,14 @@ async fn chat_handler(
             TasksScheduledTodayTool::new(note_search_api_url),
             MemoryTool::new(storage_path),
             BashTool::new(storage_path, &session_id),
-            SkillRegistry::new(skills_path).ok(),
+            Arc::new(RwLock::new(SkillRegistry::new(skills_path).ok())),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
             openai_model.clone(),
             vapid_key_path.clone(),
             index_path.clone(),
+            skills_path.clone(),
+            storage_path.clone(),
         )
     };
 
@@ -283,14 +287,20 @@ async fn chat_handler(
 
     // Add skill tools if there is a skills in the registry
     let mut skill_tools: Vec<BoxedToolCall> = vec![];
-    if let Some(ref registry) = skill_registry
-        && registry.count() > 0
     {
-        skill_tools.push(Box::new(ListSkillsTool::new(registry.clone())));
-        skill_tools.push(Box::new(SearchSkillsTool::new(registry.clone())));
-        skill_tools.push(Box::new(LoadSkillTool::new(registry.clone())));
-        skill_tools.push(Box::new(ReadSkillFileTool::new(registry.clone())));
+        let guard = skill_registry.read().expect("Unable to read skill registry");
+        if let Some(ref registry) = *guard
+            && registry.count() > 0
+        {
+            skill_tools.push(Box::new(ListSkillsTool::new(registry.clone())));
+            skill_tools.push(Box::new(SearchSkillsTool::new(registry.clone())));
+            skill_tools.push(Box::new(LoadSkillTool::new(registry.clone())));
+            skill_tools.push(Box::new(ReadSkillFileTool::new(registry.clone())));
+        }
     }
+    // Always add work_on_skill and save_skill when skills_path exists
+    skill_tools.push(Box::new(WorkOnSkillTool::new(&skills_path_owned, &storage_path_owned, &session_id)));
+    skill_tools.push(Box::new(SaveSkillTool::new(&skills_path_owned, &storage_path_owned, &session_id, skill_registry.clone())));
     all_tools.extend(skill_tools);
 
     let tools = all_tools;
@@ -389,53 +399,54 @@ async fn chat_handler(
         }
         (SessionMode::Chat, SlashCommand::Skill { name }) => {
             // List all skills or show a specific skill's content
-            let response = if let Some(ref registry) = skill_registry {
-                if let Some(skill_name) = name {
-                    // Show specific skill content
-                    let skill_result = registry.load_skill(skill_name);
+            let (response, persist_skill_msg) = {
+                let guard = skill_registry.read().expect("Unable to read skill registry");
+                if let Some(ref registry) = *guard {
+                    if let Some(skill_name) = name {
+                        // Show specific skill content
+                        let skill_result = registry.load_skill(skill_name);
 
-                    match skill_result {
-                        Ok(skill) => {
-                            let skill_msg = format!(
-                                "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
-                                name = skill_name,
-                                path = skill.path.display(),
-                                content = skill.full_content(),
-                            );
+                        match skill_result {
+                            Ok(skill) => {
+                                let skill_msg = format!(
+                                    "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
+                                    name = skill_name,
+                                    path = skill.path.display(),
+                                    content = skill.full_content(),
+                                );
 
-                            // Skills are "activated" by adding them to the
-                            // context via a User role message. Here we
-                            // persist the message so that it can be pulled
-                            // into the transcript
-                            let user_msg = Message::new(Role::User, &skill_msg);
-                            insert_chat_message(&db, &session_id, &user_msg).await?;
-
-                            skill_msg
+                                (skill_msg, true)
+                            }
+                            Err(e) => {
+                                (e.to_string(), false)
+                            }
                         }
-                        Err(e) => {
-                            e.to_string()
-                        }
-                    }
 
-                } else {
-                    // List all skills
-                    let skills = registry.list_skills();
-                    if skills.is_empty() {
-                        "No skills available.".to_string()
                     } else {
-                        let skill_list: Vec<String> = skills
-                            .iter()
-                            .map(|s| format!("- **{}**: {}", s.name, s.description))
-                            .collect();
-                        format!(
-                            "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
-                            skill_list.join("\n")
-                        )
+                        // List all skills
+                        let skills = registry.list_skills();
+                        if skills.is_empty() {
+                            ("No skills available.".to_string(), false)
+                        } else {
+                            let skill_list: Vec<String> = skills
+                                .iter()
+                                .map(|s| format!("- **{}**: {}", s.name, s.description))
+                                .collect();
+                            (format!(
+                                "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
+                                skill_list.join("\n")
+                            ), false)
+                        }
                     }
+                } else {
+                    ("Skill registry not available.".to_string(), false)
                 }
-            } else {
-                "Skill registry not available.".to_string()
             };
+
+            if persist_skill_msg {
+                let user_msg = Message::new(Role::User, &response);
+                insert_chat_message(&db, &session_id, &user_msg).await?;
+            }
             let _ = tx.send(
                 json!({
                     "choices": [{
@@ -538,23 +549,26 @@ async fn chat_handler(
             .clone();
 
         // Append skill instructions if there are skills in the registry
-        if let Some(ref registry) = skill_registry {
-            let skill_count = registry.count();
-            if skill_count > 0 {
-                let skill_names: Vec<String> = registry
-                    .list_skills()
-                    .iter()
-                    .map(|s| format!("{}: {}", s.name, s.description))
-                    .collect();
+        {
+            let guard = skill_registry.read().expect("Unable to read skill registry");
+            if let Some(ref registry) = *guard {
+                let skill_count = registry.count();
+                if skill_count > 0 {
+                    let skill_names: Vec<String> = registry
+                        .list_skills()
+                        .iter()
+                        .map(|s| format!("{}: {}", s.name, s.description))
+                        .collect();
 
-                let skills_section = format!(
-                    "\n\n## Available Skills\n\
-                    You have access to the following skills. **Always use relevant skills first before using tools.**\n\
-                    - {}\n\
-                    \nTo use a skill, first load it using the `load_skill` tool. Loaded skills appear in the transcript enclosed in a `<skill>` tag so you can refer to them. You don't need to load a skill more than once. Skills are just instructions, they may reference other tools but you can't call a skill as a tool. Follow loaded skill instructions very carefully.",
-                    skill_names.join("\n- ")
-                );
-                system_content.push_str(&skills_section);
+                    let skills_section = format!(
+                        "\n\n## Available Skills\n\
+                        You have access to the following skills. **Always use relevant skills first before using tools.**\n\
+                        - {}\n\
+                        \nTo use a skill, first load it using the `load_skill` tool. Loaded skills appear in the transcript enclosed in a `<skill>` tag so you can refer to them. You don't need to load a skill more than once. Skills are just instructions, they may reference other tools but you can't call a skill as a tool. Follow loaded skill instructions very carefully.",
+                        skill_names.join("\n- ")
+                    );
+                    system_content.push_str(&skills_section);
+                }
             }
         }
 

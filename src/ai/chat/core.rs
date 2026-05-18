@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::db::{get_or_create_session, insert_chat_message};
 use super::models::{SessionMode, Transcript};
 use crate::ai::skills::SkillRegistry;
-use crate::ai::tools::skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SearchSkillsTool};
+use crate::ai::tools::skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, WorkOnSkillTool};
 use crate::openai::{
     BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
 };
@@ -361,23 +361,29 @@ impl ChatBuilder {
 
     /// Add skill management tools to the chat.
     ///
-    /// This takes a SkillRegistry and adds four tool calls:
+    /// This takes a SkillRegistry and adds tool calls:
     /// - `list_skills`: List all available skills
     /// - `search_skills`: Search for skills by keyword
     /// - `load_skill`: Load the full content of a skill
     /// - `read_skill_file`: Read files from within a skill's directory
+    /// - `work_on_skill`: Prepare a skill for editing in the workspace
+    /// - `save_skill`: Save a skill from workspace back to global directory
     ///
+    /// Requires `storage_path` and `session_id` for workspace tools.
     /// If the registry is empty or invalid, this is a no-op.
-    pub fn skills(mut self, registry: SkillRegistry) -> Self {
+    pub fn skills(mut self, registry: SkillRegistry, storage_path: &str, session_id: &str) -> Self {
         if registry.count() == 0 {
             return self;
         }
 
+        let skills_dir = registry.dir_path().to_string_lossy().to_string();
         let skill_tools: Vec<BoxedToolCall> = vec![
             Box::new(ListSkillsTool::new(registry.clone())),
             Box::new(SearchSkillsTool::new(registry.clone())),
             Box::new(LoadSkillTool::new(registry.clone())),
-            Box::new(ReadSkillFileTool::new(registry)),
+            Box::new(ReadSkillFileTool::new(registry.clone())),
+            Box::new(WorkOnSkillTool::new(&skills_dir, storage_path, session_id)),
+            Box::new(SaveSkillTool::new(&skills_dir, storage_path, session_id, std::sync::Arc::new(std::sync::RwLock::new(Some(registry))))),
         ];
 
         // Merge with existing tools if any
@@ -499,11 +505,12 @@ Test skill body content."#;
         assert_eq!(registry.count(), 1);
 
         // Test with empty tools
-        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry.clone());
+        let storage_path = temp.path().to_string_lossy().to_string();
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry.clone(), &storage_path, "test-session");
         assert!(builder.tools.is_some());
         let tools = builder.tools.unwrap();
-        // Should have 4 skill tools: list, search, load, read_file
-        assert_eq!(tools.len(), 4);
+        // Should have 6 skill tools: list, search, load, read_file, work_on_skill, save_skill
+        assert_eq!(tools.len(), 6);
     }
 
     #[test]
@@ -541,13 +548,14 @@ Test skill body content."#;
         }
 
         // Test that skills merge with existing tools
+        let storage_path = temp.path().to_string_lossy().to_string();
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
             .tools(vec![Box::new(MockTool) as crate::openai::BoxedToolCall])
-            .skills(registry);
+            .skills(registry, &storage_path, "test-session");
 
         let tools = builder.tools.unwrap();
-        // Should have 1 mock tool + 4 skill tools
-        assert_eq!(tools.len(), 5);
+        // Should have 1 mock tool + 6 skill tools
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]
@@ -561,7 +569,8 @@ Test skill body content."#;
         let result = SkillRegistry::new(temp.path());
         // The registry may fail to load, or be empty - both should be handled gracefully
         if let Ok(registry) = result {
-            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry);
+            let storage_path = temp.path().to_string_lossy().to_string();
+            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry, &storage_path, "test-session");
             // With empty registry, should not add any tools
             assert!(builder.tools.is_none());
         } else {
