@@ -1,9 +1,13 @@
+mod utils;
+
 pub mod list;
 pub mod load;
 pub mod read_file;
 pub mod save;
 pub mod search;
 pub mod work_on;
+
+pub use utils::copy_dir;
 
 pub use list::ListSkillsTool;
 pub use load::{LoadSkillTool, SkillContent};

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Error, Result};
 use futures_util::future::try_join_all;
 use serde_json::Value;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
@@ -361,30 +362,46 @@ impl ChatBuilder {
 
     /// Add skill management tools to the chat.
     ///
-    /// This takes a SkillRegistry and adds tool calls:
+    /// Takes an `Arc<RwLock<Option<SkillRegistry>>>` so that
+    /// `save_skill` can reload the registry through the same shared
+    /// handle the rest of the system uses.
+    ///
+    /// Adds the following tool calls:
+    /// - `work_on_skill`: Prepare a skill for editing in the workspace
+    /// - `save_skill`: Save a skill from workspace back to global directory
+    ///
+    /// If the registry has skills loaded, also adds:
     /// - `list_skills`: List all available skills
     /// - `search_skills`: Search for skills by keyword
     /// - `load_skill`: Load the full content of a skill
     /// - `read_skill_file`: Read files from within a skill's directory
-    /// - `work_on_skill`: Prepare a skill for editing in the workspace
-    /// - `save_skill`: Save a skill from workspace back to global directory
     ///
     /// Requires `storage_path` and `session_id` for workspace tools.
-    /// If the registry is empty or invalid, this is a no-op.
-    pub fn skills(mut self, registry: SkillRegistry, storage_path: &str, session_id: &str) -> Self {
-        if registry.count() == 0 {
-            return self;
-        }
+    /// The workspace tools are always added even when no skills are
+    /// registered, so the agent can create new skills.
+    pub fn skills(mut self, registry_handle: Arc<RwLock<Option<SkillRegistry>>>, storage_path: &str, session_id: &str) -> Self {
+        let registry = match registry_handle.read() {
+            Ok(guard) => match guard.as_ref() {
+                Some(r) => r.clone(),
+                None => return self,
+            },
+            Err(_) => return self,
+        };
 
         let skills_dir = registry.dir_path().to_string_lossy().to_string();
-        let skill_tools: Vec<BoxedToolCall> = vec![
-            Box::new(ListSkillsTool::new(registry.clone())),
-            Box::new(SearchSkillsTool::new(registry.clone())),
-            Box::new(LoadSkillTool::new(registry.clone())),
-            Box::new(ReadSkillFileTool::new(registry.clone())),
+        let count = registry.count();
+
+        let mut skill_tools: Vec<BoxedToolCall> = vec![
             Box::new(WorkOnSkillTool::new(&skills_dir, storage_path, session_id)),
-            Box::new(SaveSkillTool::new(&skills_dir, storage_path, session_id, std::sync::Arc::new(std::sync::RwLock::new(Some(registry))))),
+            Box::new(SaveSkillTool::new(&skills_dir, storage_path, session_id, registry_handle)),
         ];
+
+        if count > 0 {
+            skill_tools.push(Box::new(ListSkillsTool::new(registry.clone())));
+            skill_tools.push(Box::new(SearchSkillsTool::new(registry.clone())));
+            skill_tools.push(Box::new(LoadSkillTool::new(registry.clone())));
+            skill_tools.push(Box::new(ReadSkillFileTool::new(registry)));
+        }
 
         // Merge with existing tools if any
         match self.tools {
@@ -506,7 +523,8 @@ Test skill body content."#;
 
         // Test with empty tools
         let storage_path = temp.path().to_string_lossy().to_string();
-        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry.clone(), &storage_path, "test-session");
+        let handle = Arc::new(RwLock::new(Some(registry.clone())));
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(handle, &storage_path, "test-session");
         assert!(builder.tools.is_some());
         let tools = builder.tools.unwrap();
         // Should have 6 skill tools: list, search, load, read_file, work_on_skill, save_skill
@@ -549,9 +567,10 @@ Test skill body content."#;
 
         // Test that skills merge with existing tools
         let storage_path = temp.path().to_string_lossy().to_string();
+        let handle = Arc::new(RwLock::new(Some(registry)));
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
             .tools(vec![Box::new(MockTool) as crate::openai::BoxedToolCall])
-            .skills(registry, &storage_path, "test-session");
+            .skills(handle, &storage_path, "test-session");
 
         let tools = builder.tools.unwrap();
         // Should have 1 mock tool + 6 skill tools
@@ -570,9 +589,12 @@ Test skill body content."#;
         // The registry may fail to load, or be empty - both should be handled gracefully
         if let Ok(registry) = result {
             let storage_path = temp.path().to_string_lossy().to_string();
-            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(registry, &storage_path, "test-session");
-            // With empty registry, should not add any tools
-            assert!(builder.tools.is_none());
+            let handle = Arc::new(RwLock::new(Some(registry)));
+            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(handle, &storage_path, "test-session");
+            // With empty registry, should still add workspace tools
+            // (work_on_skill, save_skill) so the agent can create new skills
+            assert!(builder.tools.is_some());
+            assert_eq!(builder.tools.unwrap().len(), 2);
         } else {
             // If registry fails to load, skills() should still work (takes Option<SkillRegistry>)
             let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4");

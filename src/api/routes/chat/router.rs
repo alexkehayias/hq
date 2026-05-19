@@ -29,9 +29,8 @@ use crate::ai::chat::{
 };
 use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, ListSkillsTool, LoadSkillTool, MeetingSearchTool, MemoryTool,
-    NoteSearchTool, ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, BashTool, WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
+    BashTool, CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
+    TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -234,7 +233,6 @@ async fn chat_handler(
         openai_model,
         vapid_key_path,
         index_dir_path,
-        skills_path_owned,
         storage_path_owned,
     ) = {
         let shared_state = state.read().expect("Unable to read share state");
@@ -266,12 +264,11 @@ async fn chat_handler(
             openai_model.clone(),
             vapid_key_path.clone(),
             index_path.clone(),
-            skills_path.clone(),
             storage_path.clone(),
         )
     };
 
-    let mut all_tools: Vec<BoxedToolCall> = vec![
+    let all_tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
         Box::new(meeting_search_tool),
         Box::new(web_search_tool),
@@ -284,24 +281,6 @@ async fn chat_handler(
         Box::new(memory_tool),
         Box::new(bash_tool),
     ];
-
-    // Add skill tools if there is a skills in the registry
-    let mut skill_tools: Vec<BoxedToolCall> = vec![];
-    {
-        let guard = skill_registry.read().expect("Unable to read skill registry");
-        if let Some(ref registry) = *guard
-            && registry.count() > 0
-        {
-            skill_tools.push(Box::new(ListSkillsTool::new(registry.clone())));
-            skill_tools.push(Box::new(SearchSkillsTool::new(registry.clone())));
-            skill_tools.push(Box::new(LoadSkillTool::new(registry.clone())));
-            skill_tools.push(Box::new(ReadSkillFileTool::new(registry.clone())));
-        }
-    }
-    // Always add work_on_skill and save_skill when skills_path exists
-    skill_tools.push(Box::new(WorkOnSkillTool::new(&skills_path_owned, &storage_path_owned, &session_id)));
-    skill_tools.push(Box::new(SaveSkillTool::new(&skills_path_owned, &storage_path_owned, &session_id, skill_registry.clone())));
-    all_tools.extend(skill_tools);
 
     let tools = all_tools;
     let user_msg = Message::new(Role::User, &payload.message);
@@ -585,8 +564,12 @@ async fn chat_handler(
         .database(&db, Some(&session_id), None)
         .transcript(transcript)
         .tools(tools)
-        .streaming(tx.clone())
-        .build();
+        .streaming(tx.clone());
+
+    // Add skill management tools if the registry is available
+    chat = chat.skills(skill_registry.clone(), &storage_path_owned, &session_id);
+
+    let mut chat = chat.build();
 
     tokio::spawn(async move {
         let result = chat.next_msg(user_msg.clone()).await;

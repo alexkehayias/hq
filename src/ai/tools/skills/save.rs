@@ -1,12 +1,11 @@
 use crate::ai::skills::{Skill, SkillRegistry};
 use crate::ai::skills::validation::validate_skill_name;
+use crate::ai::tools::skills::copy_dir;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use tokio::fs;
 
@@ -31,6 +30,10 @@ pub struct SaveSkillResult {
     pub valid: bool,
     /// Validation error message if SKILL.md is invalid, with guidance on how to fix it
     pub validation_error: Option<String>,
+    /// Non-fatal warning about the save (e.g. registry reload failure).
+    /// The file was saved, but the skill may not be usable until the
+    /// server is restarted.
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -77,6 +80,7 @@ impl ToolCall for SaveSkillTool {
                      Create the file using bash, then try save_skill again.",
                     workspace_skill.display()
                 )),
+                warning: None,
             })?);
         }
 
@@ -95,6 +99,7 @@ impl ToolCall for SaveSkillTool {
                      e.g.:\n---\nname: {}\ndescription: <short description>\n---\n<skill instructions>",
                     e, name
                 )),
+                warning: None,
             })?);
         }
 
@@ -105,14 +110,25 @@ impl ToolCall for SaveSkillTool {
         if global_dest.exists() {
             fs::remove_dir_all(&global_dest).await?;
         }
-        copy_dir_recursive(&workspace_skill, &global_dest).await?;
+        copy_dir(&workspace_skill, &global_dest).await?;
 
         // Reload the registry to pick up changes
-        if let Ok(mut guard) = self.registry.write()
+        let reload_error = if let Ok(mut guard) = self.registry.write()
             && let Some(ref mut registry) = *guard
-                && let Err(e) = registry.reload() {
-                    tracing::error!("Failed to reload skill registry after save: {}", e);
-                }
+        {
+            registry.reload().err().map(|e| {
+                tracing::error!("Failed to reload skill registry after save: {}", e);
+                format!(
+                    "Skill saved to disk but registry reload failed ({}). \
+                     The skill may not be available until the server is restarted.",
+                    e
+                )
+            })
+        } else {
+            Some("Skill saved to disk but registry is not available. \
+                  The skill may not be usable until the server is restarted."
+                .to_string())
+        };
 
         let result = SaveSkillResult {
             name,
@@ -120,6 +136,7 @@ impl ToolCall for SaveSkillTool {
             created: Some(created),
             valid: true,
             validation_error: None,
+            warning: reload_error,
         };
         Ok(serde_json::to_string(&result)?)
     }
@@ -173,29 +190,6 @@ impl SaveSkillTool {
         }
     }
 }
-
-fn copy_dir_recursive(src: &PathBuf, dest: &PathBuf) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
-    let src = src.clone();
-    let dest = dest.clone();
-    Box::pin(async move {
-        fs::create_dir_all(&dest).await?;
-
-        let mut entries = fs::read_dir(&src).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let src_path = entry.path();
-            let dest_path = dest.join(entry.file_name());
-
-            if src_path.is_dir() {
-                copy_dir_recursive(&src_path, &dest_path).await?;
-            } else {
-                fs::copy(&src_path, &dest_path).await?;
-            }
-        }
-
-        Ok(())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

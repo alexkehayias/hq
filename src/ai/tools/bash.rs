@@ -32,6 +32,12 @@ pub struct BashOutput {
     pub truncated: bool,
 }
 
+/// The root path inside the sandbox where the workspace is mounted.
+/// Both BashTool and skill workspace tools must agree on this path
+/// so that file paths reported to the agent are valid within the
+/// sandbox.
+pub(crate) const SANDBOX_ROOT: &str = "/";
+
 /// Provides virtual bash shell with filesystem read write access to
 /// the session workspace. Subsequent `BashTool` calls can access
 /// files from previous calls in the same session.
@@ -61,7 +67,7 @@ impl ToolCall for BashTool {
         let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite).expect("Failed to create RealFs");
         let fs = Arc::new(PosixFs::new(backend));
         let mut bash = Bash::new();
-        bash.mount("/", fs)?;
+        bash.mount(SANDBOX_ROOT, fs)?;
 
         let output = bash.exec(&fn_args.command).await?;
 

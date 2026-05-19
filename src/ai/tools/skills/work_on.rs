@@ -1,11 +1,11 @@
-use crate::ai::skills::validation::{validate_skill_directory, validate_skill_name};
+use crate::ai::skills::{validation::validate_skill_directory, validation::validate_skill_name};
+use crate::ai::tools::bash::SANDBOX_ROOT;
+use crate::ai::tools::skills::copy_dir;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use tokio::fs;
 
 #[derive(Serialize)]
@@ -45,24 +45,24 @@ impl ToolCall for WorkOnSkillTool {
         validate_skill_name(&skill_name)?;
 
         let dest = self.workspace_path.join(&skill_name);
-        if dest.exists() {
-            fs::remove_dir_all(&dest).await?;
-        }
-
         let skill_source = self.skills_path.join(&skill_name);
         let created = !skill_source.exists() || !skill_source.is_dir();
 
-        if !created {
+        if dest.exists() {
+            // Workspace already has this skill — return it as-is to
+            // avoid discarding uncommitted edits from an interrupted
+            // workflow.
+        } else if !created {
             validate_skill_directory(&skill_source)?;
-            copy_dir_recursive(&skill_source, &dest).await?;
+            copy_dir(&skill_source, &dest).await?;
         } else {
             fs::create_dir_all(&dest).await?;
         }
 
-        // Map the location of the skill in the agent's sandbox which
-        // is hardcoded to the root. This must stay in sync with
-        // `BashTool` or the agent will get confused.
-        let workspace_skill_path = format!("/{}", skill_name.clone());
+        // Map the location of the skill in the agent's sandbox.
+        // The path must be within the sandbox root that BashTool
+        // mounts the workspace at.
+        let workspace_skill_path = format!("{}{}", SANDBOX_ROOT, skill_name);
 
         let result = WorkOnSkillResult {
             name: skill_name,
@@ -115,28 +115,6 @@ impl WorkOnSkillTool {
             workspace_path,
         }
     }
-}
-
-fn copy_dir_recursive(src: &PathBuf, dest: &PathBuf) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
-    let src = src.clone();
-    let dest = dest.clone();
-    Box::pin(async move {
-        fs::create_dir_all(&dest).await?;
-
-        let mut entries = fs::read_dir(&src).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let src_path = entry.path();
-            let dest_path = dest.join(entry.file_name());
-
-            if src_path.is_dir() {
-                copy_dir_recursive(&src_path, &dest_path).await?;
-            } else {
-                fs::copy(&src_path, &dest_path).await?;
-            }
-        }
-
-        Ok(())
-    })
 }
 
 #[cfg(test)]
