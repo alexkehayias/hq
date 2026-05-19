@@ -374,12 +374,16 @@ async fn chat_handler(
                 .into_response());
         }
         (SessionMode::Code, SlashCommand::Skill { name: _name }) => {
-            tracing::warn!("Attempted to activate a skill within coding agent session mode which is not allowed.");
+            tracing::warn!(
+                "Attempted to activate a skill within coding agent session mode which is not allowed."
+            );
         }
         (SessionMode::Chat, SlashCommand::Skill { name }) => {
             // List all skills or show a specific skill's content
             let (response, persist_skill_msg) = {
-                let guard = skill_registry.read().expect("Unable to read skill registry");
+                let guard = skill_registry
+                    .read()
+                    .expect("Unable to read skill registry");
                 if let Some(ref registry) = *guard {
                     if let Some(skill_name) = name {
                         // Show specific skill content
@@ -396,11 +400,8 @@ async fn chat_handler(
 
                                 (skill_msg, true)
                             }
-                            Err(e) => {
-                                (e.to_string(), false)
-                            }
+                            Err(e) => (e.to_string(), false),
                         }
-
                     } else {
                         // List all skills
                         let skills = registry.list_skills();
@@ -411,10 +412,13 @@ async fn chat_handler(
                                 .iter()
                                 .map(|s| format!("- **{}**: {}", s.name, s.description))
                                 .collect();
-                            (format!(
-                                "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
-                                skill_list.join("\n")
-                            ), false)
+                            (
+                                format!(
+                                    "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
+                                    skill_list.join("\n")
+                                ),
+                                false,
+                            )
                         }
                     }
                 } else {
@@ -521,7 +525,8 @@ async fn chat_handler(
         // NOTE: The system message is effectively immutable. Adding
         // new skills and continuing a chat session may cause it to
         // not be found.
-        let mut system_content = state.read()
+        let mut system_content = state
+            .read()
             .expect("Unable to read share state")
             .config
             .system_message
@@ -529,7 +534,9 @@ async fn chat_handler(
 
         // Append skill instructions if there are skills in the registry
         {
-            let guard = skill_registry.read().expect("Unable to read skill registry");
+            let guard = skill_registry
+                .read()
+                .expect("Unable to read skill registry");
             if let Some(ref registry) = *guard {
                 let skill_count = registry.count();
                 if skill_count > 0 {

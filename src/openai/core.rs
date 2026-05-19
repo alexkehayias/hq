@@ -2,12 +2,12 @@ use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 
 use anyhow::{Error, Result};
-use tracing;
 use async_trait::async_trait;
 use erased_serde;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum Role {
@@ -253,18 +253,29 @@ struct ToolCallFinal {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Delta {
-    Content { content: String },
+    Content {
+        content: String,
+    },
 
-    Reasoning { reasoning: String },
+    Reasoning {
+        reasoning: String,
+    },
 
     // Qwen uses "reasoning_content" instead of "reasoning"
-    ReasoningContent { reasoning_content: String },
+    ReasoningContent {
+        reasoning_content: String,
+    },
 
     // Some models send role along with content (e.g., first chunk has role)
     #[allow(dead_code)]
-    ContentWithRole { role: String, content: Option<String> },
+    ContentWithRole {
+        role: String,
+        content: Option<String>,
+    },
 
-    ToolCall { tool_calls: Vec<ToolCallChunk> },
+    ToolCall {
+        tool_calls: Vec<ToolCallChunk>,
+    },
 
     Stop {},
 }
@@ -696,7 +707,9 @@ mod tests {
         let json = r#"{"reasoning_content":"Thinking..."}"#;
         let delta: Delta = serde_json::from_str(json).unwrap();
         match delta {
-            Delta::ReasoningContent { reasoning_content } => assert_eq!(reasoning_content, "Thinking..."),
+            Delta::ReasoningContent { reasoning_content } => {
+                assert_eq!(reasoning_content, "Thinking...")
+            }
             _ => panic!("Expected ReasoningContent variant"),
         }
     }

@@ -11,7 +11,7 @@ mod tests {
     use serial_test::serial;
     use tower::util::ServiceExt;
 
-    use crate::test_utils::{body_to_string, test_app, test_app_with_state, test_app_with_skills};
+    use crate::test_utils::{body_to_string, test_app, test_app_with_skills, test_app_with_state};
 
     /// Tests getting chat sessions returns empty list initially
     #[tokio::test]

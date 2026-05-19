@@ -80,8 +80,7 @@ impl ToolCall for WorkOnSkillTool {
 
 impl WorkOnSkillTool {
     pub fn new(skills_path: &str, storage_path: &str, session_id: &str) -> Self {
-        let workspace_path =
-            PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
 
         let parameters = Parameters {
             r#type: String::from("object"),
@@ -150,15 +149,18 @@ Test body.
 
         let storage_path = temp.path().to_string_lossy().to_string();
         let session_id = "test-session";
-        let tool =
-            WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, session_id);
+        let tool = WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, session_id);
 
         let result = tool.call(r#"{"name": "test-skill"}"#).await.unwrap();
         let output: WorkOnSkillResult = serde_json::from_str(&result).unwrap();
 
         assert_eq!(output.name, "test-skill");
 
-        let workspace_skill = temp.path().join("workspace").join(session_id).join("test-skill");
+        let workspace_skill = temp
+            .path()
+            .join("workspace")
+            .join(session_id)
+            .join("test-skill");
         assert!(workspace_skill.join("SKILL.md").exists());
     }
 
@@ -169,8 +171,7 @@ Test body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let tool =
-            WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, "session");
+        let tool = WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, "session");
 
         let result = tool.call(r#"{"name": "INVALID"}"#).await;
         assert!(result.is_err());
@@ -184,8 +185,7 @@ Test body.
 
         let storage_path = temp.path().to_string_lossy().to_string();
         let session_id = "test-session";
-        let tool =
-            WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, session_id);
+        let tool = WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, session_id);
 
         let result = tool.call(r#"{"name": "new-skill"}"#).await.unwrap();
         let output: WorkOnSkillResult = serde_json::from_str(&result).unwrap();
@@ -193,7 +193,11 @@ Test body.
         assert_eq!(output.name, "new-skill");
         assert!(output.created);
 
-        let workspace_skill = temp.path().join("workspace").join(session_id).join("new-skill");
+        let workspace_skill = temp
+            .path()
+            .join("workspace")
+            .join(session_id)
+            .join("new-skill");
         assert!(workspace_skill.is_dir());
     }
 
@@ -207,8 +211,7 @@ Test body.
 
         let storage_path = temp.path().to_string_lossy().to_string();
         let session_id = "test-session";
-        let tool =
-            WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, session_id);
+        let tool = WorkOnSkillTool::new(&skills_dir.to_string_lossy(), &storage_path, session_id);
 
         let result = tool.call(r#"{"name": "existing-skill"}"#).await.unwrap();
         let output: WorkOnSkillResult = serde_json::from_str(&result).unwrap();

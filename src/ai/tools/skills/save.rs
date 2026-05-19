@@ -1,5 +1,5 @@
-use crate::ai::skills::{Skill, SkillRegistry};
 use crate::ai::skills::validation::validate_skill_name;
+use crate::ai::skills::{Skill, SkillRegistry};
 use crate::ai::tools::skills::copy_dir;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result, anyhow};
@@ -125,9 +125,11 @@ impl ToolCall for SaveSkillTool {
                 )
             })
         } else {
-            Some("Skill saved to disk but registry is not available. \
+            Some(
+                "Skill saved to disk but registry is not available. \
                   The skill may not be usable until the server is restarted."
-                .to_string())
+                    .to_string(),
+            )
         };
 
         let result = SaveSkillResult {
@@ -153,8 +155,7 @@ impl SaveSkillTool {
         session_id: &str,
         registry: Arc<RwLock<Option<SkillRegistry>>>,
     ) -> Self {
-        let workspace_path =
-            PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
 
         let parameters = Parameters {
             r#type: String::from("object"),
@@ -226,9 +227,7 @@ Test body.
         // Create skill in workspace (simulating agent having created it)
         create_test_skill(&workspace, "new-skill");
 
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -270,11 +269,13 @@ description: Updated description
 
 Updated body.
 "#;
-        std::fs::write(workspace.join("existing-skill").join("SKILL.md"), skill_content).unwrap();
+        std::fs::write(
+            workspace.join("existing-skill").join("SKILL.md"),
+            skill_content,
+        )
+        .unwrap();
 
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -289,7 +290,8 @@ Updated body.
         assert!(!output.created.unwrap());
 
         // Verify the updated content is at global path
-        let saved = std::fs::read_to_string(skills_dir.join("existing-skill").join("SKILL.md")).unwrap();
+        let saved =
+            std::fs::read_to_string(skills_dir.join("existing-skill").join("SKILL.md")).unwrap();
         assert!(saved.contains("Updated description"));
     }
 
@@ -300,9 +302,7 @@ Updated body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -321,9 +321,7 @@ Updated body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -347,9 +345,7 @@ Updated body.
 
         create_test_skill(&workspace, "brand-new");
 
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
 
         // Registry should not have the skill yet
         {
@@ -388,11 +384,13 @@ Updated body.
         std::fs::create_dir_all(&skill_dir).unwrap();
 
         // SKILL.md with missing frontmatter
-        std::fs::write(skill_dir.join("SKILL.md"), "Just some text without frontmatter").unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "Just some text without frontmatter",
+        )
+        .unwrap();
 
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -424,9 +422,7 @@ Updated body.
         // Directory exists but no SKILL.md
         std::fs::create_dir_all(workspace.join("no-md-skill")).unwrap();
 
-        let registry = Arc::new(RwLock::new(Some(
-            SkillRegistry::new(&skills_dir).unwrap(),
-        )));
+        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
