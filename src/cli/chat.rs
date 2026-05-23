@@ -5,7 +5,8 @@ use std::env;
 
 use crate::ai::chat::ChatBuilder;
 use crate::ai::tools::{
-    CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool, WebSearchTool,
+    CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
+    WebSearchTool,
 };
 use crate::core::db::async_db;
 use crate::openai::{BoxedToolCall, Message, Role};
@@ -50,6 +51,7 @@ pub async fn run(vec_db_path: &str) -> Result<()> {
     };
 
     let memory_tool = MemoryTool::default();
+    let datetime_tool = DateTimeTool::default();
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
@@ -58,6 +60,7 @@ pub async fn run(vec_db_path: &str) -> Result<()> {
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
         Box::new(memory_tool),
+        Box::new(datetime_tool),
     ];
 
     // Get OpenAI API configuration from environment variables (similar to AppConfig)

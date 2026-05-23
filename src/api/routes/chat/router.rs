@@ -29,8 +29,8 @@ use crate::ai::chat::{
 };
 use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::{
-    BashTool, CalendarTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
-    TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
+    BashTool, CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool,
+    NoteSearchTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -226,6 +226,7 @@ async fn chat_handler(
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
         memory_tool,
+        datetime_tool,
         bash_tool,
         skill_registry,
         openai_api_hostname,
@@ -257,6 +258,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             MemoryTool::new(storage_path),
+            DateTimeTool::new(),
             BashTool::new(storage_path, &session_id),
             Arc::new(RwLock::new(SkillRegistry::new(skills_path).ok())),
             openai_api_hostname.clone(),
@@ -279,6 +281,7 @@ async fn chat_handler(
         Box::new(tasks_scheduled_today_tool),
         #[cfg(debug_assertions)]
         Box::new(memory_tool),
+        Box::new(datetime_tool),
         Box::new(bash_tool),
     ];
 

@@ -1,6 +1,9 @@
 pub mod bash;
 pub use bash::BashTool;
 
+pub mod datetime;
+pub use datetime::DateTimeTool;
+
 pub mod meeting_search;
 pub use meeting_search::MeetingSearchTool;
 
