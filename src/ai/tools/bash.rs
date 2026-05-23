@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 
-
 #[derive(Serialize)]
 pub struct BashProps {
     /// The shell command to execute. Use absolute paths for files.
@@ -32,6 +31,12 @@ pub struct BashOutput {
     pub truncated: bool,
 }
 
+/// The root path inside the sandbox where the workspace is mounted.
+/// Both BashTool and skill workspace tools must agree on this path
+/// so that file paths reported to the agent are valid within the
+/// sandbox.
+pub(crate) const SANDBOX_ROOT: &str = "/";
+
 /// Provides virtual bash shell with filesystem read write access to
 /// the session workspace. Subsequent `BashTool` calls can access
 /// files from previous calls in the same session.
@@ -50,17 +55,20 @@ impl ToolCall for BashTool {
 
         // Make sure the session workspace exists and create it if it
         // doesn't. This is idempotent.
-        if !&self.workspace_path.exists(){
+        if !&self.workspace_path.exists() {
             fs::create_dir(&self.workspace_path).await?;
         }
 
-        let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite).expect("Failed to create RealFs");
+        // Mount the workspace directory from the host to the agent at
+        // the root. This avoids issues with the agent trying to look
+        // for files higher in the filesystem and not being able to
+        // access them.
+        let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite)
+            .expect("Failed to create RealFs");
         let fs = Arc::new(PosixFs::new(backend));
+        let mut bash = Bash::new();
+        bash.mount(SANDBOX_ROOT, fs)?;
 
-        // Run the command using bashkit with real filesystem access
-        let mut bash = Bash::builder()
-            .fs(fs)
-            .build();
         let output = bash.exec(&fn_args.command).await?;
 
         let result = BashOutput {
@@ -113,7 +121,7 @@ impl BashTool {
         Self {
             r#type: ToolType::Function,
             function,
-            workspace_path
+            workspace_path,
         }
     }
 }
@@ -201,7 +209,10 @@ mod tests {
     #[tokio::test]
     async fn test_bash_arithmetic() {
         let tool = temp_bash_tool();
-        let result = tool.call(r#"{"command": "echo $((2 + 2 * 3))"}"#).await.unwrap();
+        let result = tool
+            .call(r#"{"command": "echo $((2 + 2 * 3))"}"#)
+            .await
+            .unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
         assert_eq!(output.exit_code, 0);
@@ -246,7 +257,10 @@ mod tests {
         let mut bash = Bash::new();
 
         // Create a file in the virtual filesystem
-        let output = bash.exec("echo 'Hello, World!' > /tmp/test.txt").await.unwrap();
+        let output = bash
+            .exec("echo 'Hello, World!' > /tmp/test.txt")
+            .await
+            .unwrap();
         assert_eq!(output.exit_code, 0);
 
         // Read the file back
@@ -267,7 +281,10 @@ mod tests {
         assert_eq!(output.exit_code, 0);
 
         // Create a file in that directory
-        let output = bash.exec("echo 'content' > /tmp/mydir/file.txt").await.unwrap();
+        let output = bash
+            .exec("echo 'content' > /tmp/mydir/file.txt")
+            .await
+            .unwrap();
         assert_eq!(output.exit_code, 0);
 
         // Verify the file exists
@@ -290,7 +307,10 @@ mod tests {
 
         // Session 1 creates a file in its workspace directory
         let session1_workspace = format!("{}/workspace/{}", temp_dir, session1_id);
-        let cmd1 = format!("mkdir -p '{}' && echo 'secret' > '{}/test.txt'", session1_workspace, session1_workspace);
+        let cmd1 = format!(
+            "mkdir -p '{}' && echo 'secret' > '{}/test.txt'",
+            session1_workspace, session1_workspace
+        );
         let args1 = serde_json::json!({ "command": cmd1 }).to_string();
         let result = tool1.call(&args1).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
@@ -304,7 +324,10 @@ mod tests {
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
         // Should fail (non-zero exit code) because session 2 cannot access session 1's files
-        assert_ne!(output.exit_code, 0, "Session 2 should not be able to read session 1's files");
+        assert_ne!(
+            output.exit_code, 0,
+            "Session 2 should not be able to read session 1's files"
+        );
     }
 
     #[tokio::test]
@@ -322,7 +345,10 @@ mod tests {
 
         // Create session 1's workspace with a file
         let session1_workspace = format!("{}/workspace/{}", temp_dir, session1_id);
-        let cmd1 = format!("mkdir -p '{}' && echo 'original' > '{}/file.txt'", session1_workspace, session1_workspace);
+        let cmd1 = format!(
+            "mkdir -p '{}' && echo 'original' > '{}/file.txt'",
+            session1_workspace, session1_workspace
+        );
         let args1 = serde_json::json!({ "command": cmd1 }).to_string();
         let result = tool1.call(&args1).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
@@ -335,7 +361,10 @@ mod tests {
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
         // Should fail because session 2 cannot write to session 1's workspace
-        assert_ne!(output.exit_code, 0, "Session 2 should not be able to write to session 1's workspace");
+        assert_ne!(
+            output.exit_code, 0,
+            "Session 2 should not be able to write to session 1's workspace"
+        );
 
         // Verify the original content is still intact
         let cmd3 = format!("cat '{}/file.txt'", session1_workspace);

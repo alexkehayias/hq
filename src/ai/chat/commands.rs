@@ -186,7 +186,9 @@ mod tests {
         let result = SlashCommand::from_str("/skills test-repo with args");
         assert!(result.is_ok());
         let _ = result.map(|slash_cmd| match slash_cmd {
-            SlashCommand::Skill { name } => assert_eq!(name, Some("test-repo with args".to_string())),
+            SlashCommand::Skill { name } => {
+                assert_eq!(name, Some("test-repo with args".to_string()))
+            }
             other => panic!("Expected Skill command, got {:?}", other),
         });
     }

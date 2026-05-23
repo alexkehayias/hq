@@ -211,7 +211,11 @@ pub async fn test_app_with_skills() -> Router {
 
     // Create test skills
     create_test_skill(&skills_path, "test-repo", "A test skill for repositories");
-    create_test_skill(&skills_path, "pdf-processing", "Process and extract data from PDF files");
+    create_test_skill(
+        &skills_path,
+        "pdf-processing",
+        "Process and extract data from PDF files",
+    );
 
     let db_path_str = dir.join("db");
     let db_path_str = db_path_str.to_str().unwrap();
