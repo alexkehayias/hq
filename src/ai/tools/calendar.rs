@@ -1,10 +1,9 @@
 use crate::api::public::calendar::CalendarResponse;
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use tokio_rusqlite::Connection;
 
 #[derive(Serialize)]
@@ -32,7 +31,7 @@ pub struct CalendarTool {
 #[async_trait]
 impl ToolCall for CalendarTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: CalendarArgs = serde_json::from_str(args).unwrap();
+        let fn_args: CalendarArgs = parse_tool_args(args)?;
 
         // Get all authorized email addresses from the database
         let emails: Vec<String> = self

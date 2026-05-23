@@ -1,4 +1,4 @@
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -88,7 +88,7 @@ impl Default for MemoryTool {
 #[async_trait]
 impl ToolCall for MemoryTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: MemoryArgs = serde_json::from_str(args)?;
+        let fn_args: MemoryArgs = parse_tool_args(args)?;
         let memory_path = self.get_memory_file_path();
 
         match fn_args.operation {

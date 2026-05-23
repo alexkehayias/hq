@@ -1,4 +1,4 @@
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use reqwest;
@@ -29,7 +29,7 @@ pub struct WebSearchTool {
 #[async_trait]
 impl ToolCall for WebSearchTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: WebSearchArgs = serde_json::from_str(args).unwrap();
+        let fn_args: WebSearchArgs = parse_tool_args(args)?;
 
         let url = reqwest::Url::parse_with_params(
             &format!("{}/api/web/search", self.api_base_url),
