@@ -1,6 +1,6 @@
 use crate::ai::prompt::{self, Prompt};
 use crate::api::public;
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
 use reqwest;
@@ -29,7 +29,7 @@ pub struct EmailUnreadTool {
 #[async_trait]
 impl ToolCall for EmailUnreadTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: EmailUnreadArgs = serde_json::from_str(args).unwrap();
+        let fn_args: EmailUnreadArgs = parse_tool_args(args)?;
 
         let mut url = reqwest::Url::parse(&format!("{}/api/email/unread", self.api_base_url))
             .expect("Invalid URL");

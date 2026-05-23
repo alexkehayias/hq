@@ -1,5 +1,5 @@
 use crate::ai::skills::{Skill, SkillRegistry};
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,7 @@ pub struct LoadSkillTool {
 #[async_trait]
 impl ToolCall for LoadSkillTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: LoadSkillArgs = serde_json::from_str(args).unwrap();
+        let fn_args: LoadSkillArgs = parse_tool_args(args)?;
 
         let skill = self.registry.load_skill(&fn_args.name)?;
         let result = SkillContent::from(&skill);

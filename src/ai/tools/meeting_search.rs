@@ -1,10 +1,9 @@
 use crate::api::public::notes::SearchResponse;
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 #[derive(Serialize)]
 pub struct MeetingSearchProps {
@@ -26,7 +25,7 @@ pub struct MeetingSearchTool {
 #[async_trait]
 impl ToolCall for MeetingSearchTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: MeetingSearchArgs = serde_json::from_str(args).unwrap();
+        let fn_args: MeetingSearchArgs = parse_tool_args(args)?;
 
         let mut url = reqwest::Url::parse(&format!("{}/api/notes/search", self.api_base_url))
             .expect("Invalid URL");

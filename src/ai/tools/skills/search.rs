@@ -1,5 +1,5 @@
 use crate::ai::skills::{SkillRegistry, SkillSummary};
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ pub struct SearchSkillsTool {
 #[async_trait]
 impl ToolCall for SearchSkillsTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: SearchSkillsArgs = serde_json::from_str(args).unwrap();
+        let fn_args: SearchSkillsArgs = parse_tool_args(args)?;
 
         let skills = self.registry.search(&fn_args.query);
         let result: Vec<SkillSummary> = skills;

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
 use htmd::HtmlToMarkdown;
@@ -26,7 +26,7 @@ pub struct WebsiteViewTool {
 #[async_trait]
 impl ToolCall for WebsiteViewTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: WebsiteViewArgs = serde_json::from_str(args).unwrap();
+        let fn_args: WebsiteViewArgs = parse_tool_args(args)?;
         // let url = fn_args.url;
 
         // Clean the URL, stripping away unnecessary URL params like

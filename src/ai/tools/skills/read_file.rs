@@ -1,5 +1,5 @@
 use crate::ai::skills::SkillRegistry;
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ pub struct ReadSkillFileTool {
 #[async_trait]
 impl ToolCall for ReadSkillFileTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: ReadSkillFileArgs = serde_json::from_str(args).unwrap();
+        let fn_args: ReadSkillFileArgs = parse_tool_args(args)?;
 
         // Try to load the skill first
         let skill = match self.registry.load_skill(&fn_args.skill_name) {

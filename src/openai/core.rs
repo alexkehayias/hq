@@ -186,6 +186,19 @@ impl fmt::Display for RecoverableToolError {
 
 impl std::error::Error for RecoverableToolError {}
 
+/// Parse tool arguments from a JSON string into the expected type.
+/// Returns a [`RecoverableToolError`] on failure so the LLM can
+/// correct the JSON and retry, instead of crashing the chat loop.
+pub fn parse_tool_args<Args: serde::de::DeserializeOwned>(
+    args: &str,
+) -> Result<Args, RecoverableToolError> {
+    serde_json::from_str(args).map_err(|e| {
+        RecoverableToolError::new(&format!(
+            "Invalid tool arguments: failed to parse JSON: {e}",
+        ))
+    })
+}
+
 // `erased_serde` which _is_ object safe and can be used along with
 // dynamic dispatch such that the calls to `serde::json` won't
 // complain. Another way to do this is to use `typetag` which uses

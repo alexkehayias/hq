@@ -1,4 +1,4 @@
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use bashkit::{Bash, PosixFs, RealFs, RealFsMode};
@@ -46,7 +46,7 @@ pub struct BashTool {
 #[async_trait]
 impl ToolCall for BashTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: BashArgs = serde_json::from_str(args).unwrap();
+        let fn_args: BashArgs = parse_tool_args(args)?;
 
         // Make sure the session workspace exists and create it if it
         // doesn't. This is idempotent.
