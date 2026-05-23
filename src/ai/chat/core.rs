@@ -10,7 +10,8 @@ use super::models::{SessionMode, Transcript};
 use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::skills::{ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SearchSkillsTool};
 use crate::openai::{
-    BoxedToolCall, FunctionCall, FunctionCallFn, Message, Role, completion, completion_stream,
+    BoxedToolCall, FunctionCall, FunctionCallFn, Message, RecoverableToolError, Role, completion,
+    completion_stream,
 };
 
 /// The core abstraction around interacting with an LLM in a chat
@@ -61,8 +62,10 @@ impl Chat {
             &tool_call_args
         );
 
-        // Call the tool and get the next completion from the result
-        let tool_call_result = tools
+        // Call the tool and get the next completion from the result.
+        // Recoverable errors are returned to the LLM as tool response
+        // messages so it can retry or adjust its approach.
+        let tool_call_result = match tools
             .iter()
             .find(|i| *i.function_name() == *tool_call_name)
             .ok_or(anyhow!(
@@ -70,7 +73,14 @@ impl Chat {
                 tool_call_name
             ))?
             .call(tool_call_args)
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => match e.downcast_ref::<RecoverableToolError>() {
+                Some(recoverable) => recoverable.message.clone(),
+                None => return Err(e),
+            },
+        };
 
         // TODO: if the tool call result is too large, write it to a
         // file and change the response text to a summary that points
@@ -927,5 +937,110 @@ data: [DONE]
         // 2. Tool call response
         // 3. Assistant's final content
         assert_eq!(messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_recoverable_tool_error() {
+        let mut server = mockito::Server::new_async().await;
+
+        // First response: model makes a tool call to a tool that will
+        // fail with a recoverable error
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_recoverable",
+                        "type": "function",
+                        "function": {
+                            "name": "failing_tool",
+                            "arguments": "{}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        // Second response: model responds after receiving the
+        // recoverable error message
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The tool failed with a recoverable error. Let me try a different approach."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
+            .create();
+
+        // Create a mock tool that returns a RecoverableToolError
+        #[derive(serde::Serialize)]
+        struct FailingMockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for FailingMockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Err(crate::openai::RecoverableToolError::new(
+                    "Website is temporarily unavailable (HTTP 503). Try again later.",
+                )
+                .into())
+            }
+            fn function_name(&self) -> String {
+                "failing_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let tools = vec![Box::new(FailingMockTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .tools(tools)
+            .build();
+
+        let msg = Message::new(Role::User, "Fetch the website");
+        let result = chat.next_msg(msg).await;
+
+        mock1.assert();
+        mock2.assert();
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        // Should return 3 messages:
+        // 1. Tool call request
+        // 2. Tool call response (containing the recoverable error message)
+        // 3. Assistant's final content
+        assert_eq!(messages.len(), 3);
+
+        // The tool call response should contain the recoverable error
+        // message, not crash the chat
+        let tool_response = &messages[1];
+        assert_eq!(*tool_response.role(), crate::openai::Role::Tool);
+        assert_eq!(
+            tool_response.content.as_ref().unwrap(),
+            "Website is temporarily unavailable (HTTP 503). Try again later."
+        );
     }
 }

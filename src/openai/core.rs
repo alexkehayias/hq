@@ -1,6 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 
+use std::fmt;
 use anyhow::{Error, Result};
 use tracing;
 use async_trait::async_trait;
@@ -157,6 +158,34 @@ pub enum ToolType {
 // that can be dynamically dispatched using this trait, the trait
 // object needs to implement `Serialize` but `serde` is not object
 // safe so it will cause a compile error. Instead, we need to use
+/// An error that a tool implementation can return to signal that the
+/// LLM can recover from this error — typically by retrying the
+/// operation or adjusting its approach based on the error message.
+///
+/// Unlike fatal errors (which crash the chat loop), recoverable errors
+/// are returned to the LLM as tool response messages, giving it a
+/// chance to adapt.
+#[derive(Debug, Clone)]
+pub struct RecoverableToolError {
+    pub message: String,
+}
+
+impl RecoverableToolError {
+    pub fn new(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for RecoverableToolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for RecoverableToolError {}
+
 // `erased_serde` which _is_ object safe and can be used along with
 // dynamic dispatch such that the calls to `serde::json` won't
 // complain. Another way to do this is to use `typetag` which uses
@@ -1044,5 +1073,32 @@ data: [DONE]
         mock.assert();
         assert!(result.is_ok());
         assert!(result.unwrap().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_recoverable_tool_error_creation() {
+        let err = RecoverableToolError::new("Request timed out");
+        assert_eq!(err.message, "Request timed out");
+    }
+
+    #[test]
+    fn test_recoverable_tool_error_display() {
+        let err = RecoverableToolError::new("Server returned 500");
+        assert_eq!(format!("{}", err), "Server returned 500");
+    }
+
+    #[test]
+    fn test_recoverable_tool_error_downcast_from_anyhow() {
+        let err: anyhow::Error = RecoverableToolError::new("temporary failure").into();
+        let downcasted = err.downcast_ref::<RecoverableToolError>();
+        assert!(downcasted.is_some());
+        assert_eq!(downcasted.unwrap().message, "temporary failure");
+    }
+
+    #[test]
+    fn test_recoverable_tool_error_non_recoverable_not_downcastable() {
+        let err: anyhow::Error = anyhow::anyhow!("fatal database error");
+        let downcasted = err.downcast_ref::<RecoverableToolError>();
+        assert!(downcasted.is_none());
     }
 }

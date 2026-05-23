@@ -1,10 +1,9 @@
 use std::time::Duration;
 
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
+use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
 use htmd::HtmlToMarkdown;
-use http::StatusCode;
 use reqwest;
 use serde::{Deserialize, Serialize};
 
@@ -37,12 +36,12 @@ impl ToolCall for WebsiteViewTool {
         let url = reqwest::Url::parse(fn_args.url.trim())
             .context(fn_args.url)
             .expect("Invalid URL");
-        let clean_url = format!(
-            "{}://{}{}",
-            url.scheme(),
-            url.host_str().expect("Missing host"),
-            url.path()
-        );
+        let host = url.host_str().expect("Missing host");
+        let port = url
+            .port()
+            .map(|p| format!(":{}", p))
+            .unwrap_or_default();
+        let clean_url = format!("{}://{}{}{}", url.scheme(), host, port, url.path());
 
         // TODO: Rewrite URLs based on rules. For example, use mirrors
         // or archives for certain sites.
@@ -64,6 +63,28 @@ impl ToolCall for WebsiteViewTool {
         // Handle request errors like timeouts
         let content = match response {
             Ok(resp) => {
+                // Check for HTTP-level errors before processing the
+                // body. reqwest does not treat non-2xx as errors by
+                // default, so we need to check explicitly.
+                let status = resp.status();
+                if status.is_server_error() {
+                    tracing::warn!("Website view failed with HTTP {}.", status);
+                    return Err(RecoverableToolError::new(
+                        &format!(
+                            "Website view failed with HTTP {} (server error). The server may be temporarily unavailable — try again.",
+                            status,
+                        ),
+                    )
+                    .into());
+                }
+                if status.is_client_error() {
+                    tracing::warn!("Website view failed with HTTP {}.", status);
+                    return Ok(format!(
+                        "Website view failed with HTTP status code {}",
+                        status,
+                    ));
+                }
+
                 // Convert HTML to markdown
                 let html_content = resp.text().await?;
                 let converter = HtmlToMarkdown::builder()
@@ -78,41 +99,25 @@ impl ToolCall for WebsiteViewTool {
                 match e {
                     i if i.is_timeout() => {
                         tracing::warn!("Website view failed due to timeout.");
-                        String::from("Request timed out.")
+                        return Err(RecoverableToolError::new(
+                            "Request timed out. The server may be slow or unavailable — try again or use a different source.",
+                        )
+                        .into());
                     }
                     i if i.is_request() => {
                         tracing::warn!("Website view failed due to request sending error.");
                         String::from("Request was not able to be sent. Do not retry.")
                     }
                     i if i.is_status() => {
-                        if let Some(status) = i.status() {
-                            match status {
-                                StatusCode::BAD_REQUEST => {
-                                    tracing::warn!("Website view failed due to bad request.");
-                                    String::from("Website view failed due to bad request.")
-                                }
-                                StatusCode::NOT_FOUND => {
-                                    tracing::warn!(
-                                        "Website view failed because the page was not found."
-                                    );
-                                    String::from(
-                                        "Website view failed because the page was not found.",
-                                    )
-                                }
-                                _ => {
-                                    tracing::warn!(
-                                        "Website view failed with HTTP status code {}.",
-                                        status
-                                    );
-                                    format!("Website view failed with HTTP status code {}", status)
-                                }
-                            }
-                        } else {
-                            // Not sure how we could end up here with an error
-                            // that doesn't have a status code, but need to
-                            // make the compiler happy
-                            anyhow::bail!("Website view failed: {}", i)
-                        }
+                        // HTTP status errors are handled in the Ok(resp)
+                        // branch above. This path is a safety net in case
+                        // reqwest is configured to treat non-2xx as errors.
+                        let msg = i
+                            .status()
+                            .map(|s| format!("Website view failed with HTTP status code {}", s))
+                            .unwrap_or_else(|| format!("Website view failed: {}", i));
+                        tracing::warn!("{}", msg);
+                        String::from(msg)
                     }
                     _ => anyhow::bail!("Website view failed: {}", e),
                 }
@@ -162,5 +167,97 @@ impl WebsiteViewTool {
 impl Default for WebsiteViewTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito::Server;
+
+    #[tokio::test]
+    async fn it_returns_ok_for_successful_response() {
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body><h1>Hello World</h1></body></html>")
+            .create();
+
+        let tool = WebsiteViewTool::new();
+        let url = format!(r#"{{"url": "{}/"}}"#, server.url());
+        let result = tool.call(&url).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert!(content.contains("Hello World"));
+    }
+
+    #[tokio::test]
+    async fn it_returns_recoverable_error_for_server_error() {
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(500)
+            .with_header("content-type", "text/html")
+            .with_body("Internal Server Error")
+            .create();
+
+        let tool = WebsiteViewTool::new();
+        let url = format!(r#"{{"url": "{}/"}}"#, server.url());
+        let result = tool.call(&url).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let recoverable = err.downcast_ref::<RecoverableToolError>();
+        assert!(recoverable.is_some());
+        assert!(recoverable
+            .unwrap()
+            .message
+            .contains("server error"));
+    }
+
+    #[tokio::test]
+    async fn it_returns_ok_string_for_not_found() {
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(404)
+            .with_header("content-type", "text/html")
+            .with_body("Not Found")
+            .create();
+
+        let tool = WebsiteViewTool::new();
+        let url = format!(r#"{{"url": "{}/"}}"#, server.url());
+        let result = tool.call(&url).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert!(content.contains("HTTP status code 404"));
+    }
+
+    #[tokio::test]
+    async fn it_returns_recoverable_error_for_service_unavailable() {
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(503)
+            .with_header("content-type", "text/html")
+            .with_body("Service Unavailable")
+            .create();
+
+        let tool = WebsiteViewTool::new();
+        let url = format!(r#"{{"url": "{}/"}}"#, server.url());
+        let result = tool.call(&url).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let recoverable = err.downcast_ref::<RecoverableToolError>();
+        assert!(recoverable.is_some());
+        assert!(recoverable
+            .unwrap()
+            .message
+            .contains("server error"));
     }
 }
