@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
@@ -6,6 +7,16 @@ use async_trait::async_trait;
 use htmd::HtmlToMarkdown;
 use reqwest;
 use serde::{Deserialize, Serialize};
+use tokio::fs;
+
+/// Maximum estimated token count before we truncate the output.
+/// Using a rough estimate of ~4 characters per token.
+const MAX_OUTPUT_TOKENS: usize = 10_000;
+const CHARS_PER_TOKEN: usize = 4;
+const MAX_OUTPUT_CHARS: usize = MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN;
+
+/// How many characters to keep in the truncated response returned to the AI.
+const TRUNCATED_PREFIX_CHARS: usize = 7_500 * CHARS_PER_TOKEN;
 
 #[derive(Serialize)]
 pub struct WebsiteViewProps {
@@ -21,6 +32,8 @@ pub struct WebsiteViewArgs {
 pub struct WebsiteViewTool {
     pub r#type: ToolType,
     pub function: Function<WebsiteViewProps>,
+    #[serde(skip_serializing)]
+    workspace_path: PathBuf,
 }
 
 #[async_trait]
@@ -124,9 +137,33 @@ impl ToolCall for WebsiteViewTool {
             }
         };
 
-        // TODO: Limit the amount of content returned to avoid filling
-        // the context window with noise.
-        Ok(content)
+        // Truncate the content if it exceeds the maximum token count
+        // to avoid filling the context window with noise. The full
+        // content is written to a file in the session workspace so the
+        // agent can read specific sections via the bash tool.
+        if content.len() > MAX_OUTPUT_CHARS {
+            // Ensure the workspace directory exists
+            if !self.workspace_path.exists() {
+                fs::create_dir_all(&self.workspace_path).await?;
+            }
+
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let file_path = self.workspace_path.join(format!("website_content_{}.md", timestamp));
+            fs::write(&file_path, &content).await?;
+
+            let truncated: String = content.chars().take(TRUNCATED_PREFIX_CHARS).collect();
+            let estimated_total_tokens = content.len() / CHARS_PER_TOKEN;
+            Ok(format!(
+                "{}\n\n---\n**Results truncated.** Full content (est. ~{} tokens) written to `{}`. \
+                 Use the bash tool to read specific sections from the file.",
+                truncated, estimated_total_tokens, file_path.display(),
+            ))
+        } else {
+            Ok(content)
+        }
     }
 
     fn function_name(&self) -> String {
@@ -135,7 +172,10 @@ impl ToolCall for WebsiteViewTool {
 }
 
 impl WebsiteViewTool {
-    pub fn new() -> Self {
+    pub fn new(storage_path: &str, session_id: &str) -> Self {
+        let workspace_path =
+            PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+
         let function = Function {
             name: String::from("view_website"),
             description: String::from(
@@ -160,13 +200,14 @@ impl WebsiteViewTool {
         Self {
             r#type: ToolType::Function,
             function,
+            workspace_path,
         }
     }
 }
 
 impl Default for WebsiteViewTool {
     fn default() -> Self {
-        Self::new()
+        Self::new("/tmp", "default")
     }
 }
 
@@ -174,6 +215,11 @@ impl Default for WebsiteViewTool {
 mod tests {
     use super::*;
     use mockito::Server;
+    use uuid::Uuid;
+
+    fn test_tool() -> WebsiteViewTool {
+        WebsiteViewTool::new("/tmp", &Uuid::new_v4().to_string())
+    }
 
     #[tokio::test]
     async fn it_returns_ok_for_successful_response() {
@@ -185,7 +231,7 @@ mod tests {
             .with_body("<html><body><h1>Hello World</h1></body></html>")
             .create();
 
-        let tool = WebsiteViewTool::new();
+        let tool = test_tool();
         let url = format!(r#"{{"url": "{}/"}}"#, server.url());
         let result = tool.call(&url).await;
 
@@ -204,7 +250,7 @@ mod tests {
             .with_body("Internal Server Error")
             .create();
 
-        let tool = WebsiteViewTool::new();
+        let tool = test_tool();
         let url = format!(r#"{{"url": "{}/"}}"#, server.url());
         let result = tool.call(&url).await;
 
@@ -228,7 +274,7 @@ mod tests {
             .with_body("Not Found")
             .create();
 
-        let tool = WebsiteViewTool::new();
+        let tool = test_tool();
         let url = format!(r#"{{"url": "{}/"}}"#, server.url());
         let result = tool.call(&url).await;
 
@@ -247,7 +293,7 @@ mod tests {
             .with_body("Service Unavailable")
             .create();
 
-        let tool = WebsiteViewTool::new();
+        let tool = test_tool();
         let url = format!(r#"{{"url": "{}/"}}"#, server.url());
         let result = tool.call(&url).await;
 
