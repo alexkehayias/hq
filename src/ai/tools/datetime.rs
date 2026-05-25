@@ -1,7 +1,7 @@
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Days, Months, NaiveDate, NaiveDateTime, Utc};
+use chrono::{Days, Months, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -17,7 +17,7 @@ struct DateTimeArgs {
     operation: DateTimeOperation,
     date: Option<String>,
     days: Option<i64>,
-    months: Option<u32>,
+    months: Option<i32>,
     target_datetime: Option<String>,
 }
 
@@ -122,7 +122,7 @@ impl Default for DateTimeTool {
 }
 
 fn current_time() -> String {
-    let now: DateTime<Utc> = Utc::now();
+    let now = Utc::now();
     let day_of_week = now.format("%A").to_string();
     let iso = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     format!(
@@ -133,35 +133,27 @@ fn current_time() -> String {
     )
 }
 
-fn add_duration(date: Option<String>, days: Option<i64>, months: Option<u32>) -> Result<String, Error> {
+fn add_duration(date: Option<String>, days: Option<i64>, months: Option<i32>) -> Result<String, Error> {
     let base_date = parse_date_or_today(date)?;
 
-    let result = match (months, days) {
-        (Some(m), Some(d)) => {
-            let after_months = add_months(base_date, m)?;
-            after_months
-                .checked_add_days(Days::new(d as u64))
-                .ok_or_else(|| {
-                    anyhow::Error::from(RecoverableToolError::new(
-                        "Date overflow when adding days",
-                    ))
-                })
-        }
-        (Some(m), None) => add_months(base_date, m),
-        (None, Some(d)) => base_date
+    let after_months = match months {
+        Some(m) if m > 0 => base_date.checked_add_months(Months::new(m as u32)),
+        Some(m) => base_date.checked_sub_months(Months::new(m.unsigned_abs())),
+        None => Some(base_date),
+    }
+    .ok_or_else(|| anyhow::Error::from(RecoverableToolError::new("Date overflow when adding months")))?;
+
+    let result = match days {
+        Some(d) if d >= 0 => after_months
             .checked_add_days(Days::new(d as u64))
-            .ok_or_else(|| {
-                anyhow::Error::from(RecoverableToolError::new(
-                    "Date overflow when adding days",
-                ))
-            }),
-        (None, None) => Ok(base_date),
+            .ok_or_else(|| anyhow::Error::from(RecoverableToolError::new("Date overflow when adding days"))),
+        Some(d) => after_months
+            .checked_sub_days(Days::new(d.unsigned_abs()))
+            .ok_or_else(|| anyhow::Error::from(RecoverableToolError::new("Date overflow when subtracting days"))),
+        None => Ok(after_months),
     }?;
 
-    Ok(format!(
-        "Result: {}",
-        result.format("%Y-%m-%d").to_string()
-    ))
+    Ok(format!("Result: {}", result.format("%Y-%m-%d")))
 }
 
 fn time_until(target: Option<String>, date: Option<String>) -> Result<String, Error> {
@@ -183,27 +175,20 @@ fn time_until(target: Option<String>, date: Option<String>) -> Result<String, Er
         None => Utc::now().naive_utc(),
     };
 
-    if target_dt > now {
-        let diff = target_dt - now;
-        let total_days = diff.num_days();
-        let remaining_hours = diff.num_hours() - total_days * 24;
-        let remaining_minutes = diff.num_minutes() - diff.num_hours() * 60;
-
-        Ok(format!(
-            "{} days, {} hours, {} minutes until {}",
-            total_days, remaining_hours, remaining_minutes, target_str
-        ))
+    let (diff, preposition) = if target_dt > now {
+        (target_dt - now, "until")
     } else {
-        let diff = now - target_dt;
-        let total_days = diff.num_days();
-        let remaining_hours = diff.num_hours() - total_days * 24;
-        let remaining_minutes = diff.num_minutes() - diff.num_hours() * 60;
+        (now - target_dt, "since")
+    };
 
-        Ok(format!(
-            "{} days, {} hours, {} minutes since {}",
-            total_days, remaining_hours, remaining_minutes, target_str
-        ))
-    }
+    let total_days = diff.num_days();
+    let remaining_hours = diff.num_hours() - total_days * 24;
+    let remaining_minutes = diff.num_minutes() - diff.num_hours() * 60;
+
+    Ok(format!(
+        "{} days, {} hours, {} minutes {} {}",
+        total_days, remaining_hours, remaining_minutes, preposition, target_str
+    ))
 }
 
 fn parse_date_or_today(date: Option<String>) -> Result<NaiveDate, Error> {
@@ -239,15 +224,6 @@ fn parse_datetime(s: &str) -> Result<NaiveDateTime, Error> {
     ))))
 }
 
-fn add_months(base: NaiveDate, months: u32) -> Result<NaiveDate, Error> {
-    base.checked_add_months(Months::new(months))
-        .ok_or_else(|| {
-            anyhow::Error::from(RecoverableToolError::new(
-                "Date overflow when adding months",
-            ))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +245,26 @@ mod tests {
             .call(r#"{"operation": "add_duration", "date": "2026-05-23", "days": 14}"#)
             .await?;
         assert_eq!(result, "Result: 2026-06-06");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subtract_days() -> Result<()> {
+        let tool = DateTimeTool::new();
+        let result = tool
+            .call(r#"{"operation": "add_duration", "date": "2026-05-23", "days": -14}"#)
+            .await?;
+        assert_eq!(result, "Result: 2026-05-09");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subtract_months() -> Result<()> {
+        let tool = DateTimeTool::new();
+        let result = tool
+            .call(r#"{"operation": "add_duration", "date": "2026-05-23", "months": -3}"#)
+            .await?;
+        assert_eq!(result, "Result: 2026-02-23");
         Ok(())
     }
 
