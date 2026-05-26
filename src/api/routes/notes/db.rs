@@ -6,10 +6,10 @@ use tokio_rusqlite::Connection;
 pub async fn get_note_by_id(
     db: &Connection,
     id: String,
-) -> Result<ViewNoteResponse, anyhow::Error> {
-    db.call(move |conn| {
-        let result = conn
-            .prepare(
+) -> Result<Option<ViewNoteResponse>, anyhow::Error> {
+    let result = db
+        .call(move |conn: &mut rusqlite::Connection| -> Result<Option<ViewNoteResponse>, tokio_rusqlite::Error> {
+            let query_result = conn.prepare(
                 r"
           SELECT
             id,
@@ -17,25 +17,25 @@ pub async fn get_note_by_id(
             body,
             tags
           FROM note_meta
-          WHERE id = ?
-          LIMIT 1
+          WHERE id = ?1
         ",
             )
-            .expect("Failed to prepare sql statement")
-            .query_map([id], |i| {
-                Ok(ViewNoteResponse {
-                    id: i.get(0)?,
-                    title: i.get(1)?,
-                    body: i.get(2)?,
-                    tags: i.get(3)?,
+            .and_then(|mut stmt| {
+                stmt.query_row([id], |row| {
+                    Ok(ViewNoteResponse {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        body: row.get(2)?,
+                        tags: row.get(3)?,
+                    })
                 })
-            })
-            .unwrap()
-            .last()
-            .unwrap()
-            .unwrap();
-        Ok(result)
-    })
-    .await
-    .map_err(|e| e.into())
+            });
+            match query_result {
+                Ok(note) => Ok(Some(note)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(tokio_rusqlite::Error::from(e)),
+            }
+        })
+        .await;
+    result.map_err(anyhow::Error::from)
 }
