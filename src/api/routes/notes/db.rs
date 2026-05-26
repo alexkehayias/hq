@@ -9,7 +9,7 @@ pub async fn get_note_by_id(
 ) -> Result<Option<ViewNoteResponse>, anyhow::Error> {
     let result = db
         .call(move |conn: &mut rusqlite::Connection| -> Result<Option<ViewNoteResponse>, tokio_rusqlite::Error> {
-            let note = conn.prepare(
+            let query_result = conn.prepare(
                 r"
           SELECT
             id,
@@ -29,9 +29,12 @@ pub async fn get_note_by_id(
                         tags: row.get(3)?,
                     })
                 })
-            })
-            .ok();
-            Ok(note)
+            });
+            match query_result {
+                Ok(note) => Ok(Some(note)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(tokio_rusqlite::Error::from(e)),
+            }
         })
         .await;
     result.map_err(anyhow::Error::from)
