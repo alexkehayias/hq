@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
+use uuid::Uuid;
 
 use super::PeriodicJob;
 use crate::{
@@ -37,10 +38,14 @@ impl PeriodicJob for ResearchMeetingAttendees {
         } = config;
 
         // Create tools for the chat
+        let session_id = Uuid::new_v4().to_string();
         let tools: Vec<BoxedToolCall> = vec![
             Box::new(CalendarTool::new(db.clone(), note_search_api_url)),
             Box::new(WebSearchTool::new(note_search_api_url)),
-            Box::new(WebsiteViewTool::new()),
+            Box::new(WebsiteViewTool::new(
+                &config.storage_path,
+                &session_id,
+            )),
         ];
 
         let calendar_emails = find_all_gmail_auth_emails(db).await.unwrap();

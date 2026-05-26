@@ -253,7 +253,7 @@ async fn chat_handler(
             WebSearchTool::new(note_search_api_url),
             EmailUnreadTool::new(note_search_api_url),
             CalendarTool::new(db.clone(), note_search_api_url),
-            WebsiteViewTool::new(),
+            WebsiteViewTool::new(storage_path, &session_id),
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             MemoryTool::new(storage_path),
