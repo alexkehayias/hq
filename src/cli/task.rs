@@ -110,6 +110,7 @@ struct TaskLocation {
     current_title: String,
     current_body: String,
     current_status: String,
+    current_level: usize,
 }
 
 fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
@@ -155,6 +156,7 @@ fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                 .map(|k| k.to_string())
                 .unwrap_or_else(|| "TODO".to_string());
             let current_title = headline.title_raw().trim().to_string();
+            let current_level = headline.level();
             let range = headline.syntax().text_range();
             let usize_range =
                 u32::from(range.start()) as usize..u32::from(range.end()) as usize;
@@ -169,6 +171,7 @@ fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                 current_title,
                 current_body,
                 current_status,
+                current_level,
             });
         }
 
@@ -186,6 +189,7 @@ fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                         .map(|k| k.to_string())
                         .unwrap_or_else(|| "TODO".to_string());
                     let current_title = headline.title_raw().trim().to_string();
+                    let current_level = headline.level();
                     let raw_text = &content[usize_range.clone()];
                     let current_body = extract_body(raw_text);
 
@@ -197,6 +201,7 @@ fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                         current_title,
                         current_body,
                         current_status,
+                        current_level,
                     });
                 }
             }
@@ -292,7 +297,7 @@ pub async fn run_update(
         fs::write(&location.path, new_content).context("Failed to write updated task file")?;
     } else {
         let range = location.range.as_ref().unwrap();
-        let new_headline = build_headline(id, new_title, new_body, new_status, 1);
+        let new_headline = build_headline(id, new_title, new_body, new_status, location.current_level);
         let new_content = format!(
             "{before}{new_headline}{after}",
             before = &location.content[..range.start],
