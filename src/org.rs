@@ -247,6 +247,9 @@ impl Headline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orgize::ParseConfig;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_empty_document() {
@@ -392,5 +395,227 @@ Investigate redirect issue
             .body("")
             .build();
         assert_eq!(h.to_string(), "* Task\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Round-trip tests via temp files + orgize parsing
+    // -----------------------------------------------------------------------
+
+    fn parsing_config() -> ParseConfig {
+        ParseConfig {
+            todo_keywords: (
+                vec!["TODO".to_string(), "NEXT".to_string(), "WAITING".to_string()],
+                vec!["DONE".to_string(), "CANCELED".to_string(), "SOMEDAY".to_string()],
+            ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_standalone_task() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("task.org");
+
+        let content = Document::builder()
+            .property("ID", "task-123")
+            .title("Buy groceries")
+            .filetags("task")
+            .headline(
+                Headline::builder()
+                    .level(1)
+                    .status("TODO")
+                    .title("Buy groceries")
+                    .property("ID", "task-123")
+                    .body("Milk, eggs, bread")
+                    .build(),
+            )
+            .build()
+            .to_string();
+
+        fs::write(&path, &content).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, content, "written content must match builder output");
+
+        // Parse back and verify structure
+        let config = parsing_config();
+        let org = config.parse(&saved);
+        let doc = org.document();
+
+        // Document-level properties
+        let props = doc.properties().unwrap();
+        assert_eq!(props.get("ID").unwrap(), "task-123");
+
+        // Document title
+        assert_eq!(org.title().unwrap(), "Buy groceries");
+
+        // Headline
+        let headlines: Vec<_> = doc.headlines().collect();
+        assert_eq!(headlines.len(), 1);
+        let h = &headlines[0];
+        assert_eq!(h.todo_keyword().unwrap().to_string(), "TODO");
+        assert_eq!(h.title_raw().trim(), "Buy groceries");
+        let h_props = h.properties().unwrap();
+        assert_eq!(h_props.get("ID").unwrap(), "task-123");
+    }
+
+    #[test]
+    fn test_roundtrip_project_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("project.org");
+
+        let content = Document::builder()
+            .property("ID", "proj-1")
+            .title("Sprint 12")
+            .filetags("project")
+            .headline(
+                Headline::builder()
+                    .level(1)
+                    .status("TODO")
+                    .title("Fix login bug")
+                    .property("ID", "task-1")
+                    .body("Investigate the auth redirect")
+                    .build(),
+            )
+            .headline(
+                Headline::builder()
+                    .level(1)
+                    .status("DONE")
+                    .title("Setup CI pipeline")
+                    .property("ID", "task-2")
+                    .build(),
+            )
+            .build()
+            .to_string();
+
+        fs::write(&path, &content).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, content);
+
+        // Parse back and verify
+        let config = parsing_config();
+        let org = config.parse(&saved);
+        let doc = org.document();
+
+        let props = doc.properties().unwrap();
+        assert_eq!(props.get("ID").unwrap(), "proj-1");
+        assert_eq!(org.title().unwrap(), "Sprint 12");
+
+        let headlines: Vec<_> = doc.headlines().collect();
+        assert_eq!(headlines.len(), 2);
+
+        // First task
+        let h0 = &headlines[0];
+        assert_eq!(h0.todo_keyword().unwrap().to_string(), "TODO");
+        assert_eq!(h0.title_raw().trim(), "Fix login bug");
+        assert_eq!(h0.properties().unwrap().get("ID").unwrap(), "task-1");
+
+        // Second task
+        let h1 = &headlines[1];
+        assert_eq!(h1.todo_keyword().unwrap().to_string(), "DONE");
+        assert_eq!(h1.title_raw().trim(), "Setup CI pipeline");
+        assert_eq!(h1.properties().unwrap().get("ID").unwrap(), "task-2");
+    }
+
+    #[test]
+    fn test_roundtrip_headline_appended_to_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("project.org");
+
+        // Write the project preamble
+        let preamble = Document::builder()
+            .property("ID", "proj-1")
+            .title("My Project")
+            .filetags("project")
+            .build()
+            .to_string();
+        fs::write(&path, &preamble).unwrap();
+
+        // Append a headline
+        let headline = Headline::builder()
+            .level(1)
+            .status("TODO")
+            .title("New task")
+            .property("ID", "task-new")
+            .body("Details here")
+            .build()
+            .to_string();
+        let mut full = fs::read_to_string(&path).unwrap();
+        if !full.ends_with('\n') {
+            full.push('\n');
+        }
+        full.push_str(&headline);
+        full.push('\n');
+        fs::write(&path, &full).unwrap();
+
+        // Parse and verify
+        let config = parsing_config();
+        let org = config.parse(&full);
+        let headlines: Vec<_> = org.document().headlines().collect();
+        assert_eq!(headlines.len(), 1);
+        let h = &headlines[0];
+        assert_eq!(h.todo_keyword().unwrap().to_string(), "TODO");
+        assert_eq!(h.title_raw().trim(), "New task");
+        assert_eq!(h.properties().unwrap().get("ID").unwrap(), "task-new");
+    }
+
+    #[test]
+    fn test_roundtrip_headline_no_body() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("task.org");
+
+        let content = Document::builder()
+            .property("ID", "t-1")
+            .title("Simple")
+            .filetags("task")
+            .headline(
+                Headline::builder()
+                    .level(1)
+                    .status("DONE")
+                    .title("Simple task")
+                    .property("ID", "t-1")
+                    .build(),
+            )
+            .build()
+            .to_string();
+
+        fs::write(&path, &content).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+
+        let config = parsing_config();
+        let org = config.parse(&saved);
+        let h = org.document().headlines().next().unwrap();
+        assert_eq!(h.todo_keyword().unwrap().to_string(), "DONE");
+        assert_eq!(h.title_raw().trim(), "Simple task");
+        assert_eq!(h.properties().unwrap().get("ID").unwrap(), "t-1");
+    }
+
+    #[test]
+    fn test_roundtrip_nested_headline_level_2() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested.org");
+
+        let content = Document::builder()
+            .title("Parent")
+            .headline(
+                Headline::builder()
+                    .level(2)
+                    .status("TODO")
+                    .title("Child task")
+                    .property("ID", "child-1")
+                    .body("Subtask details")
+                    .build(),
+            )
+            .build()
+            .to_string();
+
+        fs::write(&path, &content).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+
+        let config = parsing_config();
+        let org = config.parse(&saved);
+        let h = org.document().headlines().next().unwrap();
+        assert_eq!(h.todo_keyword().unwrap().to_string(), "TODO");
+        assert_eq!(h.title_raw().trim(), "Child task");
+        assert_eq!(h.properties().unwrap().get("ID").unwrap(), "child-1");
     }
 }
