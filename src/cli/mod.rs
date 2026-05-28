@@ -12,6 +12,7 @@ pub mod migrate;
 pub mod query;
 pub mod rebuild;
 pub mod serve;
+pub mod task;
 
 use auth::ServiceKind;
 use job::JobId;
@@ -88,6 +89,40 @@ enum Command {
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },
+    /// Create, update, or delete tasks
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaskCommand {
+    /// Create a new task
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "TODO")]
+        status: String,
+    },
+    /// Update an existing task by UUID
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Delete a task by UUID
+    Delete {
+        id: String,
+    },
 }
 
 #[derive(Parser)]
@@ -158,6 +193,35 @@ pub async fn run() -> Result<()> {
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
         }
+        Some(Command::Task { command }) => match command {
+            TaskCommand::Create {
+                title,
+                body,
+                project,
+                status,
+            } => {
+                task::run_create(&notes_path, &title, body.as_deref(), project.as_deref(), &status)
+                    .await?;
+            }
+            TaskCommand::Update {
+                id,
+                title,
+                body,
+                status,
+            } => {
+                task::run_update(
+                    &notes_path,
+                    &id,
+                    title.as_deref(),
+                    body.as_deref(),
+                    status.as_deref(),
+                )
+                .await?;
+            }
+            TaskCommand::Delete { id } => {
+                task::run_delete(&notes_path, &id).await?;
+            }
+        },
         None => {}
     }
 
