@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
-use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
+use tokio::fs;
 use uuid::Uuid;
 
 use crate::org;
@@ -113,13 +113,14 @@ struct TaskLocation {
     current_level: usize,
 }
 
-fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
-    let dir = fs::read_dir(notes_path)
-        .with_context(|| format!("Cannot read notes directory: {notes_path}"))?;
+async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     let id_pattern = format!(":ID:       {id}");
 
-    for entry in dir {
-        let entry = entry?;
+    let mut dir = fs::read_dir(notes_path)
+        .await
+        .with_context(|| format!("Cannot read notes directory: {notes_path}"))?;
+
+    while let Some(entry) = dir.next_entry().await? {
         let path = entry.path();
         if path.extension().map_or(true, |e| e != "org") {
             continue;
@@ -128,7 +129,7 @@ fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
             continue;
         }
 
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&path).await?;
         if !content.contains(&id_pattern) {
             continue;
         }
@@ -216,14 +217,13 @@ fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     anyhow::bail!("Task with ID {id} not found in {notes_path}");
 }
 
-fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
+async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name);
     let pattern = format!("--project-{slug}.org");
 
     // Look for existing project file
-    let dir = fs::read_dir(notes_path)?;
-    for entry in dir {
-        let entry = entry?;
+    let mut dir = fs::read_dir(notes_path).await?;
+    while let Some(entry) = dir.next_entry().await? {
         let path = entry.path();
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
         if file_name.ends_with(&pattern) {
@@ -242,7 +242,9 @@ fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBu
         .filetags("project")
         .build()
         .to_string();
-    fs::write(&filename, &content).context("Failed to create project file")?;
+    fs::write(&filename, &content)
+        .await
+        .context("Failed to create project file")?;
     println!("Created project file: {filename}");
     Ok(PathBuf::from(filename))
 }
@@ -258,22 +260,26 @@ pub async fn run_create(
     let body = body.unwrap_or_default();
 
     if let Some(project_name) = project {
-        let project_path = find_or_create_project(notes_path, project_name)?;
+        let project_path = find_or_create_project(notes_path, project_name).await?;
         let headline = build_headline(&id, title, body, status, 1);
-        let mut project_content = fs::read_to_string(&project_path)?;
+        let mut project_content = fs::read_to_string(&project_path).await?;
         if !project_content.ends_with('\n') {
             project_content.push('\n');
         }
         project_content.push_str(&headline);
         project_content.push('\n');
-        fs::write(&project_path, &project_content).context("Failed to write project file")?;
+        fs::write(&project_path, &project_content)
+            .await
+            .context("Failed to write project file")?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
     } else {
         let slug = slugify(title);
         let today = Local::now().format("%Y-%m-%d");
         let filename = format!("{notes_path}/{today}--{slug}.org");
         let content = build_standalone_org(&id, title, body, status);
-        fs::write(&filename, &content).context("Failed to write task file")?;
+        fs::write(&filename, &content)
+            .await
+            .context("Failed to write task file")?;
         println!("Created task '{title}' (id: {id}, file: {filename})");
     }
 
@@ -287,14 +293,16 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
 ) -> Result<()> {
-    let location = find_task(notes_path, id)?;
+    let location = find_task(notes_path, id).await?;
     let new_title = title.unwrap_or(&location.current_title);
     let new_body = body.unwrap_or(&location.current_body);
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
     if location.is_standalone {
         let new_content = build_standalone_org(id, new_title, new_body, new_status);
-        fs::write(&location.path, new_content).context("Failed to write updated task file")?;
+        fs::write(&location.path, &new_content)
+            .await
+            .context("Failed to write updated task file")?;
     } else {
         let range = location.range.as_ref().unwrap();
         let new_headline = build_headline(id, new_title, new_body, new_status, location.current_level);
@@ -303,7 +311,9 @@ pub async fn run_update(
             before = &location.content[..range.start],
             after = &location.content[range.end..]
         );
-        fs::write(&location.path, new_content).context("Failed to write updated project file")?;
+        fs::write(&location.path, &new_content)
+            .await
+            .context("Failed to write updated project file")?;
     }
 
     println!("Task {id} updated");
@@ -311,10 +321,12 @@ pub async fn run_update(
 }
 
 pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
-    let location = find_task(notes_path, id)?;
+    let location = find_task(notes_path, id).await?;
 
     if location.is_standalone {
-        fs::remove_file(&location.path).context("Failed to delete task file")?;
+        fs::remove_file(&location.path)
+            .await
+            .context("Failed to delete task file")?;
         println!("Deleted task file: {}", location.path.display());
     } else {
         let range = location.range.as_ref().unwrap();
@@ -323,7 +335,9 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
         // Remove one trailing newline if present to avoid blank-line gaps
         let after = after.strip_prefix('\n').unwrap_or(after);
         let new_content = format!("{before}{after}");
-        fs::write(&location.path, new_content).context("Failed to write project file after deletion")?;
+        fs::write(&location.path, &new_content)
+            .await
+            .context("Failed to write project file after deletion")?;
         println!("Deleted task {id} from {}", location.path.display());
     }
 
@@ -334,6 +348,7 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use orgize::ParseConfig;
+    use std::fs;
     use tempfile::TempDir;
 
     fn parsing_config() -> ParseConfig {
@@ -712,12 +727,12 @@ mod tests {
     // find_or_create_project
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_find_or_create_project_creates_new() {
+    #[tokio::test]
+    async fn test_find_or_create_project_creates_new() {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let path = find_or_create_project(&notes, "my-project").unwrap();
+        let path = find_or_create_project(&notes, "my-project").await.unwrap();
         assert!(path.exists());
         assert!(path.to_str().unwrap().contains("--project-my-project"));
 
@@ -727,13 +742,13 @@ mod tests {
         assert!(content.contains("#+FILETAGS: project"));
     }
 
-    #[test]
-    fn test_find_or_create_project_finds_existing() {
+    #[tokio::test]
+    async fn test_find_or_create_project_finds_existing() {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let path1 = find_or_create_project(&notes, "my-project").unwrap();
-        let path2 = find_or_create_project(&notes, "my-project").unwrap();
+        let path1 = find_or_create_project(&notes, "my-project").await.unwrap();
+        let path2 = find_or_create_project(&notes, "my-project").await.unwrap();
 
         assert_eq!(path1, path2, "should return the same existing file");
     }
