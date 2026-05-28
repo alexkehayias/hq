@@ -324,3 +324,412 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orgize::ParseConfig;
+    use tempfile::TempDir;
+
+    fn parsing_config() -> ParseConfig {
+        ParseConfig {
+            todo_keywords: (
+                vec!["TODO".to_string(), "NEXT".to_string(), "WAITING".to_string()],
+                vec!["DONE".to_string(), "CANCELED".to_string(), "SOMEDAY".to_string()],
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// Parse an org file at `path` and return the first headline's properties.
+    fn parse_headline(path: &std::path::Path) -> (String, String, String) {
+        let content = fs::read_to_string(path).unwrap();
+        let config = parsing_config();
+        let org = config.parse(&content);
+        let h = org.document().headlines().next().unwrap();
+        let status = h.todo_keyword().map(|k| k.to_string()).unwrap_or_default();
+        let title = h.title_raw().trim().to_string();
+        let props = h.properties().unwrap();
+        let id = props.get("ID").unwrap().to_string();
+        (id, status, title)
+    }
+
+    fn headline_count(path: &std::path::Path) -> usize {
+        let content = fs::read_to_string(path).unwrap();
+        let config = parsing_config();
+        let org = config.parse(&content);
+        org.document().headlines().count()
+    }
+
+    // -----------------------------------------------------------------------
+    // slugify
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_slugify_normal() {
+        assert_eq!(slugify("Buy groceries"), "buy-groceries");
+    }
+
+    #[test]
+    fn test_slugify_multiple_spaces() {
+        assert_eq!(slugify("  hello   world  "), "hello-world");
+    }
+
+    #[test]
+    fn test_slugify_special_chars() {
+        assert_eq!(slugify("Fix bug! (urgent) #42"), "fix-bug-urgent-42");
+    }
+
+    #[test]
+    fn test_slugify_only_special_chars() {
+        assert_eq!(slugify("!!! @@@ $$$"), "untitled");
+    }
+
+    #[test]
+    fn test_slugify_empty_string() {
+        assert_eq!(slugify(""), "untitled");
+    }
+
+    #[test]
+    fn test_slugify_already_slug() {
+        assert_eq!(slugify("my-task-name"), "my-task-name");
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_body
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_body_basic() {
+        let raw = "* TODO Buy milk\n:PROPERTIES:\n:ID:       abc\n:END:\nMilk, eggs\n";
+        assert_eq!(extract_body(raw), "Milk, eggs");
+    }
+
+    #[test]
+    fn test_extract_body_no_body() {
+        let raw = "* TODO Buy milk\n:PROPERTIES:\n:ID:       abc\n:END:\n";
+        assert_eq!(extract_body(raw), "");
+    }
+
+    #[test]
+    fn test_extract_body_multiline() {
+        let raw = "* TODO Task\n:PROPERTIES:\n:ID:       abc\n:END:\nLine 1\nLine 2\nLine 3\n";
+        assert_eq!(extract_body(raw), "Line 1\nLine 2\nLine 3");
+    }
+
+    #[test]
+    fn test_extract_body_no_status() {
+        let raw = "* Task\n:PROPERTIES:\n:ID:       abc\n:END:\nJust a note\n";
+        assert_eq!(extract_body(raw), "Just a note");
+    }
+
+    #[test]
+    fn test_extract_body_whitespace_only() {
+        let raw = "* TODO Task\n:PROPERTIES:\n:ID:       abc\n:END:\n   \n  \n";
+        assert_eq!(extract_body(raw), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // run_create — standalone
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_create_standalone_task() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Test Task", None, None, "TODO")
+            .await
+            .unwrap();
+
+        // Should create a single .org file
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let path = entries[0].as_ref().unwrap().path();
+        assert!(path.extension().unwrap() == "org");
+
+        let (id, status, title) = parse_headline(&path);
+        assert_eq!(status, "TODO");
+        assert_eq!(title, "Test Task");
+        assert!(!id.is_empty(), "should have a UUID");
+    }
+
+    #[tokio::test]
+    async fn test_create_standalone_task_with_body() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
+            .await
+            .unwrap();
+
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let path = entries[0].as_ref().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Milk, eggs, bread"));
+    }
+
+    #[tokio::test]
+    async fn test_create_standalone_task_custom_status() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Urgent fix", None, None, "NEXT")
+            .await
+            .unwrap();
+
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let path = entries[0].as_ref().unwrap().path();
+        let (_, status, _) = parse_headline(&path);
+        assert_eq!(status, "NEXT");
+    }
+
+    // -----------------------------------------------------------------------
+    // run_create — project
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_create_project_task_creates_project_file() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        // Should create project file with one headline
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let path = entries[0].as_ref().unwrap().path();
+        assert!(path.to_str().unwrap().contains("--project-sprint-12"));
+        assert_eq!(headline_count(&path), 1);
+
+        let (id, status, title) = parse_headline(&path);
+        assert_eq!(status, "TODO");
+        assert_eq!(title, "Fix login");
+        assert!(!id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_second_task_in_project() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE")
+            .await
+            .unwrap();
+
+        // Single project file with two headlines
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let path = entries[0].as_ref().unwrap().path();
+        assert_eq!(headline_count(&path), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // run_update
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_update_standalone_status() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "My task", None, None, "TODO")
+            .await
+            .unwrap();
+
+        // Find the created task's ID
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+
+        run_update(&notes, &id, None, None, Some("DONE"))
+            .await
+            .unwrap();
+
+        let (_, status, _) = parse_headline(&path);
+        assert_eq!(status, "DONE");
+    }
+
+    #[tokio::test]
+    async fn test_update_standalone_title_and_body() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Old title", Some("Old body"), None, "TODO")
+            .await
+            .unwrap();
+
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+
+        run_update(&notes, &id, Some("New title"), Some("New body"), None)
+            .await
+            .unwrap();
+
+        let (_, status, title) = parse_headline(&path);
+        assert_eq!(status, "TODO");
+        assert_eq!(title, "New title");
+        let new_content = fs::read_to_string(&path).unwrap();
+        assert!(new_content.contains("New body"));
+        assert!(!new_content.contains("Old body"));
+    }
+
+    #[tokio::test]
+    async fn test_update_project_task_status() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        // Find the task ID from the project file
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        // The headline ID is the second occurrence (after the project-level ID)
+        let id_marker = ":ID:       ";
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        run_update(&notes, &id, None, None, Some("DONE"))
+            .await
+            .unwrap();
+
+        // Re-parse and check the headline
+        let config = parsing_config();
+        let org = config.parse(&fs::read_to_string(&path).unwrap());
+        let headlines: Vec<_> = org.document().headlines().collect();
+        assert_eq!(headlines.len(), 1);
+        assert_eq!(
+            headlines[0].todo_keyword().unwrap().to_string(),
+            "DONE"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_nonexistent_task() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE")).await;
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // run_delete
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_delete_standalone_task() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Temp task", None, None, "TODO")
+            .await
+            .unwrap();
+
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+
+        run_delete(&notes, &id).await.unwrap();
+
+        // File should be gone
+        assert!(fs::read_dir(&notes).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_project_task() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        // Find the first headline's ID (second :ID: in file)
+        let id_marker = ":ID:       ";
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        run_delete(&notes, &id).await.unwrap();
+
+        // One headline should remain
+        assert_eq!(headline_count(&path), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_last_project_task_leaves_project_file() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_marker = ":ID:       ";
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        run_delete(&notes, &id).await.unwrap();
+
+        // Project file should still exist (preamble remains)
+        assert!(path.exists());
+        assert_eq!(headline_count(&path), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_task() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = run_delete(&notes, "nonexistent-uuid").await;
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // find_or_create_project
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_or_create_project_creates_new() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let path = find_or_create_project(&notes, "my-project").unwrap();
+        assert!(path.exists());
+        assert!(path.to_str().unwrap().contains("--project-my-project"));
+
+        // Should contain a project preamble
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("#+TITLE: my-project"));
+        assert!(content.contains("#+FILETAGS: project"));
+    }
+
+    #[test]
+    fn test_find_or_create_project_finds_existing() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let path1 = find_or_create_project(&notes, "my-project").unwrap();
+        let path2 = find_or_create_project(&notes, "my-project").unwrap();
+
+        assert_eq!(path1, path2, "should return the same existing file");
+    }
+}
