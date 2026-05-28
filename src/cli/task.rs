@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use chrono::Local;
-use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -8,24 +7,6 @@ use tokio::fs;
 use uuid::Uuid;
 
 use crate::org;
-
-fn todo_keywords_config() -> ParseConfig {
-    ParseConfig {
-        todo_keywords: (
-            vec![
-                "TODO".to_string(),
-                "NEXT".to_string(),
-                "WAITING".to_string(),
-            ],
-            vec![
-                "DONE".to_string(),
-                "CANCELED".to_string(),
-                "SOMEDAY".to_string(),
-            ],
-        ),
-        ..Default::default()
-    }
-}
 
 fn slugify(s: &str) -> String {
     let slug: String = s
@@ -144,7 +125,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
         };
 
         if is_standalone {
-            let config = todo_keywords_config();
+            let config = org::todo_keywords_config();
             let org = config.parse(&content);
             let headline = org
                 .document()
@@ -177,7 +158,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
         }
 
         // Headline-level: parse to find the matching headline
-        let config = todo_keywords_config();
+        let config = org::todo_keywords_config();
         let org = config.parse(&content);
         for headline in org.document().headlines() {
             if let Some(props) = headline.properties() {

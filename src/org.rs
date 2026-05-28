@@ -1,4 +1,27 @@
+use orgize::ParseConfig;
 use std::fmt;
+
+/// Return a `ParseConfig` with the project's standard TODO keywords.
+///
+/// Active keywords: TODO, NEXT, WAITING
+/// Done keywords:   DONE, CANCELED, SOMEDAY
+pub fn todo_keywords_config() -> ParseConfig {
+    ParseConfig {
+        todo_keywords: (
+            vec![
+                "TODO".to_string(),
+                "NEXT".to_string(),
+                "WAITING".to_string(),
+            ],
+            vec![
+                "DONE".to_string(),
+                "CANCELED".to_string(),
+                "SOMEDAY".to_string(),
+            ],
+        ),
+        ..Default::default()
+    }
+}
 
 /// Builder for constructing org-mode documents.
 ///
