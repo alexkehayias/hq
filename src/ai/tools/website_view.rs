@@ -18,6 +18,37 @@ const MAX_OUTPUT_CHARS: usize = MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN;
 /// How many characters to keep in the truncated response returned to the AI.
 const TRUNCATED_PREFIX_CHARS: usize = 7_500 * CHARS_PER_TOKEN;
 
+/// Clean a URL by stripping query parameters, retaining only scheme, host, port, and path.
+fn clean_url(url_str: &str) -> Result<String> {
+    let url = reqwest::Url::parse(url_str.trim())
+        .map_err(|e| anyhow::anyhow!("Invalid URL '{}': {}", url_str, e))?;
+    let host = url.host_str().context("Missing host in URL")?;
+    let port = url
+        .port()
+        .map(|p| format!(":{}", p))
+        .unwrap_or_default();
+    Ok(format!("{}://{}{}{}", url.scheme(), host, port, url.path()))
+}
+
+/// Fetch a URL and return the HTTP response.
+pub async fn fetch_url_response(url_str: &str) -> Result<reqwest::Response> {
+    let clean_url = clean_url(url_str)?;
+    let response = reqwest::Client::new()
+        .get(&clean_url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?;
+    Ok(response)
+}
+
+/// Convert HTML content to markdown, skipping non-content tags.
+pub fn html_to_markdown(html: &str) -> Result<String> {
+    let converter = HtmlToMarkdown::builder()
+        .skip_tags(vec!["script", "style", "footer", "img", "svg"])
+        .build();
+    Ok(converter.convert(html)?)
+}
+
 #[derive(Serialize)]
 pub struct WebsiteViewProps {
     pub url: Property,
@@ -40,21 +71,6 @@ pub struct WebsiteViewTool {
 impl ToolCall for WebsiteViewTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: WebsiteViewArgs = parse_tool_args(args)?;
-        // let url = fn_args.url;
-
-        // Clean the URL, stripping away unnecessary URL params like
-        // UTM codes. This breaks sites that rely on query params for
-        // viewing the content but that's a fair tradeoff to prevent
-        // accidental data leakage.
-        let url = reqwest::Url::parse(fn_args.url.trim())
-            .context(fn_args.url)
-            .expect("Invalid URL");
-        let host = url.host_str().expect("Missing host");
-        let port = url
-            .port()
-            .map(|p| format!(":{}", p))
-            .unwrap_or_default();
-        let clean_url = format!("{}://{}{}{}", url.scheme(), host, port, url.path());
 
         // TODO: Rewrite URLs based on rules. For example, use mirrors
         // or archives for certain sites.
@@ -67,11 +83,7 @@ impl ToolCall for WebsiteViewTool {
         // params?
 
         // Fetch the HTML content from the URL
-        let response = reqwest::Client::new()
-            .get(&clean_url)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await;
+        let response = fetch_url_response(&fn_args.url).await;
 
         // Handle request errors like timeouts
         let content = match response {
@@ -100,28 +112,26 @@ impl ToolCall for WebsiteViewTool {
 
                 // Convert HTML to markdown
                 let html_content = resp.text().await?;
-                let converter = HtmlToMarkdown::builder()
-                    .skip_tags(vec!["script", "style", "footer", "img", "svg"])
-                    .build();
-                converter.convert(&html_content)?
+                html_to_markdown(&html_content)?
             }
             Err(e) => {
                 // If the request failed, provide a default answer so we
                 // don't crash the whole chat. For example: "Fetching the link
                 // failed and due to a 500 status code"
-                match e {
-                    i if i.is_timeout() => {
+                let reqwest_err = e.downcast_ref::<reqwest::Error>();
+                match reqwest_err {
+                    Some(i) if i.is_timeout() => {
                         tracing::warn!("Website view failed due to timeout.");
                         return Err(RecoverableToolError::new(
                             "Request timed out. The server may be slow or unavailable — try again or use a different source.",
                         )
                         .into());
                     }
-                    i if i.is_request() => {
+                    Some(i) if i.is_request() => {
                         tracing::warn!("Website view failed due to request sending error.");
                         String::from("Request was not able to be sent. Do not retry.")
                     }
-                    i if i.is_status() => {
+                    Some(i) if i.is_status() => {
                         // HTTP status errors are handled in the Ok(resp)
                         // branch above. This path is a safety net in case
                         // reqwest is configured to treat non-2xx as errors.

@@ -11,6 +11,7 @@ pub mod job;
 pub mod migrate;
 pub mod query;
 pub mod rebuild;
+pub mod search;
 pub mod serve;
 
 use auth::ServiceKind;
@@ -88,6 +89,11 @@ enum Command {
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },
+    /// Search web, notes, and more
+    Search {
+        #[command(subcommand)]
+        kind: search::Search,
+    },
 }
 
 #[derive(Parser)]
@@ -158,6 +164,14 @@ pub async fn run() -> Result<()> {
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
         }
+        Some(Command::Search { kind }) => match kind {
+            search::Search::Web { url } => {
+                search::web::run(url).await?;
+            }
+            search::Search::Notes { term, vector } => {
+                search::notes::run(term, vector, &index_path, &vec_db_path).await?;
+            }
+        },
         None => {}
     }
 
