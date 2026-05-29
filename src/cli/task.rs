@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::Local;
+use orgize::export::{Container, Event, TraversalContext, Traverser};
 use orgize::rowan::ast::AstNode;
+use orgize::SyntaxElement;
 use std::ops::Range;
 use std::path::PathBuf;
 use tokio::fs;
@@ -62,25 +64,73 @@ fn build_headline(id: &str, title: &str, body: &str, status: &str, level: usize)
     h.build().to_string()
 }
 
-fn extract_body(raw: &str) -> String {
-    let lines = raw.lines().skip(1);
-    let mut body = Vec::new();
-    let mut in_props = false;
-    for line in lines {
-        if line.trim() == ":PROPERTIES:" {
-            in_props = true;
-            continue;
-        }
-        if in_props {
-            if line.trim() == ":END:" {
-                in_props = false;
-                continue;
-            }
-            continue; // skip property lines
-        }
-        body.push(line);
+/// Traverses a headline's syntax subtree and extracts body text,
+/// skipping the headline title and property drawer.
+#[derive(Default)]
+struct BodyExtractor {
+    output: String,
+    in_headline_title: bool,
+}
+
+impl BodyExtractor {
+    fn finish(self) -> String {
+        self.output.trim().to_string()
     }
-    body.join("\n").trim().to_string()
+}
+
+impl Traverser for BodyExtractor {
+    fn event(&mut self, event: Event, ctx: &mut TraversalContext) {
+        match event {
+            Event::Enter(Container::Headline(_)) => {
+                self.in_headline_title = true;
+            }
+            Event::Leave(Container::Headline(_)) => {
+                self.in_headline_title = false;
+            }
+            // Entering a Section means we've passed the headline title
+            // and are now in the body area.
+            Event::Enter(Container::Section(_)) => {
+                self.in_headline_title = false;
+            }
+            // Skip property drawers entirely
+            Event::Enter(Container::PropertyDrawer(_)) => {
+                ctx.skip();
+            }
+            Event::Leave(Container::PropertyDrawer(_)) => {}
+            // Add newline between paragraphs
+            Event::Leave(Container::Paragraph(_)) => {
+                if !self.in_headline_title {
+                    self.output.push('\n');
+                }
+            }
+            Event::Text(text) => {
+                if !self.in_headline_title {
+                    self.output.push_str(&text);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extract body text from a headline's syntax node using the orgize Traverser.
+fn body_from_headline(headline: &orgize::ast::Headline) -> String {
+    let mut extractor = BodyExtractor::default();
+    let mut ctx = TraversalContext::default();
+    extractor.element(SyntaxElement::Node(headline.syntax().clone()), &mut ctx);
+    extractor.finish()
+}
+
+/// Extract body text from a raw org-mode headline string.
+///
+/// Parses the string with orgize and uses the AST-based traverser.
+fn extract_body(raw: &str) -> String {
+    let config = org::todo_keywords_config();
+    let org = config.parse(raw);
+    match org.document().headlines().next() {
+        Some(h) => body_from_headline(&h),
+        None => String::new(),
+    }
 }
 
 struct TaskLocation {
@@ -139,11 +189,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                 .unwrap_or_else(|| "TODO".to_string());
             let current_title = headline.title_raw().trim().to_string();
             let current_level = headline.level();
-            let range = headline.syntax().text_range();
-            let usize_range =
-                u32::from(range.start()) as usize..u32::from(range.end()) as usize;
-            let raw_text = &content[usize_range.clone()];
-            let current_body = extract_body(raw_text);
+            let current_body = body_from_headline(&headline);
 
             return Ok(TaskLocation {
                 path,
@@ -172,8 +218,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                         .unwrap_or_else(|| "TODO".to_string());
                     let current_title = headline.title_raw().trim().to_string();
                     let current_level = headline.level();
-                    let raw_text = &content[usize_range.clone()];
-                    let current_body = extract_body(raw_text);
+                    let current_body = body_from_headline(&headline);
 
                     return Ok(TaskLocation {
                         path,
