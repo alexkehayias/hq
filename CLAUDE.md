@@ -14,11 +14,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Rust Server & Development
 ```bash
-# Run the server (default: localhost:2222)
+# Run the server (default: localhost:2222, or next available port)
 cargo run -- serve
 
 # Start dev server with auto-reload (requires watchexec-cli: cargo install --locked watchexec-cli)
 ./bin/watch.sh
+
+# Start dev server on a dynamic port (avoids conflicts with other worktrees)
+./bin/run.sh
+# Picks the next available port starting from 2222.
+# Writes the chosen port to .worktree-env (e.g., HQ_PORT=2223).
 
 # Run tests
 cargo test
@@ -113,6 +118,28 @@ Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `
 | `HQ_NOTES_REPO_URL` | Git repo URL for notes |
 | `HQ_GMAIL_CLIENT_ID/SECRET` | Gmail OAuth credentials |
 | `HQ_VAPID_KEY_PATH` | Web push notification keys |
+
+## Worktree Development
+
+This project uses git worktrees for isolated development. Each worktree gets its own storage, database, and server port.
+
+```bash
+# Create a new worktree and set up the dev environment
+git worktree add .claude/worktrees/<name> <branch>
+cd .claude/worktrees/<name>
+# Run setup (creates storage dirs, initializes DB, loads example data)
+./bin/setup.sh
+# Start the dev server (picks next available port from 2222)
+./bin/run.sh
+```
+
+Key behaviors:
+- **Ports**: `bin/pick-port.sh` scans from 2222 upward for an available port. Each worktree gets a unique port.
+- **Env file**: `run.sh` writes `.worktree-env` with `HQ_PORT` and `HQ_HOST` so other tools can discover the server.
+- **`.worktree-env`** is gitignored — each worktree generates its own.
+- **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
+- **Storage**: `bin/setup.sh` creates `.hq-data/` with subdirs (`db/`, `index/`, `notes/`, etc.) and writes `HQ_STORAGE_PATH` into `.claude/settings.local.json` so Claude Code picks it up automatically.
+- **Claude Code**: Each worktree has its own `.claude/settings.local.json` with `HQ_STORAGE_PATH` set and a `DirChanged` hook that sources `.worktree-env`.
 
 ## Testing
 

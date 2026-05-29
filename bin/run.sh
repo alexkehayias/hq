@@ -13,32 +13,49 @@ else
 fi
 
 cd ..
-# cargo test
 
-# Start server in background
+# Source worktree env vars if present (set by setup.sh)
+if [ -f .worktree-env ]; then
+    set -a
+    source .worktree-env
+    set +a
+fi
+
 HOST=localhost
-PORT=2222
-RUST_BACKTRACE=1 cargo run -- serve --host $HOST --port $PORT &
+PORT=$(./bin/pick-port.sh)
+
+# Write the port to .worktree-env (preserving existing vars like HQ_STORAGE_PATH)
+if ! grep -q '^export HQ_PORT=' .worktree-env 2>/dev/null; then
+    echo "export HQ_PORT=$PORT" >> .worktree-env
+else
+    sed -i '' "s/^export HQ_PORT=.*/export HQ_PORT=$PORT/" .worktree-env
+fi
+if ! grep -q '^export HQ_HOST=' .worktree-env 2>/dev/null; then
+    echo "export HQ_HOST=$HOST" >> .worktree-env
+else
+    sed -i '' "s/^export HQ_HOST=.*/export HQ_HOST=$HOST/" .worktree-env
+fi
+
+RUST_BACKTRACE=1 cargo run -- serve --host "$HOST" --port "$PORT" &
 PID=$!
 
-# Function to cleanup server
+echo "Starting server on http://${HOST}:${PORT}"
+
 cleanup() {
     kill $PID 2>/dev/null || true
     exit
 }
 
-# Trap exit signals to cleanup
 trap cleanup EXIT INT TERM
 
-# Wait for port 2222
 TIMEOUT=30
 start=$(date +%s)
-while ! nc -z ${HOST} ${PORT}; do
+while ! nc -z "${HOST}" "${PORT}"; do
     (( $(date +%s) - start > TIMEOUT )) && { kill $PID 2>/dev/null || true; exit 1; }
     sleep 0.5
 done
 
-echo "Server ready"
+echo "Server ready: http://${HOST}:${PORT}"
 
 # Reload the active Chrome browser tab
 osascript ./bin/reloadChromeTab.scptd

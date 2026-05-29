@@ -10,3 +10,5 @@ marginalia.org
 .DS_STORE
 .claude/settings.local.json
 .claude/worktrees
+.worktree-env
+.hq-data
