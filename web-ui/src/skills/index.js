@@ -345,7 +345,7 @@ function modeForPath(path) {
   if (name.endsWith('.html') || name.endsWith('.xml') || name.endsWith('.svg'))
     return 'xml';
   if (ext === 'css' || ext === 'json') return ext;
-  return 'markdown';
+  return null;
 }
 
 function escHtml(s) {
@@ -355,7 +355,7 @@ function escHtml(s) {
 }
 
 function escAttr(s) {
-  return s.replace(/"/g, '"').replace(/'/g, '&#39;');
+  return s.replace(/&/g, '&').replace(/"/g, '"').replace(/'/g, '&#39;').replace(/</g, '<').replace(/>/g, '>');
 }
 
 function badge(text, color) {

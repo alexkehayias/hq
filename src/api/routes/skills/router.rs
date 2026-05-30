@@ -130,28 +130,41 @@ async fn read_skill_file(
     }))
 }
 
+/// Maximum file size for writes (1 MB).
+const MAX_FILE_SIZE: usize = 1_048_576;
+
 /// Write content to a file in a skill's directory.
 async fn write_skill_file(
     State(state): State<SharedState>,
     Path((name, file_path)): Path<(String, String)>,
     Json(body): Json<SkillFileWriteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let registry = state.read().expect("Unable to read shared state");
+    if body.content.len() > MAX_FILE_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"error": format!("File too large. Maximum size is {} bytes", MAX_FILE_SIZE)})),
+        ));
+    }
 
-    let registry = registry
-        .skill_registry
-        .as_ref()
-        .ok_or_else(|| not_found("Skills directory not configured"))?;
+    // Extract the skill's base path under the lock, then drop it before doing I/O
+    let skill_path = {
+        let state = state.read().expect("Unable to read shared state");
 
-    let skill = registry
-        .load_skill(&name)
-        .map_err(|_| not_found(&format!("Skill '{}' not found", name)))?;
+        let registry = state
+            .skill_registry
+            .as_ref()
+            .ok_or_else(|| not_found("Skills directory not configured"))?;
 
-    let full_path = skill.path.join(&file_path);
+        registry
+            .load_skill(&name)
+            .map_err(|_| not_found(&format!("Skill '{}' not found", name)))?
+            .path
+    };
+
+    let full_path = skill_path.join(&file_path);
 
     // Security: prevent path traversal — ensure resolved path is within the skill directory
-    let canonical_skill_dir = skill
-        .path
+    let canonical_skill_dir = skill_path
         .canonicalize()
         .map_err(|e| internal_error(&format!("Failed to resolve skill path: {}", e)))?;
 
