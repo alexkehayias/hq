@@ -4,7 +4,7 @@
 let currentSkill = null;
 let currentFile = null;
 let editor = null;
-let fileData = {}; // { path: content }
+const fileData = {}; // { path: content }
 let hasChanges = false;
 
 /* ===== Init ===== */
@@ -59,17 +59,22 @@ async function loadSkills() {
       return;
     }
 
-    grid.innerHTML = data.skills.map(skill => `
+    grid.innerHTML = data.skills
+      .map(
+        (skill) => `
       <a href="/skills/?name=${encodeURIComponent(skill.name)}"
          class="block p-5 bg-gray-50 dark:bg-gray-700 hover:bg-blue-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200 border border-transparent hover:border-blue-200 dark:hover:border-blue-800">
         <h3 class="font-semibold text-gray-900 dark:text-white truncate">${escHtml(skill.name)}</h3>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400 line-clamp-2">${escHtml(skill.description)}</p>
       </a>
-    `).join('');
+    `,
+      )
+      .join('');
     grid.classList.remove('hidden');
   } catch (err) {
     loading.classList.add('hidden');
-    document.getElementById('list-error-msg').textContent = `Failed to load skills: ${err.message}`;
+    document.getElementById('list-error-msg').textContent =
+      `Failed to load skills: ${err.message}`;
     error.classList.remove('hidden');
   }
 }
@@ -108,7 +113,8 @@ async function showDetailView(name) {
 
     // Render header
     document.getElementById('skill-name').textContent = currentSkill.name;
-    document.getElementById('skill-description').textContent = currentSkill.description;
+    document.getElementById('skill-description').textContent =
+      currentSkill.description;
 
     const badges = document.getElementById('skill-badges');
     badges.innerHTML = '';
@@ -134,7 +140,8 @@ async function showDetailView(name) {
     }
   } catch (err) {
     loading.classList.add('hidden');
-    document.getElementById('detail-error-msg').textContent = `Failed to load skill: ${err.message}`;
+    document.getElementById('detail-error-msg').textContent =
+      `Failed to load skill: ${err.message}`;
     error.classList.remove('hidden');
   }
 }
@@ -146,15 +153,19 @@ async function renderFileTree(files) {
 
   // Pre-fetch all file contents
   const fetchPromises = files
-    .filter(f => !f.is_directory)
-    .map(async f => {
+    .filter((f) => !f.is_directory)
+    .map(async (f) => {
       try {
-        const res = await fetch(`/api/skills/${encodeURIComponent(currentSkill.name)}/files/${encodeURIComponent(f.path)}`);
+        const res = await fetch(
+          `/api/skills/${encodeURIComponent(currentSkill.name)}/files/${encodeURIComponent(f.path)}`,
+        );
         if (res.ok) {
           const data = await res.json();
           fileData[f.path] = data.content;
         }
-      } catch (_) { /* skip unreadable files */ }
+      } catch (_) {
+        /* skip unreadable files */
+      }
     });
 
   await Promise.all(fetchPromises);
@@ -205,7 +216,7 @@ async function renderFileTree(files) {
   tree.innerHTML = html;
 
   // Click handlers
-  tree.querySelectorAll('[data-file-path]').forEach(el => {
+  tree.querySelectorAll('[data-file-path]').forEach((el) => {
     el.addEventListener('click', () => openFile(el.dataset.filePath));
   });
 }
@@ -228,7 +239,7 @@ function openFile(path) {
   updateSaveButton();
 
   // Highlight active file in tree
-  document.querySelectorAll('.file-tree-item').forEach(el => {
+  document.querySelectorAll('.file-tree-item').forEach((el) => {
     el.classList.remove('bg-blue-100', 'dark:bg-gray-600', 'font-medium');
     if (el.dataset.filePath === path) {
       el.classList.add('bg-blue-100', 'dark:bg-gray-600', 'font-medium');
@@ -279,11 +290,14 @@ async function saveFile() {
   btn.textContent = 'Saving...';
 
   try {
-    const res = await fetch(`/api/skills/${encodeURIComponent(currentSkill.name)}/files/${encodeURIComponent(currentFile)}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: editor.getValue() }),
-    });
+    const res = await fetch(
+      `/api/skills/${encodeURIComponent(currentSkill.name)}/files/${encodeURIComponent(currentFile)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: editor.getValue() }),
+      },
+    );
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -322,11 +336,14 @@ function modeForPath(path) {
   const name = path.toLowerCase();
   if (name.endsWith('.md') || name.endsWith('.markdown')) return 'markdown';
   if (name.endsWith('.py')) return 'python';
-  if (name.endsWith('.js') || name.endsWith('.mjs') || name.endsWith('.cjs')) return 'javascript';
+  if (name.endsWith('.js') || name.endsWith('.mjs') || name.endsWith('.cjs'))
+    return 'javascript';
   if (name.endsWith('.ts') || name.endsWith('.tsx')) return 'javascript';
-  if (name.endsWith('.sh') || name.endsWith('.bash') || name.endsWith('.zsh')) return 'shell';
+  if (name.endsWith('.sh') || name.endsWith('.bash') || name.endsWith('.zsh'))
+    return 'shell';
   if (name.endsWith('.yaml') || name.endsWith('.yml')) return 'yaml';
-  if (name.endsWith('.html') || name.endsWith('.xml') || name.endsWith('.svg')) return 'xml';
+  if (name.endsWith('.html') || name.endsWith('.xml') || name.endsWith('.svg'))
+    return 'xml';
   if (ext === 'css' || ext === 'json') return ext;
   return 'markdown';
 }
@@ -345,7 +362,8 @@ function badge(text, color) {
   const colors = {
     blue: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
     green: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
-    purple: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300',
+    purple:
+      'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300',
   };
   const el = document.createElement('span');
   el.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colors[color] || colors.blue}`;
