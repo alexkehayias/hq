@@ -7,6 +7,7 @@ mod kv;
 pub mod metrics;
 pub mod notes;
 pub mod push;
+pub mod skills;
 pub mod web;
 pub mod webhook;
 
@@ -36,6 +37,8 @@ pub fn router() -> Router<SharedState> {
         .nest("/web", web::router())
         // Metrics routes
         .nest("/metrics", metrics::router())
+        // Skills routes
+        .nest("/skills", skills::router())
         // Webhook routes
         .nest("/webhook", webhook::router())
 }

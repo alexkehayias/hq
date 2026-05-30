@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use axum::{Router, body::Body};
 
 use hq::ai::chat::db::{get_or_create_session, insert_chat_message};
+use hq::ai::skills::SkillRegistry;
 use hq::api::AppState;
 use hq::api::app;
 use hq::core::AppConfig;
@@ -77,7 +78,7 @@ pub async fn test_app() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let app_state = AppState::new(db, app_config);
+    let app_state = AppState::new(db, app_config, None);
     app(Arc::new(RwLock::new(app_state)))
 }
 
@@ -160,7 +161,7 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let app_state = AppState::new(db, app_config);
+    let app_state = AppState::new(db, app_config, None);
     (app(Arc::new(RwLock::new(app_state.clone()))), app_state)
 }
 
@@ -250,7 +251,8 @@ pub async fn test_app_with_skills() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let app_state = AppState::new(db, app_config);
+    let skill_registry = SkillRegistry::new(skills_path.display().to_string()).ok();
+    let app_state = AppState::new(db, app_config, skill_registry);
     app(Arc::new(RwLock::new(app_state)))
 }
 

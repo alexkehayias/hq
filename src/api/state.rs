@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use tokio_rusqlite::Connection;
 
+use crate::ai::skills::SkillRegistry;
 use crate::core::AppConfig;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -16,14 +17,20 @@ pub struct AppState {
     pub latest_selection: Option<LastSelection>,
     pub db: Connection,
     pub config: AppConfig,
+    pub skill_registry: Option<SkillRegistry>,
 }
 
 impl AppState {
-    pub fn new(db: Connection, config: AppConfig) -> Self {
+    pub fn new(
+        db: Connection,
+        config: AppConfig,
+        skill_registry: Option<SkillRegistry>,
+    ) -> Self {
         Self {
             latest_selection: None,
             db,
             config,
+            skill_registry,
         }
     }
 }
