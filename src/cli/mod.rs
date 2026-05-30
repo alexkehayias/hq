@@ -5,6 +5,7 @@ use std::env;
 pub mod auth;
 pub mod chat;
 pub mod eval;
+pub mod example_data;
 pub mod index;
 pub mod init;
 pub mod job;
@@ -26,6 +27,10 @@ enum Command {
         index: bool,
         #[arg(long, action, default_value = "false")]
         notes: bool,
+        #[arg(long, action, default_value = "false")]
+        skills: bool,
+        #[arg(long, action, default_value = "false")]
+        workspace: bool,
     },
     /// Migrate indices and db schema
     Migrate {
@@ -88,6 +93,8 @@ enum Command {
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },
+    /// Load example .org notes for development
+    ExampleData {},
 }
 
 #[derive(Parser)]
@@ -109,8 +116,15 @@ pub async fn run() -> Result<()> {
 
     // Handle each sub command
     match args.command {
-        Some(Command::Init { db, index, notes }) => {
-            init::run(db, index, notes, &vec_db_path, &index_path, &notes_path).await?;
+        Some(Command::Init { db, index, notes, skills, workspace }) => {
+            // No flags defaults to everything
+            let any_flag = db || index || notes || skills || workspace;
+            let do_db = db || !any_flag;
+            let do_index = index || !any_flag;
+            let do_notes = notes || !any_flag;
+            let do_skills = skills || !any_flag;
+            let do_workspace = workspace || !any_flag;
+            init::run(do_db, do_index, do_notes, do_skills, do_workspace, &vec_db_path, &index_path, &notes_path).await?;
         }
         Some(Command::Migrate { db, index }) => {
             migrate::run(db, index, &vec_db_path, &index_path).await?;
@@ -157,6 +171,9 @@ pub async fn run() -> Result<()> {
             let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
+        }
+        Some(Command::ExampleData {}) => {
+            example_data::run(&notes_path, &index_path, &vec_db_path).await?;
         }
         None => {}
     }

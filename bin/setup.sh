@@ -15,17 +15,25 @@ echo "=== Setting up hq worktree ==="
 echo "Storage: $STORAGE_DIR"
 
 # Create storage directories
-mkdir -p "$STORAGE_DIR"/{db,index,notes,skills,storage,workspace}
-echo "  Created directories under $STORAGE_DIR/"
+mkdir -p "$STORAGE_DIR"/storage
+echo "  Created base directories under $STORAGE_DIR/"
 
 # Write .worktree-env for shell sessions
-cat > "$ENV_FILE" <<'EOF'
+NOTES_REPO_URL="${HQ_NOTES_REPO_URL:-stub}"
+NOTES_DEPLOY_KEY="${HQ_NOTES_DEPLOY_KEY_PATH:-stub}"
+
+cat > "$ENV_FILE" <<EOF
 export HQ_STORAGE_PATH=.hq-data
+export HQ_NOTES_REPO_URL=$NOTES_REPO_URL
+export HQ_NOTES_DEPLOY_KEY_PATH=$NOTES_DEPLOY_KEY
 EOF
 echo "  Wrote $ENV_FILE (source it for shell sessions)"
 
 # Write .claude/settings.local.json for Claude Code sessions.
 # Merge env vars and DirChanged hook into existing settings.
+NOTES_REPO_URL="${HQ_NOTES_REPO_URL:-stub}"
+NOTES_DEPLOY_KEY="${HQ_NOTES_DEPLOY_KEY_PATH:-stub}"
+
 if [ -f "$SETTINGS_FILE" ] && [ -s "$SETTINGS_FILE" ]; then
   python3 -c "
 import json, sys
@@ -34,6 +42,8 @@ with open(path) as f:
     settings = json.load(f)
 settings.setdefault('env', {})
 settings['env']['HQ_STORAGE_PATH'] = '.hq-data'
+settings['env']['HQ_NOTES_REPO_URL'] = '$NOTES_REPO_URL'
+settings['env']['HQ_NOTES_DEPLOY_KEY_PATH'] = '$NOTES_DEPLOY_KEY'
 settings.setdefault('hooks', {})
 settings['hooks']['DirChanged'] = 'if [ -f .worktree-env ]; then set -a; source .worktree-env; set +a; fi'
 with open(path, 'w') as f:
@@ -41,10 +51,12 @@ with open(path, 'w') as f:
     f.write('\n')
 " "$SETTINGS_FILE"
 else
-  cat > "$SETTINGS_FILE" <<'JSON'
+  cat > "$SETTINGS_FILE" <<JSON
 {
   "env": {
-    "HQ_STORAGE_PATH": ".hq-data"
+    "HQ_STORAGE_PATH": ".hq-data",
+    "HQ_NOTES_REPO_URL": "$NOTES_REPO_URL",
+    "HQ_NOTES_DEPLOY_KEY_PATH": "$NOTES_DEPLOY_KEY"
   },
   "hooks": {
     "DirChanged": "if [ -f .worktree-env ]; then set -a; source .worktree-env; set +a; fi"
@@ -54,15 +66,15 @@ JSON
 fi
 echo "  Updated $SETTINGS_FILE with HQ_STORAGE_PATH and DirChanged hook"
 
-# Initialize the database
+# Initialize the database, search index, skills directory, and workspace
 echo ""
-echo "--- Initializing database ---"
-cargo run -- init --db 2>&1 | sed 's/^/  /'
+echo "--- Running init ---"
+cargo run -- init 2>&1 | sed 's/^/  /'
 
-# Initialize the search index
+# Load example notes for development
 echo ""
-echo "--- Initializing search index ---"
-cargo run -- init --index 2>&1 | sed 's/^/  /'
+echo "--- Loading example data ---"
+cargo run -- example-data 2>&1 | sed 's/^/  /'
 
 echo ""
 echo "=== Setup complete ==="

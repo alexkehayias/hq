@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID:       example-meeting-standup-2025-01-15
+:END:
+#+TITLE: Team Standup - 2025-01-15
+#+CATEGORY: meetings
+#+DATE: 2025-01-15
+
+** Team Standup
+
+Present: Alice, Bob, Charlie
+
+*** Alice
+- Finished the API rate limiting feature
+- Starting on the dashboard UI this afternoon
+- Blocked on design review for the new endpoint
+
+*** Bob
+- Database migration for the new schema is complete
+- Found a bug in the query optimizer, filed a ticket
+- Will pair with Charlie on the caching layer
+
+*** Charlie
+- Set up the CI/CD pipeline for staging
+- Need credentials for the new monitoring service
+- Documentation review for the release notes
+
+*** Action Items
+- TODO Alice: Schedule design review for Thursday
+- TODO Bob: File ticket for query optimizer bug
+- TODO Charlie: Request monitoring service access
