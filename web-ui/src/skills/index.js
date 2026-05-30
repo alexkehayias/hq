@@ -355,7 +355,12 @@ function escHtml(s) {
 }
 
 function escAttr(s) {
-  return s.replace(/&/g, '&').replace(/"/g, '"').replace(/'/g, '&#39;').replace(/</g, '<').replace(/>/g, '>');
+  return s
+    .replace(/&/g, '&')
+    .replace(/"/g, '"')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '<')
+    .replace(/>/g, '>');
 }
 
 function badge(text, color) {
