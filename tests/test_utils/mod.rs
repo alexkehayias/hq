@@ -19,7 +19,7 @@ use hq::search::{index_all, index_all_chat_sessions};
 /// Converts a response body to a string
 #[allow(dead_code)] // Otherwise test crates give dead code warning
 pub async fn body_to_string(body: Body) -> String {
-    let bytes = axum::body::to_bytes(body, 8192usize).await.unwrap();
+    let bytes = axum::body::to_bytes(body, 16384usize).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
