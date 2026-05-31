@@ -66,7 +66,7 @@ JSON
 fi
 echo "  Updated $SETTINGS_FILE with HQ_STORAGE_PATH and DirChanged hook"
 
-# Initialize the database, search index, skills directory, and workspace
+# Initialize database and indices
 echo ""
 echo "--- Running init ---"
 cargo run -- init 2>&1 | sed 's/^/  /'

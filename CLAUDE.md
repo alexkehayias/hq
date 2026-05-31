@@ -124,12 +124,13 @@ Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `
 This project uses git worktrees for isolated development. Each worktree gets its own storage, database, and server port.
 
 ```bash
-# Create a new worktree and set up the dev environment
-git worktree add .claude/worktrees/<name> <branch>
+# One-command: create worktree, set up env, start Claude Code in tmux
+./bin/develop.sh <branch-name>
+
+# Or manually:
+git worktree add .claude/worktrees/<name> main -b <name>
 cd .claude/worktrees/<name>
-# Run setup (creates storage dirs, initializes DB, loads example data)
 ./bin/setup.sh
-# Start the dev server (picks next available port from 2222)
 ./bin/run.sh
 ```
 
@@ -140,6 +141,7 @@ Key behaviors:
 - **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
 - **Storage**: `bin/setup.sh` creates `.hq-data/` with subdirs (`db/`, `index/`, `notes/`, etc.) and writes `HQ_STORAGE_PATH` into `.claude/settings.local.json` so Claude Code picks it up automatically.
 - **Claude Code**: Each worktree has its own `.claude/settings.local.json` with `HQ_STORAGE_PATH` set and a `DirChanged` hook that sources `.worktree-env`.
+- **Quick start**: `./bin/develop.sh <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a tmux session.
 
 ## Testing
 

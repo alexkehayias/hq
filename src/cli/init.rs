@@ -13,6 +13,8 @@ pub async fn run(
     index_path: &str,
     notes_path: &str,
 ) -> Result<()> {
+    let storage_path = std::env::var("HQ_STORAGE_PATH").unwrap_or_else(|_| "./".to_string());
+
     if db {
         println!("Initializing db...");
         fs::create_dir_all(vec_db_path)
@@ -36,7 +38,6 @@ pub async fn run(
     }
 
     if skills {
-        let storage_path = std::env::var("HQ_STORAGE_PATH").unwrap_or_else(|_| "./".to_string());
         let skills_path = format!("{}/skills", storage_path);
         println!("Creating skills directory...");
         fs::create_dir_all(&skills_path)
@@ -45,7 +46,6 @@ pub async fn run(
     }
 
     if workspace {
-        let storage_path = std::env::var("HQ_STORAGE_PATH").unwrap_or_else(|_| "./".to_string());
         let workspace_path = format!("{}/workspace", storage_path);
         println!("Creating workspace directory...");
         fs::create_dir_all(&workspace_path)
