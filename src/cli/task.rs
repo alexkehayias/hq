@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::org;
 
-fn slugify(s: &str) -> String {
+fn slugify(s: &str) -> Result<String> {
     let slug: String = s
         .to_lowercase()
         .chars()
@@ -28,13 +28,12 @@ fn slugify(s: &str) -> String {
         .trim_matches('-')
         .to_string();
     if slug.is_empty() {
-        "untitled".to_string()
-    } else {
-        slug
+        anyhow::bail!("Cannot slugify empty string: input produced no valid characters");
     }
+    Ok(slug)
 }
 
-fn build_standalone_org(id: &str, title: &str, body: &str, status: &str) -> String {
+fn build_document(id: &str, title: &str, body: &str, status: &str) -> String {
     let mut headline = org::Headline::builder()
         .level(1)
         .status(status)
@@ -135,8 +134,7 @@ fn extract_body(raw: &str) -> String {
 
 struct TaskLocation {
     path: PathBuf,
-    is_standalone: bool,
-    range: Option<Range<usize>>,
+    range: Range<usize>,
     content: String,
     current_title: String,
     current_body: String,
@@ -165,45 +163,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
             continue;
         }
 
-        // Determine if standalone (ID before first headline) or headline-level
-        let id_pos = content.find(&id_pattern).unwrap();
-        let first_headline_pos = content.find("\n* ");
-
-        let is_standalone = match first_headline_pos {
-            Some(hpos) => id_pos < hpos,
-            None => true,
-        };
-
-        if is_standalone {
-            let config = org::todo_keywords_config();
-            let org = config.parse(&content);
-            let headline = org
-                .document()
-                .headlines()
-                .next()
-                .context("Standalone task file has no headline")?;
-
-            let current_status = headline
-                .todo_keyword()
-                .map(|k| k.to_string())
-                .unwrap_or_else(|| "TODO".to_string());
-            let current_title = headline.title_raw().trim().to_string();
-            let current_level = headline.level();
-            let current_body = body_from_headline(&headline);
-
-            return Ok(TaskLocation {
-                path,
-                is_standalone: true,
-                range: None,
-                content,
-                current_title,
-                current_body,
-                current_status,
-                current_level,
-            });
-        }
-
-        // Headline-level: parse to find the matching headline
+        // Parse to find the matching headline
         let config = org::todo_keywords_config();
         let org = config.parse(&content);
         for headline in org.document().headlines() {
@@ -222,8 +182,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
 
                     return Ok(TaskLocation {
                         path,
-                        is_standalone: false,
-                        range: Some(usize_range),
+                        range: usize_range,
                         content,
                         current_title,
                         current_body,
@@ -244,7 +203,7 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
 }
 
 async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
-    let slug = slugify(project_name);
+    let slug = slugify(project_name)?;
     let pattern = format!("--project-{slug}.org");
 
     // Look for existing project file
@@ -299,10 +258,10 @@ pub async fn run_create(
             .context("Failed to write project file")?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
     } else {
-        let slug = slugify(title);
+        let slug = slugify(title)?;
         let today = Local::now().format("%Y-%m-%d");
         let filename = format!("{notes_path}/{today}--{slug}.org");
-        let content = build_standalone_org(&id, title, body, status);
+        let content = build_document(&id, title, body, status);
         fs::write(&filename, &content)
             .await
             .context("Failed to write task file")?;
@@ -324,23 +283,15 @@ pub async fn run_update(
     let new_body = body.unwrap_or(&location.current_body);
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
-    if location.is_standalone {
-        let new_content = build_standalone_org(id, new_title, new_body, new_status);
-        fs::write(&location.path, &new_content)
-            .await
-            .context("Failed to write updated task file")?;
-    } else {
-        let range = location.range.as_ref().unwrap();
-        let new_headline = build_headline(id, new_title, new_body, new_status, location.current_level);
-        let new_content = format!(
-            "{before}{new_headline}{after}",
-            before = &location.content[..range.start],
-            after = &location.content[range.end..]
-        );
-        fs::write(&location.path, &new_content)
-            .await
-            .context("Failed to write updated project file")?;
-    }
+    let new_headline = build_headline(id, new_title, new_body, new_status, location.current_level);
+    let new_content = format!(
+        "{before}{new_headline}{after}",
+        before = &location.content[..location.range.start],
+        after = &location.content[location.range.end..]
+    );
+    fs::write(&location.path, &new_content)
+        .await
+        .context("Failed to write updated task file")?;
 
     println!("Task {id} updated");
     Ok(())
@@ -349,23 +300,15 @@ pub async fn run_update(
 pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
     let location = find_task(notes_path, id).await?;
 
-    if location.is_standalone {
-        fs::remove_file(&location.path)
-            .await
-            .context("Failed to delete task file")?;
-        println!("Deleted task file: {}", location.path.display());
-    } else {
-        let range = location.range.as_ref().unwrap();
-        let before = &location.content[..range.start];
-        let after = &location.content[range.end..];
-        // Remove one trailing newline if present to avoid blank-line gaps
-        let after = after.strip_prefix('\n').unwrap_or(after);
-        let new_content = format!("{before}{after}");
-        fs::write(&location.path, &new_content)
-            .await
-            .context("Failed to write project file after deletion")?;
-        println!("Deleted task {id} from {}", location.path.display());
-    }
+    let before = &location.content[..location.range.start];
+    let after = &location.content[location.range.end..];
+    // Remove one trailing newline if present to avoid blank-line gaps
+    let after = after.strip_prefix('\n').unwrap_or(after);
+    let new_content = format!("{before}{after}");
+    fs::write(&location.path, &new_content)
+        .await
+        .context("Failed to write project file after deletion")?;
+    println!("Deleted task {id} from {}", location.path.display());
 
     Ok(())
 }
@@ -413,32 +356,32 @@ mod tests {
 
     #[test]
     fn test_slugify_normal() {
-        assert_eq!(slugify("Buy groceries"), "buy-groceries");
+        assert_eq!(slugify("Buy groceries").unwrap(), "buy-groceries");
     }
 
     #[test]
     fn test_slugify_multiple_spaces() {
-        assert_eq!(slugify("  hello   world  "), "hello-world");
+        assert_eq!(slugify("  hello   world  ").unwrap(), "hello-world");
     }
 
     #[test]
     fn test_slugify_special_chars() {
-        assert_eq!(slugify("Fix bug! (urgent) #42"), "fix-bug-urgent-42");
+        assert_eq!(slugify("Fix bug! (urgent) #42").unwrap(), "fix-bug-urgent-42");
     }
 
     #[test]
     fn test_slugify_only_special_chars() {
-        assert_eq!(slugify("!!! @@@ $$$"), "untitled");
+        assert!(slugify("!!! @@@ $$$").is_err());
     }
 
     #[test]
     fn test_slugify_empty_string() {
-        assert_eq!(slugify(""), "untitled");
+        assert!(slugify("").is_err());
     }
 
     #[test]
     fn test_slugify_already_slug() {
-        assert_eq!(slugify("my-task-name"), "my-task-name");
+        assert_eq!(slugify("my-task-name").unwrap(), "my-task-name");
     }
 
     // -----------------------------------------------------------------------
@@ -476,7 +419,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // run_create — standalone
+    // run_create
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -531,7 +474,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // run_create — project
+    // run_create — with named project
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -689,8 +632,9 @@ mod tests {
 
         run_delete(&notes, &id).await.unwrap();
 
-        // File should be gone
-        assert!(fs::read_dir(&notes).unwrap().next().is_none());
+        // File should still exist (as a note with no task headlines)
+        assert!(path.exists());
+        assert_eq!(headline_count(&path), 0);
     }
 
     #[tokio::test]
