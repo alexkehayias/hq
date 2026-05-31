@@ -59,16 +59,13 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
     // Ensure the database is initialized
     let db = async_db(vec_db_path).await?;
     db.call(|conn| {
-        initialize_db(conn).expect("DB initialization failed");
-        Ok(())
+        initialize_db(conn)
     })
     .await?;
 
     // Index the example notes so they're immediately searchable
     println!("Indexing example notes...");
-    index_all(&db, index_path, notes_path, true, true, None)
-        .await
-        .expect("Indexing failed");
+    index_all(&db, index_path, notes_path, true, true, None).await?;
     println!("Finished indexing example notes");
 
     Ok(())

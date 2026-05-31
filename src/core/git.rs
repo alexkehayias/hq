@@ -1,7 +1,6 @@
 use tokio::process::Command;
 
-/// Clone a repo if it doesn't already exist. Returns Ok(()) on success,
-/// or an error message on failure (does not panic).
+/// Clone a repo if it doesn't already exist. Logs errors instead of panicking.
 pub async fn maybe_clone_repo(deploy_key_path: &str, url: &str, storage_path: &str) {
     let result = Command::new("sh")
         .arg("-c")

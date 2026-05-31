@@ -2,7 +2,7 @@
 # Create a new git worktree from main, set up the environment, and
 # start Claude Code in a tmux session.
 #
-# Usage: ./bin/new-worktree.sh <branch-name>
+# Usage: ./bin/develop.sh <branch-name>
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
