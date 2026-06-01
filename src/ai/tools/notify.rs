@@ -141,24 +141,25 @@ impl NotifyTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
     use tokio_rusqlite::Connection;
+    use uuid::Uuid;
 
-    /// Create an in-memory database with the push_subscription table
-    /// and the auth table (needed for the foreign key or other queries).
+    use crate::core::db::{async_db, initialize_db};
+
+    /// Create a database with all tables initialized in a temp directory.
     async fn setup_db() -> Connection {
-        let db = Connection::open_in_memory().await.unwrap();
+        let temp_dir = env::temp_dir();
+        let dir = temp_dir.join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&dir).expect("Failed to create base directory");
+
+        let db_path_str = dir.to_str().unwrap();
+        let db = async_db(db_path_str)
+            .await
+            .expect("Failed to connect to async db");
         db.call(|conn| {
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS push_subscription (
-                    endpoint TEXT PRIMARY KEY,
-                    p256dh TEXT NOT NULL,
-                    auth TEXT NOT NULL,
-                    encoding TEXT NOT NULL DEFAULT 'Aes126Gcm',
-                    is_valid INTEGER NOT NULL DEFAULT 1
-                )",
-                [],
-            )
-            .unwrap();
+            initialize_db(conn).expect("Failed to migrate db");
             Ok(())
         })
         .await
