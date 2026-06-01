@@ -28,6 +28,9 @@ pub use tasks::{TasksDueTodayTool, TasksScheduledTodayTool};
 pub mod memory;
 pub use memory::MemoryTool;
 
+pub mod notify;
+pub use notify::NotifyTool;
+
 pub mod skills;
 pub use skills::{
     ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SaveSkillTool, SearchSkillsTool,
