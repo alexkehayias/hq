@@ -7,7 +7,7 @@ use axum::{
     Router,
     extract::{Path, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json, Response},
 };
 use serde_json::json;
 
@@ -23,7 +23,7 @@ type SharedState = Arc<RwLock<AppState>>;
 /// List all available skills.
 async fn list_skills(
     State(state): State<SharedState>,
-) -> Result<Json<SkillListResponse>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
     let skills = match &registry.skill_registry {
@@ -45,17 +45,18 @@ async fn list_skills(
 async fn get_skill_detail(
     State(state): State<SharedState>,
     Path(name): Path<String>,
-) -> Result<Json<SkillDetailResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
-    let registry = registry
-        .skill_registry
-        .as_ref()
-        .ok_or_else(|| not_found("Skills directory not configured"))?;
+    let registry = match registry.skill_registry.as_ref() {
+        Some(r) => r,
+        None => return Ok(not_found("Skills directory not configured")),
+    };
 
-    let skill = registry
-        .load_skill(&name)
-        .map_err(|_| not_found(&format!("Skill '{}' not found", name)))?;
+    let skill = match registry.load_skill(&name) {
+        Ok(s) => s,
+        Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+    };
 
     Ok(Json(SkillDetailResponse {
         name: skill.frontmatter.name,
@@ -65,30 +66,32 @@ async fn get_skill_detail(
         metadata: skill.frontmatter.metadata,
         allowed_tools: skill.frontmatter.allowed_tools,
         body: skill.body,
-    }))
+    })
+    .into_response())
 }
 
 /// List all files in a skill's directory (recursive).
 async fn list_skill_files(
     State(state): State<SharedState>,
     Path(name): Path<String>,
-) -> Result<Json<SkillFileListResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
-    let registry = registry
-        .skill_registry
-        .as_ref()
-        .ok_or_else(|| not_found("Skills directory not configured"))?;
+    let registry = match registry.skill_registry.as_ref() {
+        Some(r) => r,
+        None => return Ok(not_found("Skills directory not configured")),
+    };
 
-    let skill = registry
-        .load_skill(&name)
-        .map_err(|_| not_found(&format!("Skill '{}' not found", name)))?;
+    let skill = match registry.load_skill(&name) {
+        Ok(s) => s,
+        Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+    };
 
     let mut files = Vec::new();
 
     // Walk the skill directory recursively
     walk_directory(&skill.path, &skill.path, &mut files)
-        .map_err(|e| internal_error(&format!("Failed to list files: {}", e)))?;
+        .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to list files: {}", e)))?;
 
     // Sort: SKILL.md first, then alphabetically
     files.sort_by(|a, b| {
@@ -101,33 +104,41 @@ async fn list_skill_files(
         a.path.cmp(&b.path)
     });
 
-    Ok(Json(SkillFileListResponse { files }))
+    Ok(Json(SkillFileListResponse { files }).into_response())
 }
 
 /// Read a file from a skill's directory.
 async fn read_skill_file(
     State(state): State<SharedState>,
     Path((name, file_path)): Path<(String, String)>,
-) -> Result<Json<SkillFileContentResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
-    let registry = registry
-        .skill_registry
-        .as_ref()
-        .ok_or_else(|| not_found("Skills directory not configured"))?;
+    let registry = match registry.skill_registry.as_ref() {
+        Some(r) => r,
+        None => return Ok(not_found("Skills directory not configured")),
+    };
 
-    let skill = registry
-        .load_skill(&name)
-        .map_err(|_| not_found(&format!("Skill '{}' not found", name)))?;
+    let skill = match registry.load_skill(&name) {
+        Ok(s) => s,
+        Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+    };
 
-    let content = skill
-        .read_file(&file_path)
-        .ok_or_else(|| not_found(&format!("File '{}' not found in skill '{}'", file_path, name)))?;
+    let content = match skill.read_file(&file_path) {
+        Some(c) => c,
+        None => {
+            return Ok(not_found(&format!(
+                "File '{}' not found in skill '{}'",
+                file_path, name
+            )))
+        }
+    };
 
     Ok(Json(SkillFileContentResponse {
         path: file_path,
         content,
-    }))
+    })
+    .into_response())
 }
 
 /// Maximum file size for writes (1 MB).
@@ -138,27 +149,28 @@ async fn write_skill_file(
     State(state): State<SharedState>,
     Path((name, file_path)): Path<(String, String)>,
     Json(body): Json<SkillFileWriteRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     if body.content.len() > MAX_FILE_SIZE {
-        return Err((
+        return Ok((
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(json!({"error": format!("File too large. Maximum size is {} bytes", MAX_FILE_SIZE)})),
-        ));
+        )
+            .into_response());
     }
 
     // Extract the skill's base path under the lock, then drop it before doing I/O
     let skill_path = {
         let state = state.read().expect("Unable to read shared state");
 
-        let registry = state
-            .skill_registry
-            .as_ref()
-            .ok_or_else(|| not_found("Skills directory not configured"))?;
+        let registry = match state.skill_registry.as_ref() {
+            Some(r) => r,
+            None => return Ok(not_found("Skills directory not configured")),
+        };
 
-        registry
-            .load_skill(&name)
-            .map_err(|_| not_found(&format!("Skill '{}' not found", name)))?
-            .path
+        match registry.load_skill(&name) {
+            Ok(s) => s.path,
+            Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+        }
     };
 
     let full_path = skill_path.join(&file_path);
@@ -166,12 +178,12 @@ async fn write_skill_file(
     // Security: prevent path traversal — ensure resolved path is within the skill directory
     let canonical_skill_dir = skill_path
         .canonicalize()
-        .map_err(|e| internal_error(&format!("Failed to resolve skill path: {}", e)))?;
+        .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to resolve skill path: {}", e)))?;
 
     // Create parent directories if they don't exist
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)
-            .map_err(|e| internal_error(&format!("Failed to create directories: {}", e)))?;
+            .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to create directories: {}", e)))?;
     }
 
     let canonical_file = full_path
@@ -184,19 +196,20 @@ async fn write_skill_file(
                 .map(|p| p.join(full_path.file_name().unwrap()))
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "invalid path"))
         })
-        .map_err(|e| internal_error(&format!("Failed to resolve file path: {}", e)))?;
+        .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to resolve file path: {}", e)))?;
 
     if !canonical_file.starts_with(&canonical_skill_dir) {
-        return Err((
+        return Ok((
             StatusCode::FORBIDDEN,
             Json(json!({"error": "Path traversal detected"})),
-        ));
+        )
+            .into_response());
     }
 
     fs::write(&full_path, &body.content)
-        .map_err(|e| internal_error(&format!("Failed to write file: {}", e)))?;
+        .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to write file: {}", e)))?;
 
-    Ok(Json(json!({"success": true})))
+    Ok(Json(json!({"success": true})).into_response())
 }
 
 /// Recursively walk a directory and collect file entries.
@@ -238,18 +251,8 @@ fn walk_directory(
     Ok(())
 }
 
-fn not_found(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({"error": msg})),
-    )
-}
-
-fn internal_error(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"error": msg})),
-    )
+fn not_found(msg: &str) -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"error": msg}))).into_response()
 }
 
 /// Create the skills router.
