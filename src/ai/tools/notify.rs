@@ -229,18 +229,16 @@ mod tests {
         assert!(recoverable.is_some());
     }
 
-    #[test]
-    fn test_notify_tool_function_name() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let db = rt.block_on(setup_db());
+    #[tokio::test]
+    async fn test_notify_tool_function_name() {
+        let db = setup_db().await;
         let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
         assert_eq!(tool.function_name(), "notify");
     }
 
-    #[test]
-    fn test_notify_function_json_has_required_parameters() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let db = rt.block_on(setup_db());
+    #[tokio::test]
+    async fn test_notify_function_json_has_required_parameters() {
+        let db = setup_db().await;
         let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
         let json = serde_json::to_string(&tool.function).expect("Failed to serialize function");
 
