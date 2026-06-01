@@ -17,14 +17,14 @@ pub struct AppState {
     pub latest_selection: Option<LastSelection>,
     pub db: Connection,
     pub config: AppConfig,
-    pub skill_registry: Option<SkillRegistry>,
+    pub skill_registry: SkillRegistry,
 }
 
 impl AppState {
     pub fn new(
         db: Connection,
         config: AppConfig,
-        skill_registry: Option<SkillRegistry>,
+        skill_registry: SkillRegistry,
     ) -> Self {
         Self {
             latest_selection: None,

@@ -45,7 +45,7 @@ pub struct SaveSkillTool {
     #[serde(skip)]
     workspace_path: PathBuf,
     #[serde(skip)]
-    registry: Arc<RwLock<Option<SkillRegistry>>>,
+    registry: Arc<RwLock<SkillRegistry>>,
 }
 
 #[async_trait]
@@ -113,10 +113,8 @@ impl ToolCall for SaveSkillTool {
         copy_dir(&workspace_skill, &global_dest).await?;
 
         // Reload the registry to pick up changes
-        let reload_error = if let Ok(mut guard) = self.registry.write()
-            && let Some(ref mut registry) = *guard
-        {
-            registry.reload().err().map(|e| {
+        let reload_error = if let Ok(mut guard) = self.registry.write() {
+            guard.reload().err().map(|e| {
                 tracing::error!("Failed to reload skill registry after save: {}", e);
                 format!(
                     "Skill saved to disk but registry reload failed ({}). \
@@ -153,7 +151,7 @@ impl SaveSkillTool {
         skills_path: &str,
         storage_path: &str,
         session_id: &str,
-        registry: Arc<RwLock<Option<SkillRegistry>>>,
+        registry: Arc<RwLock<SkillRegistry>>,
     ) -> Self {
         let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
 
@@ -227,7 +225,7 @@ Test body.
         // Create skill in workspace (simulating agent having created it)
         create_test_skill(&workspace, "new-skill");
 
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -275,7 +273,7 @@ Updated body.
         )
         .unwrap();
 
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -302,7 +300,7 @@ Updated body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -321,7 +319,7 @@ Updated body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -345,13 +343,12 @@ Updated body.
 
         create_test_skill(&workspace, "brand-new");
 
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
 
         // Registry should not have the skill yet
         {
             let guard = registry.read().unwrap();
-            let reg = guard.as_ref().unwrap();
-            assert!(!reg.has_skill("brand-new"));
+            assert!(!guard.has_skill("brand-new"));
         }
 
         let tool = SaveSkillTool::new(
@@ -366,8 +363,7 @@ Updated body.
         // After save, registry should have the skill
         {
             let guard = registry.read().unwrap();
-            let reg = guard.as_ref().unwrap();
-            assert!(reg.has_skill("brand-new"));
+            assert!(guard.has_skill("brand-new"));
         }
     }
 
@@ -390,7 +386,7 @@ Updated body.
         )
         .unwrap();
 
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -422,7 +418,7 @@ Updated body.
         // Directory exists but no SKILL.md
         std::fs::create_dir_all(workspace.join("no-md-skill")).unwrap();
 
-        let registry = Arc::new(RwLock::new(Some(SkillRegistry::new(&skills_dir).unwrap())));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,

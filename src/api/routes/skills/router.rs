@@ -26,17 +26,15 @@ async fn list_skills(
 ) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
-    let skills = match &registry.skill_registry {
-        Some(registry) => registry
-            .list_skills()
-            .into_iter()
-            .map(|s| SkillSummaryResponse {
-                name: s.name,
-                description: s.description,
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    let skills = registry
+        .skill_registry
+        .list_skills()
+        .into_iter()
+        .map(|s| SkillSummaryResponse {
+            name: s.name,
+            description: s.description,
+        })
+        .collect();
 
     Ok(Json(SkillListResponse { skills }))
 }
@@ -48,12 +46,7 @@ async fn get_skill_detail(
 ) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
-    let registry = match registry.skill_registry.as_ref() {
-        Some(r) => r,
-        None => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response()),
-    };
-
-    let skill = match registry.load_skill(&name) {
+    let skill = match registry.skill_registry.load_skill(&name) {
         Ok(s) => s,
         Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
     };
@@ -78,14 +71,7 @@ async fn list_skill_files(
     let skill_path = {
         let registry = state.read().expect("Unable to read shared state");
 
-        let registry = match registry.skill_registry.as_ref() {
-            Some(r) => r,
-            None => {
-                return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response())
-            }
-        };
-
-        let skill = match registry.load_skill(&name) {
+        let skill = match registry.skill_registry.load_skill(&name) {
             Ok(s) => s,
             Err(_) => {
                 return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response())
@@ -125,12 +111,7 @@ async fn read_skill_file(
 ) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
-    let registry = match registry.skill_registry.as_ref() {
-        Some(r) => r,
-        None => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response()),
-    };
-
-    let skill = match registry.load_skill(&name) {
+    let skill = match registry.skill_registry.load_skill(&name) {
         Ok(s) => s,
         Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
     };
@@ -170,12 +151,7 @@ async fn write_skill_file(
     let skill_path = {
         let state = state.read().expect("Unable to read shared state");
 
-        let registry = match state.skill_registry.as_ref() {
-            Some(r) => r,
-            None => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response()),
-        };
-
-        match registry.load_skill(&name) {
+        match state.skill_registry.load_skill(&name) {
             Ok(s) => s.path,
             Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
         }

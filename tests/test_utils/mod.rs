@@ -41,9 +41,11 @@ pub async fn test_app() -> Router {
     let notes_path = dir.join("notes");
     let index_path = dir.join("index");
     let vec_db_path = dir.join("db");
+    let skills_path = dir.join("skills");
     fs::create_dir_all(&notes_path).expect("Failed to create notes directory");
     fs::create_dir_all(&index_path).expect("Failed to create index directory");
     fs::create_dir_all(&vec_db_path).expect("Failed to create db directory");
+    fs::create_dir_all(&skills_path).expect("Failed to create skills directory");
 
     let db_path_str = dir.join(&vec_db_path);
     let db_path_str = db_path_str.to_str().unwrap();
@@ -65,7 +67,7 @@ pub async fn test_app() -> Router {
         index_path: index_path.display().to_string(),
         vec_db_path: vec_db_path.to_str().unwrap().to_string(),
         storage_path: dir.display().to_string(),
-        skills_path: String::from(""),
+        skills_path: skills_path.display().to_string(),
         deploy_key_path: String::from("test_deploy_key_path"),
         vapid_key_path: String::from("test_vapid_key_path"),
         note_search_api_url: String::from("http://localhost:2222"),
@@ -78,7 +80,8 @@ pub async fn test_app() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let app_state = AppState::new(db, app_config, None);
+    let skill_registry = SkillRegistry::new(&skills_path).unwrap();
+    let app_state = AppState::new(db, app_config, skill_registry);
     app(Arc::new(RwLock::new(app_state)))
 }
 
@@ -124,9 +127,11 @@ pub async fn test_app_with_state() -> (Router, AppState) {
     let notes_path = dir.join("notes");
     let index_path = dir.join("index");
     let vec_db_path = dir.join("db");
+    let skills_path = dir.join("skills");
     fs::create_dir_all(&notes_path).expect("Failed to create notes directory");
     fs::create_dir_all(&index_path).expect("Failed to create index directory");
     fs::create_dir_all(&vec_db_path).expect("Failed to create db directory");
+    fs::create_dir_all(&skills_path).expect("Failed to create skills directory");
 
     let db_path_str = dir.join(&vec_db_path);
     let db_path_str = db_path_str.to_str().unwrap();
@@ -148,7 +153,7 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         index_path: index_path.display().to_string(),
         vec_db_path: vec_db_path.to_str().unwrap().to_string(),
         storage_path: dir.display().to_string(),
-        skills_path: String::from(""),
+        skills_path: skills_path.display().to_string(),
         deploy_key_path: String::from("test_deploy_key_path"),
         vapid_key_path: String::from("test_vapid_key_path"),
         note_search_api_url: String::from("http://localhost:2222"),
@@ -161,7 +166,8 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let app_state = AppState::new(db, app_config, None);
+    let skill_registry = SkillRegistry::new(&skills_path).unwrap();
+    let app_state = AppState::new(db, app_config, skill_registry);
     (app(Arc::new(RwLock::new(app_state.clone()))), app_state)
 }
 
@@ -251,7 +257,7 @@ pub async fn test_app_with_skills() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let skill_registry = SkillRegistry::new(skills_path.display().to_string()).ok();
+    let skill_registry = SkillRegistry::new(skills_path.display().to_string()).unwrap();
     let app_state = AppState::new(db, app_config, skill_registry);
     app(Arc::new(RwLock::new(app_state)))
 }

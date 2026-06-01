@@ -260,7 +260,10 @@ async fn chat_handler(
             MemoryTool::new(storage_path),
             DateTimeTool::new(),
             BashTool::new(storage_path, &session_id),
-            Arc::new(RwLock::new(SkillRegistry::new(skills_path).ok())),
+            Arc::new(RwLock::new(
+                SkillRegistry::new(skills_path)
+                    .expect("Failed to create skill registry"),
+            )),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
             openai_model.clone(),
@@ -384,48 +387,44 @@ async fn chat_handler(
         (SessionMode::Chat, SlashCommand::Skill { name }) => {
             // List all skills or show a specific skill's content
             let (response, persist_skill_msg) = {
-                let guard = skill_registry
+                let registry = skill_registry
                     .read()
                     .expect("Unable to read skill registry");
-                if let Some(ref registry) = *guard {
-                    if let Some(skill_name) = name {
-                        // Show specific skill content
-                        let skill_result = registry.load_skill(skill_name);
+                if let Some(skill_name) = name {
+                    // Show specific skill content
+                    let skill_result = registry.load_skill(skill_name);
 
-                        match skill_result {
-                            Ok(skill) => {
-                                let skill_msg = format!(
-                                    "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
-                                    name = skill_name,
-                                    path = skill.path.display(),
-                                    content = skill.full_content(),
-                                );
+                    match skill_result {
+                        Ok(skill) => {
+                            let skill_msg = format!(
+                                "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
+                                name = skill_name,
+                                path = skill.path.display(),
+                                content = skill.full_content(),
+                            );
 
-                                (skill_msg, true)
-                            }
-                            Err(e) => (e.to_string(), false),
+                            (skill_msg, true)
                         }
-                    } else {
-                        // List all skills
-                        let skills = registry.list_skills();
-                        if skills.is_empty() {
-                            ("No skills available.".to_string(), false)
-                        } else {
-                            let skill_list: Vec<String> = skills
-                                .iter()
-                                .map(|s| format!("- **{}**: {}", s.name, s.description))
-                                .collect();
-                            (
-                                format!(
-                                    "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
-                                    skill_list.join("\n")
-                                ),
-                                false,
-                            )
-                        }
+                        Err(e) => (e.to_string(), false),
                     }
                 } else {
-                    ("Skill registry not available.".to_string(), false)
+                    // List all skills
+                    let skills = registry.list_skills();
+                    if skills.is_empty() {
+                        ("No skills available.".to_string(), false)
+                    } else {
+                        let skill_list: Vec<String> = skills
+                            .iter()
+                            .map(|s| format!("- **{}**: {}", s.name, s.description))
+                            .collect();
+                        (
+                            format!(
+                                "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
+                                skill_list.join("\n")
+                            ),
+                            false,
+                        )
+                    }
                 }
             };
 
@@ -537,27 +536,25 @@ async fn chat_handler(
 
         // Append skill instructions if there are skills in the registry
         {
-            let guard = skill_registry
+            let registry = skill_registry
                 .read()
                 .expect("Unable to read skill registry");
-            if let Some(ref registry) = *guard {
-                let skill_count = registry.count();
-                if skill_count > 0 {
-                    let skill_names: Vec<String> = registry
-                        .list_skills()
-                        .iter()
-                        .map(|s| format!("{}: {}", s.name, s.description))
-                        .collect();
+            let skill_count = registry.count();
+            if skill_count > 0 {
+                let skill_names: Vec<String> = registry
+                    .list_skills()
+                    .iter()
+                    .map(|s| format!("{}: {}", s.name, s.description))
+                    .collect();
 
-                    let skills_section = format!(
-                        "\n\n## Available Skills\n\
-                        You have access to the following skills. **Always use relevant skills first before using tools.**\n\
-                        - {}\n\
-                        \nTo use a skill, first load it using the `load_skill` tool. Loaded skills appear in the transcript enclosed in a `<skill>` tag so you can refer to them. You don't need to load a skill more than once. Skills are just instructions, they may reference other tools but you can't call a skill as a tool. Follow loaded skill instructions very carefully.",
-                        skill_names.join("\n- ")
-                    );
-                    system_content.push_str(&skills_section);
-                }
+                let skills_section = format!(
+                    "\n\n## Available Skills\n\
+                    You have access to the following skills. **Always use relevant skills first before using tools.**\n\
+                    - {}\n\
+                    \nTo use a skill, first load it using the `load_skill` tool. Loaded skills appear in the transcript enclosed in a `<skill>` tag so you can refer to them. You don't need to load a skill more than once. Skills are just instructions, they may reference other tools but you can't call a skill as a tool. Follow loaded skill instructions very carefully.",
+                    skill_names.join("\n- ")
+                );
+                system_content.push_str(&skills_section);
             }
         }
 

@@ -215,7 +215,7 @@ This skill has scripts and references.
             system_message: String::from("You are a helpful assistant."),
         };
         let skill_registry =
-            SkillRegistry::new(skills_path.display().to_string()).ok();
+            SkillRegistry::new(skills_path.display().to_string()).unwrap();
         let app_state = AppState::new(db, app_config, skill_registry);
         let app = app(Arc::new(RwLock::new(app_state)));
 
