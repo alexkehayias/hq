@@ -46,11 +46,12 @@ cargo run -- chat
 
 ### Web UI
 ```bash
-cd web-ui
-# Lint with Biome (ARM: uses bundled binary; x86: uses npx)
-./bin/biome check  # or biome ci .
-# Build Tailwind CSS
-./bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
+# Lint with Biome (vendored binary — always run from web-ui/)
+cd web-ui && ../bin/biome check
+# Auto-fix formatting and lint issues
+cd web-ui && ../bin/biome check --write
+# Build Tailwind CSS (vendored binary — always run from web-ui/)
+cd web-ui && ../bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
 ```
 
 ### Docker

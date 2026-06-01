@@ -10,6 +10,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use super::routes;
+use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::core::{AppConfig, db::async_db};
 use crate::jobs::{
@@ -67,7 +68,9 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
         .await
         .expect("Failed to connect to async db");
 
-    let app_state = AppState::new(db.clone(), config.clone());
+    let skill_registry = SkillRegistry::new(&config.skills_path)
+        .expect("Failed to create skill registry");
+    let app_state = AppState::new(db.clone(), config.clone(), skill_registry);
     let shared_state = Arc::new(RwLock::new(app_state));
     let app = app(Arc::clone(&shared_state));
 

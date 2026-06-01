@@ -375,9 +375,9 @@ impl ChatBuilder {
 
     /// Add skill management tools to the chat.
     ///
-    /// Takes an `Arc<RwLock<Option<SkillRegistry>>>` so that
-    /// `save_skill` can reload the registry through the same shared
-    /// handle the rest of the system uses.
+    /// Takes an `Arc<RwLock<SkillRegistry>>` so that `save_skill` can
+    /// reload the registry through the same shared handle the rest of
+    /// the system uses.
     ///
     /// Adds the following tool calls:
     /// - `work_on_skill`: Prepare a skill for editing in the workspace
@@ -394,15 +394,12 @@ impl ChatBuilder {
     /// registered, so the agent can create new skills.
     pub fn skills(
         mut self,
-        registry_handle: Arc<RwLock<Option<SkillRegistry>>>,
+        registry_handle: Arc<RwLock<SkillRegistry>>,
         storage_path: &str,
         session_id: &str,
     ) -> Self {
         let registry = match registry_handle.read() {
-            Ok(guard) => match guard.as_ref() {
-                Some(r) => r.clone(),
-                None => return self,
-            },
+            Ok(guard) => guard.clone(),
             Err(_) => return self,
         };
 
@@ -546,7 +543,7 @@ Test skill body content."#;
 
         // Test with empty tools
         let storage_path = temp.path().to_string_lossy().to_string();
-        let handle = Arc::new(RwLock::new(Some(registry.clone())));
+        let handle = Arc::new(RwLock::new(registry.clone()));
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(
             handle,
             &storage_path,
@@ -594,7 +591,7 @@ Test skill body content."#;
 
         // Test that skills merge with existing tools
         let storage_path = temp.path().to_string_lossy().to_string();
-        let handle = Arc::new(RwLock::new(Some(registry)));
+        let handle = Arc::new(RwLock::new(registry));
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
             .tools(vec![Box::new(MockTool) as crate::openai::BoxedToolCall])
             .skills(handle, &storage_path, "test-session");
@@ -611,26 +608,18 @@ Test skill body content."#;
         // Create an empty temp directory
         let temp = TempDir::new().unwrap();
 
-        // Try to create registry (will fail because it's not a valid skills directory)
-        let result = SkillRegistry::new(temp.path());
-        // The registry may fail to load, or be empty - both should be handled gracefully
-        if let Ok(registry) = result {
-            let storage_path = temp.path().to_string_lossy().to_string();
-            let handle = Arc::new(RwLock::new(Some(registry)));
-            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(
-                handle,
-                &storage_path,
-                "test-session",
-            );
-            // With empty registry, should still add workspace tools
-            // (work_on_skill, save_skill) so the agent can create new skills
-            assert!(builder.tools.is_some());
-            assert_eq!(builder.tools.unwrap().len(), 2);
-        } else {
-            // If registry fails to load, skills() should still work (takes Option<SkillRegistry>)
-            let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4");
-            assert!(builder.tools.is_none());
-        }
+        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let storage_path = temp.path().to_string_lossy().to_string();
+        let handle = Arc::new(RwLock::new(registry));
+        let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(
+            handle,
+            &storage_path,
+            "test-session",
+        );
+        // With empty registry, should still add workspace tools
+        // (work_on_skill, save_skill) so the agent can create new skills
+        assert!(builder.tools.is_some());
+        assert_eq!(builder.tools.unwrap().len(), 2);
     }
 
     #[test]
