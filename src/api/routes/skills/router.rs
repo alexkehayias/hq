@@ -1,14 +1,14 @@
 //! Router for the skills API
 
-use std::fs;
 use std::sync::{Arc, RwLock};
 
 use axum::{
     Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json},
 };
+use tokio::fs;
 use serde_json::json;
 
 use super::public::{
@@ -50,12 +50,12 @@ async fn get_skill_detail(
 
     let registry = match registry.skill_registry.as_ref() {
         Some(r) => r,
-        None => return Ok(not_found("Skills directory not configured")),
+        None => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response()),
     };
 
     let skill = match registry.load_skill(&name) {
         Ok(s) => s,
-        Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+        Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
     };
 
     Ok(Json(SkillDetailResponse {
@@ -75,23 +75,34 @@ async fn list_skill_files(
     State(state): State<SharedState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let registry = state.read().expect("Unable to read shared state");
+    let skill_path = {
+        let registry = state.read().expect("Unable to read shared state");
 
-    let registry = match registry.skill_registry.as_ref() {
-        Some(r) => r,
-        None => return Ok(not_found("Skills directory not configured")),
+        let registry = match registry.skill_registry.as_ref() {
+            Some(r) => r,
+            None => {
+                return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response())
+            }
+        };
+
+        let skill = match registry.load_skill(&name) {
+            Ok(s) => s,
+            Err(_) => {
+                return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response())
+            }
+        };
+
+        skill.path.clone()
     };
 
-    let skill = match registry.load_skill(&name) {
-        Ok(s) => s,
-        Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
-    };
-
-    let mut files = Vec::new();
-
-    // Walk the skill directory recursively
-    walk_directory(&skill.path, &skill.path, &mut files)
-        .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to list files: {}", e)))?;
+    let mut files = tokio::task::spawn_blocking(move || {
+        let mut files = Vec::new();
+        walk_directory(&skill_path, &skill_path, &mut files)?;
+        Ok::<_, std::io::Error>(files)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow::anyhow!("Directory listing task failed: {}", e)))?
+    .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to list files: {}", e)))?;
 
     // Sort: SKILL.md first, then alphabetically
     files.sort_by(|a, b| {
@@ -116,21 +127,18 @@ async fn read_skill_file(
 
     let registry = match registry.skill_registry.as_ref() {
         Some(r) => r,
-        None => return Ok(not_found("Skills directory not configured")),
+        None => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response()),
     };
 
     let skill = match registry.load_skill(&name) {
         Ok(s) => s,
-        Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+        Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
     };
 
     let content = match skill.read_file(&file_path) {
         Some(c) => c,
         None => {
-            return Ok(not_found(&format!(
-                "File '{}' not found in skill '{}'",
-                file_path, name
-            )))
+            return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("File '{}' not found in skill '{}'", file_path, name)}))).into_response())
         }
     };
 
@@ -164,39 +172,47 @@ async fn write_skill_file(
 
         let registry = match state.skill_registry.as_ref() {
             Some(r) => r,
-            None => return Ok(not_found("Skills directory not configured")),
+            None => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "Skills directory not configured"}))).into_response()),
         };
 
         match registry.load_skill(&name) {
             Ok(s) => s.path,
-            Err(_) => return Ok(not_found(&format!("Skill '{}' not found", name))),
+            Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
         }
     };
 
     let full_path = skill_path.join(&file_path);
 
     // Security: prevent path traversal — ensure resolved path is within the skill directory
-    let canonical_skill_dir = skill_path
-        .canonicalize()
+    let canonical_skill_dir = fs::canonicalize(&skill_path)
+        .await
         .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to resolve skill path: {}", e)))?;
 
     // Create parent directories if they don't exist
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)
+            .await
             .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to create directories: {}", e)))?;
     }
 
-    let canonical_file = full_path
-        .canonicalize()
-        .or_else(|_| {
+    let canonical_file = match fs::canonicalize(&full_path).await {
+        Ok(p) => p,
+        Err(_) => {
             // File doesn't exist yet; canonicalize the parent and reconstruct
-            full_path
-                .parent()
-                .and_then(|p| p.canonicalize().ok())
-                .map(|p| p.join(full_path.file_name().unwrap()))
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "invalid path"))
-        })
-        .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to resolve file path: {}", e)))?;
+            let parent = full_path.parent().and_then(|p| {
+                // Use std::fs::canonicalize in the sync fallback path
+                p.canonicalize().ok()
+            });
+            match parent {
+                Some(p) => p.join(full_path.file_name().unwrap()),
+                None => {
+                    return Err(ApiError::from(anyhow::anyhow!(
+                        "Failed to resolve file path: invalid path"
+                    )))
+                }
+            }
+        }
+    };
 
     if !canonical_file.starts_with(&canonical_skill_dir) {
         return Ok((
@@ -207,6 +223,7 @@ async fn write_skill_file(
     }
 
     fs::write(&full_path, &body.content)
+        .await
         .map_err(|e| ApiError::from(anyhow::anyhow!("Failed to write file: {}", e)))?;
 
     Ok(Json(json!({"success": true})).into_response())
@@ -218,7 +235,7 @@ fn walk_directory(
     dir: &std::path::Path,
     files: &mut Vec<SkillFileEntry>,
 ) -> Result<(), std::io::Error> {
-    for entry in fs::read_dir(dir)? {
+    for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
@@ -249,10 +266,6 @@ fn walk_directory(
         }
     }
     Ok(())
-}
-
-fn not_found(msg: &str) -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"error": msg}))).into_response()
 }
 
 /// Create the skills router.
