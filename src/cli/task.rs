@@ -120,18 +120,6 @@ fn body_from_headline(headline: &orgize::ast::Headline) -> String {
     extractor.finish()
 }
 
-/// Extract body text from a raw org-mode headline string.
-///
-/// Parses the string with orgize and uses the AST-based traverser.
-fn extract_body(raw: &str) -> String {
-    let config = org::todo_keywords_config();
-    let org = config.parse(raw);
-    match org.document().headlines().next() {
-        Some(h) => body_from_headline(&h),
-        None => String::new(),
-    }
-}
-
 struct TaskLocation {
     path: PathBuf,
     range: Range<usize>,
@@ -243,10 +231,11 @@ pub async fn run_create(
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
+    let status_upper = status.to_uppercase();
 
     if let Some(project_name) = project {
         let project_path = find_or_create_project(notes_path, project_name).await?;
-        let headline = build_headline(&id, title, body, status, 1);
+        let headline = build_headline(&id, title, body, &status_upper, 1);
         let mut project_content = fs::read_to_string(&project_path).await?;
         if !project_content.ends_with('\n') {
             project_content.push('\n');
@@ -261,7 +250,7 @@ pub async fn run_create(
         let slug = slugify(title)?;
         let today = Local::now().format("%Y-%m-%d");
         let filename = format!("{notes_path}/{today}--{slug}.org");
-        let content = build_document(&id, title, body, status);
+        let content = build_document(&id, title, body, &status_upper);
         fs::write(&filename, &content)
             .await
             .context("Failed to write task file")?;
@@ -281,6 +270,7 @@ pub async fn run_update(
     let location = find_task(notes_path, id).await?;
     let new_title = title.unwrap_or(&location.current_title);
     let new_body = body.unwrap_or(&location.current_body);
+    let status = status.map(|s| s.to_uppercase());
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
     let new_headline = build_headline(id, new_title, new_body, new_status, location.current_level);
@@ -309,6 +299,96 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
         .await
         .context("Failed to write project file after deletion")?;
     println!("Deleted task {id} from {}", location.path.display());
+
+    Ok(())
+}
+
+/// Find an existing project file by slug, returning `None` if no match exists.
+async fn find_project_file(notes_path: &str, slug: &str) -> Result<Option<PathBuf>> {
+    let pattern = format!("--project-{slug}.org");
+    let mut dir = fs::read_dir(notes_path).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        let path = entry.path();
+        if path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .map_or(false, |n| n.ends_with(&pattern))
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+pub async fn run_list(
+    notes_path: &str,
+    project: Option<&str>,
+    status: Option<&str>,
+) -> Result<()> {
+    let config = org::todo_keywords_config();
+
+    // Determine which file to read.
+    let (target_path, project_display) = if let Some(project_name) = project {
+        let slug = slugify(project_name)?;
+        let path = find_project_file(notes_path, &slug)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Project '{project_name}' not found"))?;
+        (path, project_name.to_string())
+    } else {
+        let path = PathBuf::from(format!("{notes_path}/refile.org"));
+        (path, "refile".to_string())
+    };
+
+    // If the file doesn't exist, there are no tasks.
+    if !target_path.exists() {
+        println!("No tasks found matching the given criteria.");
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&target_path).await?;
+    let org = config.parse(&content);
+    let doc = org.document();
+
+    let mut tasks: Vec<(String, String, String)> = Vec::new();
+
+    for headline in doc.headlines() {
+        let kw = headline.todo_keyword().map(|k| k.to_string());
+        let task_status = match kw {
+            Some(ref s) => s.clone(),
+            None => continue,
+        };
+
+        // Filter by status
+        if let Some(ref filter_status) = status {
+            if !task_status.eq_ignore_ascii_case(filter_status) {
+                continue;
+            }
+        }
+
+        let title = headline.title_raw().trim().to_string();
+        let id = headline
+            .properties()
+            .and_then(|p| p.get("ID").map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        tasks.push((id, task_status, title));
+    }
+
+    if tasks.is_empty() {
+        println!("No tasks found matching the given criteria.");
+        return Ok(());
+    }
+
+    // Sort tasks by status, then title
+    tasks.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
+
+    println!("{:<40} {:<10} {:<24} {}", "ID", "Status", "Project", "Title");
+    println!("{}", "-".repeat(100));
+    for (id, task_status, title) in &tasks {
+        let short_id = if id.len() > 8 { &id[..8] } else { id };
+        println!("{short_id:<40} {task_status:<10} {project_display:<24} {title}");
+    }
 
     Ok(())
 }
@@ -382,40 +462,6 @@ mod tests {
     #[test]
     fn test_slugify_already_slug() {
         assert_eq!(slugify("my-task-name").unwrap(), "my-task-name");
-    }
-
-    // -----------------------------------------------------------------------
-    // extract_body
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_extract_body_basic() {
-        let raw = "* TODO Buy milk\n:PROPERTIES:\n:ID:       abc\n:END:\nMilk, eggs\n";
-        assert_eq!(extract_body(raw), "Milk, eggs");
-    }
-
-    #[test]
-    fn test_extract_body_no_body() {
-        let raw = "* TODO Buy milk\n:PROPERTIES:\n:ID:       abc\n:END:\n";
-        assert_eq!(extract_body(raw), "");
-    }
-
-    #[test]
-    fn test_extract_body_multiline() {
-        let raw = "* TODO Task\n:PROPERTIES:\n:ID:       abc\n:END:\nLine 1\nLine 2\nLine 3\n";
-        assert_eq!(extract_body(raw), "Line 1\nLine 2\nLine 3");
-    }
-
-    #[test]
-    fn test_extract_body_no_status() {
-        let raw = "* Task\n:PROPERTIES:\n:ID:       abc\n:END:\nJust a note\n";
-        assert_eq!(extract_body(raw), "Just a note");
-    }
-
-    #[test]
-    fn test_extract_body_whitespace_only() {
-        let raw = "* TODO Task\n:PROPERTIES:\n:ID:       abc\n:END:\n   \n  \n";
-        assert_eq!(extract_body(raw), "");
     }
 
     // -----------------------------------------------------------------------
@@ -691,6 +737,262 @@ mod tests {
 
         let result = run_delete(&notes, "nonexistent-uuid").await;
         assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // run_list
+    // -----------------------------------------------------------------------
+
+    /// Helper: parse an org file and return (id, status, title) for each headline
+    /// that has a TODO keyword.
+    fn tasks_in_file(path: &std::path::Path) -> Vec<(String, String, String)> {
+        let content = fs::read_to_string(path).unwrap();
+        let config = parsing_config();
+        let org = config.parse(&content);
+        org.document()
+            .headlines()
+            .filter_map(|h| {
+                let status = h.todo_keyword().map(|k| k.to_string())?;
+                let title = h.title_raw().trim().to_string();
+                let id = h
+                    .properties()
+                    .and_then(|p| p.get("ID").map(|s| s.to_string()))
+                    .unwrap_or_default();
+                Some((id, status, title))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_list_refile_missing() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // No refile.org exists
+        let result = run_list(&notes, None, None).await;
+        assert!(result.is_ok(), "missing refile.org should not error");
+    }
+
+    #[tokio::test]
+    async fn test_list_refile_empty() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // refile.org exists but has no headlines with TODO keywords
+        let refile_path = dir.path().join("refile.org");
+        fs::write(
+            &refile_path,
+            ":PROPERTIES:\n:ID:       inbox\n:END:\n#+TITLE: Refile\n",
+        )
+        .unwrap();
+
+        let result = run_list(&notes, None, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_refile_with_tasks() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let refile_path = dir.path().join("refile.org");
+        fs::write(
+            &refile_path,
+            "\
+* TODO Buy groceries
+:PROPERTIES:
+:ID:       task-1
+:END:
+Milk, eggs
+
+* DONE Fix login
+:PROPERTIES:
+:ID:       task-2
+:END:
+
+* NEXT Research API
+:PROPERTIES:
+:ID:       task-3
+:END:
+",
+        )
+        .unwrap();
+
+        let result = run_list(&notes, None, None).await;
+        assert!(result.is_ok());
+
+        let tasks = tasks_in_file(&refile_path);
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].1, "TODO");
+        assert_eq!(tasks[0].2, "Buy groceries");
+        assert_eq!(tasks[1].1, "DONE");
+        assert_eq!(tasks[1].2, "Fix login");
+        assert_eq!(tasks[2].1, "NEXT");
+        assert_eq!(tasks[2].2, "Research API");
+    }
+
+    #[tokio::test]
+    async fn test_list_refile_filter_by_status() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let refile_path = dir.path().join("refile.org");
+        fs::write(
+            &refile_path,
+            "\
+* TODO Task one
+:PROPERTIES:
+:ID:       t1
+:END:
+
+* DONE Task two
+:PROPERTIES:
+:ID:       t2
+:END:
+
+* TODO Task three
+:PROPERTIES:
+:ID:       t3
+:END:
+",
+        )
+        .unwrap();
+
+        let result = run_list(&notes, None, Some("TODO")).await;
+        assert!(result.is_ok());
+
+        // Verify: only TODO tasks are in the file (run_list reads refile.org)
+        let tasks = tasks_in_file(&refile_path);
+        let todo_tasks: Vec<_> = tasks.iter().filter(|t| t.1 == "TODO").collect();
+        assert_eq!(todo_tasks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_project_not_found() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = run_list(&notes, Some("nonexistent"), None).await;
+        assert!(result.is_err(), "missing project should error");
+    }
+
+    #[tokio::test]
+    async fn test_list_project_file() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // Create a project file
+        let project_path = dir.path().join("2026-05-31--project-my-project.org");
+        fs::write(
+            &project_path,
+            "\
+:PROPERTIES:
+:ID:       proj-1
+:END:
+#+TITLE: my-project
+#+FILETAGS: project
+
+* TODO First task
+:PROPERTIES:
+:ID:       pt-1
+:END:
+
+* DONE Second task
+:PROPERTIES:
+:ID:       pt-2
+:END:
+",
+        )
+        .unwrap();
+
+        let result = run_list(&notes, Some("my-project"), None).await;
+        assert!(result.is_ok());
+
+        let tasks = tasks_in_file(&project_path);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].2, "First task");
+        assert_eq!(tasks[1].2, "Second task");
+    }
+
+    #[tokio::test]
+    async fn test_list_project_filter_by_status() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let project_path = dir.path().join("2026-05-31--project-sprint-12.org");
+        fs::write(
+            &project_path,
+            "\
+:PROPERTIES:
+:ID:       proj-1
+:END:
+#+TITLE: sprint-12
+#+FILETAGS: project
+
+* TODO Task A
+:PROPERTIES:
+:ID:       a
+:END:
+
+* DONE Task B
+:PROPERTIES:
+:ID:       b
+:END:
+
+* TODO Task C
+:PROPERTIES:
+:ID:       c
+:END:
+",
+        )
+        .unwrap();
+
+        let result = run_list(&notes, Some("sprint-12"), Some("DONE")).await;
+        assert!(result.is_ok());
+
+        let tasks = tasks_in_file(&project_path);
+        let done_tasks: Vec<_> = tasks.iter().filter(|t| t.1 == "DONE").collect();
+        assert_eq!(done_tasks.len(), 1);
+        assert_eq!(done_tasks[0].2, "Task B");
+    }
+
+    // -----------------------------------------------------------------------
+    // find_project_file
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_find_project_file_found() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let path = dir.path().join("2026-01-01--project-my-project.org");
+        fs::write(&path, "").unwrap();
+
+        let result = find_project_file(&notes, "my-project").await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), path);
+    }
+
+    #[tokio::test]
+    async fn test_find_project_file_not_found() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = find_project_file(&notes, "my-project").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_project_file_ignores_other_files() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // Create a standalone task file and refile.org — neither should match
+        fs::write(dir.path().join("2026-01-01--standalone.org"), "").unwrap();
+        fs::write(dir.path().join("refile.org"), "").unwrap();
+
+        let result = find_project_file(&notes, "my-project").await.unwrap();
+        assert!(result.is_none());
     }
 
     // -----------------------------------------------------------------------

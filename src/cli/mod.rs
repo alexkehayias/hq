@@ -123,6 +123,13 @@ enum TaskCommand {
     Delete {
         id: String,
     },
+    /// List tasks, optionally filtered by project and/or status
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+    },
 }
 
 #[derive(Parser)]
@@ -220,6 +227,9 @@ pub async fn run() -> Result<()> {
             }
             TaskCommand::Delete { id } => {
                 task::run_delete(&notes_path, &id).await?;
+            }
+            TaskCommand::List { project, status } => {
+                task::run_list(&notes_path, project.as_deref(), status.as_deref()).await?;
             }
         },
         None => {}
