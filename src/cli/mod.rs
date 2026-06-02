@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::env;
 
 pub mod auth;
+pub mod bashkit;
 pub mod chat;
 pub mod eval;
 pub mod index;
