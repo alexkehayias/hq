@@ -2048,6 +2048,7 @@ dependencies = [
  "htmd",
  "http 1.4.0",
  "itertools 0.13.0",
+ "libc",
  "mockito",
  "once_cell",
  "orgize",

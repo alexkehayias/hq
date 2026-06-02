@@ -48,6 +48,7 @@ tokio-rusqlite = "0.6.0"
 tokio-stream = "0.1.17"
 htmd = "0.5"
 bashkit = { version = "0.1.20", features = ["realfs"] }
+libc = "0.2"
 
 
 [dev-dependencies]

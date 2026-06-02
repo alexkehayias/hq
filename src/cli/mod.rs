@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::env;
 
 pub mod auth;
+pub mod bashkit;
 pub mod chat;
 pub mod eval;
 pub mod index;
@@ -99,16 +100,29 @@ pub struct Cli {
     command: Option<Command>,
 }
 
+/// Run the CLI, parsing args from the environment.
 pub async fn run() -> Result<()> {
-    let args = Cli::parse();
+    let cli = Cli::parse();
+    run_dispatch(cli).await
+}
 
+/// Run the CLI with explicit arguments (for programmatic use, e.g. bashkit).
+///
+/// The first element should be the program name (e.g. "hq"), followed by
+/// subcommand and flags — matching what would be passed on the command line.
+pub async fn run_with_args(args: Vec<String>) -> Result<()> {
+    let cli = Cli::try_parse_from(args)?;
+    run_dispatch(cli).await
+}
+
+async fn run_dispatch(cli: Cli) -> Result<()> {
     let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
     let index_path = format!("{}/index", storage_path);
     let notes_path = format!("{}/notes", storage_path);
     let vec_db_path = format!("{}/db", storage_path);
 
     // Handle each sub command
-    match args.command {
+    match cli.command {
         Some(Command::Init { db, index, notes }) => {
             init::run(db, index, notes, &vec_db_path, &index_path, &notes_path).await?;
         }
