@@ -190,6 +190,51 @@ async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     anyhow::bail!("Task with ID {id} not found in {notes_path}");
 }
 
+/// Find a task by UUID within a specific file (not across all notes).
+async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation> {
+    let id_pattern = format!(":ID:       {id}");
+    let content = fs::read_to_string(path)
+        .await
+        .with_context(|| format!("Cannot read file: {}", path.display()))?;
+
+    if !content.contains(&id_pattern) {
+        anyhow::bail!("Task with ID {id} not found in {}", path.display());
+    }
+
+    let config = org::todo_keywords_config();
+    let org = config.parse(&content);
+    for headline in org.document().headlines() {
+        if let Some(props) = headline.properties() {
+            if props.get("ID").is_some_and(|v| v == id) {
+                let range = headline.syntax().text_range();
+                let usize_range = u32::from(range.start()) as usize..u32::from(range.end()) as usize;
+                let current_status = headline
+                    .todo_keyword()
+                    .map(|k| k.to_string())
+                    .unwrap_or_else(|| "TODO".to_string());
+                let current_title = headline.title_raw().trim().to_string();
+                let current_level = headline.level();
+                let current_body = body_from_headline(&headline);
+
+                return Ok(TaskLocation {
+                    path: path.clone(),
+                    range: usize_range,
+                    content,
+                    current_title,
+                    current_body,
+                    current_status,
+                    current_level,
+                });
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "Found ID {id} in {} but could not locate its headline",
+        path.display()
+    );
+}
+
 async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
     let pattern = format!("--project-{slug}.org");
@@ -212,7 +257,9 @@ async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<
     let content = org::Document::builder()
         .property("ID", &project_id)
         .title(project_name)
-        .filetags("project")
+        .category(project_name)
+        .date(&today.to_string())
+        .filetags("~private~ ~project~")
         .build()
         .to_string();
     fs::write(&filename, &content)
@@ -260,14 +307,51 @@ pub async fn run_create(
     Ok(())
 }
 
+/// Find a project file by ID (UUID property) or by exact filename match.
+/// Unlike `find_or_create_project`, this does NOT slugify the input.
+async fn find_project_file_by_id_or_name(notes_path: &str, project_ref: &str) -> Result<PathBuf> {
+    let mut dir = fs::read_dir(notes_path)
+        .await
+        .with_context(|| format!("Cannot read notes directory: {notes_path}"))?;
+
+    while let Some(entry) = dir.next_entry().await? {
+        let path = entry.path();
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+
+        // Skip non-org files
+        if path.extension().map_or(true, |e| e != "org") {
+            continue;
+        }
+
+        // Match by filename (exact or project-name suffix)
+        if file_name == project_ref || file_name.ends_with(&format!("--project-{}.org", project_ref)) {
+            return Ok(path);
+        }
+
+        // Match by ID (UUID property in the org file)
+        let content = fs::read_to_string(&path).await?;
+        if content.contains(&format!(":ID:       {project_ref}")) {
+            return Ok(path);
+        }
+    }
+
+    anyhow::bail!("Project '{project_ref}' not found by ID or filename");
+}
+
 pub async fn run_update(
     notes_path: &str,
     id: &str,
     title: Option<&str>,
     body: Option<&str>,
     status: Option<&str>,
+    project: Option<&str>,
 ) -> Result<()> {
-    let location = find_task(notes_path, id).await?;
+    let location = if let Some(project_ref) = project {
+        let project_path = find_project_file_by_id_or_name(notes_path, project_ref).await?;
+        find_task_in_file(&project_path, id).await?
+    } else {
+        find_task(notes_path, id).await?
+    };
     let new_title = title.unwrap_or(&location.current_title);
     let new_body = body.unwrap_or(&location.current_body);
     let status = status.map(|s| s.to_uppercase());
@@ -583,7 +667,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"))
+        run_update(&notes, &id, None, None, Some("DONE"), None)
             .await
             .unwrap();
 
@@ -605,7 +689,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None)
+        run_update(&notes, &id, Some("New title"), Some("New body"), None, None)
             .await
             .unwrap();
 
@@ -634,7 +718,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"))
+        run_update(&notes, &id, None, None, Some("DONE"), None)
             .await
             .unwrap();
 
@@ -654,7 +738,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE")).await;
+        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
         assert!(result.is_err());
     }
 
@@ -890,7 +974,9 @@ Milk, eggs
 :ID:       proj-1
 :END:
 #+TITLE: my-project
-#+FILETAGS: project
+#+CATEGORY: my-project
+#+DATE: 2026-06-01
+#+FILETAGS: ~private~ ~project~
 
 * TODO First task
 :PROPERTIES:
@@ -927,7 +1013,9 @@ Milk, eggs
 :ID:       proj-1
 :END:
 #+TITLE: sprint-12
-#+FILETAGS: project
+#+CATEGORY: sprint-12
+#+DATE: 2026-06-01
+#+FILETAGS: ~private~ ~project~
 
 * TODO Task A
 :PROPERTIES:
@@ -1011,7 +1099,9 @@ Milk, eggs
         // Should contain a project preamble
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("#+TITLE: my-project"));
-        assert!(content.contains("#+FILETAGS: project"));
+        assert!(content.contains("#+CATEGORY: my-project"));
+        assert!(content.contains("#+DATE:"));
+        assert!(content.contains("#+FILETAGS: ~private~ ~project~"));
     }
 
     #[tokio::test]
@@ -1023,5 +1113,263 @@ Milk, eggs
         let path2 = find_or_create_project(&notes, "my-project").await.unwrap();
 
         assert_eq!(path1, path2, "should return the same existing file");
+    }
+
+    // -----------------------------------------------------------------------
+    // find_project_file_by_id_or_name
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_find_project_by_name_exact_filename() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let path = dir.path().join("my-project.org");
+        fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
+
+        let result = find_project_file_by_id_or_name(&notes, "my-project.org")
+            .await
+            .unwrap();
+        assert_eq!(result, path);
+    }
+
+    #[tokio::test]
+    async fn test_find_project_by_name_suffix() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let path = dir.path().join("2026-06-01--project-my-project.org");
+        fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
+
+        let result = find_project_file_by_id_or_name(&notes, "my-project")
+            .await
+            .unwrap();
+        assert_eq!(result, path);
+    }
+
+    #[tokio::test]
+    async fn test_find_project_by_id() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let path = dir.path().join("2026-06-01--project-sprint-12.org");
+        fs::write(
+            &path,
+            "\
+:PROPERTIES:
+:ID:       proj-uuid-42
+:END:
+#+TITLE: sprint-12
+#+FILETAGS: ~private~ ~project~
+",
+        )
+        .unwrap();
+
+        let result = find_project_file_by_id_or_name(&notes, "proj-uuid-42")
+            .await
+            .unwrap();
+        assert_eq!(result, path);
+    }
+
+    #[tokio::test]
+    async fn test_find_project_by_id_not_found() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = find_project_file_by_id_or_name(&notes, "nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_find_project_by_id_ignores_standalone_tasks() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // Standalone task file — should not match
+        fs::write(
+            dir.path().join("2026-06-01--standalone.org"),
+            ":PROPERTIES:\n:ID:       task-1\n:END:\n",
+        )
+        .unwrap();
+
+        let result = find_project_file_by_id_or_name(&notes, "project-1").await;
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // find_task_in_file
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_find_task_in_file_found() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("project.org");
+        fs::write(
+            &path,
+            "\
+:PROPERTIES:
+:ID:       proj-1
+:END:
+#+TITLE: My Project
+#+FILETAGS: ~private~ ~project~
+
+* TODO Fix login
+:PROPERTIES:
+:ID:       task-1
+:END:
+Investigate the redirect
+
+* DONE Setup CI
+:PROPERTIES:
+:ID:       task-2
+:END:
+",
+        )
+        .unwrap();
+
+        let location = find_task_in_file(&path, "task-1").await.unwrap();
+        assert_eq!(location.current_title, "Fix login");
+        assert_eq!(location.current_status, "TODO");
+        assert!(location.current_body.contains("Investigate the redirect"));
+        assert_eq!(location.current_level, 1);
+    }
+
+    #[tokio::test]
+    async fn test_find_task_in_file_not_found() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("project.org");
+        fs::write(
+            &path,
+            "\
+:PROPERTIES:
+:ID:       proj-1
+:END:
+",
+        )
+        .unwrap();
+
+        let result = find_task_in_file(&path, "nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_find_task_in_file_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.org");
+        fs::write(&path, "").unwrap();
+
+        let result = find_task_in_file(&path, "task-1").await;
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // run_update — with --project flag
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_update_project_task_by_filename() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        // Find the task ID from the project file
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_marker = ":ID:       ";
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        // Update using --project with filename
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))
+            .await
+            .unwrap();
+
+        let config = parsing_config();
+        let org = config.parse(&fs::read_to_string(&path).unwrap());
+        let headlines: Vec<_> = org.document().headlines().collect();
+        assert_eq!(headlines.len(), 1);
+        assert_eq!(headlines[0].todo_keyword().unwrap().to_string(), "DONE");
+        assert_eq!(headlines[0].title_raw().trim(), "Fixed bug");
+    }
+
+    #[tokio::test]
+    async fn test_update_project_task_by_id() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        // Find the project file's ID (first :ID: in the file)
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_marker = ":ID:       ";
+        let first_id_start = content.find(id_marker).unwrap() + id_marker.len();
+        let project_id = content[first_id_start..].lines().next().unwrap().trim().to_string();
+
+        // Find the task ID (second :ID:)
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        // Update using --project with project ID
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id))
+            .await
+            .unwrap();
+
+        let config = parsing_config();
+        let org = config.parse(&fs::read_to_string(&path).unwrap());
+        let headlines: Vec<_> = org.document().headlines().collect();
+        assert_eq!(headlines.len(), 1);
+        assert_eq!(headlines[0].todo_keyword().unwrap().to_string(), "DONE");
+    }
+
+    #[tokio::test]
+    async fn test_update_project_task_not_found_in_project() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // Create a standalone task (not in any project)
+        run_create(&notes, "Standalone", None, None, "TODO")
+            .await
+            .unwrap();
+
+        // Create a project with a different task
+        run_create(&notes, "Project task", None, Some("my-project"), "TODO")
+            .await
+            .unwrap();
+
+        // Find the standalone task's ID
+        let standalone_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-") { None } else { Some(p) }
+                })
+                .next()
+                .unwrap(),
+        );
+        let content = fs::read_to_string(&standalone_path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
+
+        // Try to update it scoped to the project — should fail
+        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
+        assert!(result.is_err(), "should not find standalone task in project file");
+    }
+
+    #[tokio::test]
+    async fn test_update_project_task_nonexistent_project() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
+        assert!(result.is_err(), "should error for nonexistent project");
     }
 }

@@ -118,6 +118,9 @@ enum TaskCommand {
         body: Option<String>,
         #[arg(long)]
         status: Option<String>,
+        /// Project ID or filename (skips slug-based lookup)
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Delete a task by UUID
     Delete {
@@ -215,6 +218,7 @@ pub async fn run() -> Result<()> {
                 title,
                 body,
                 status,
+                project,
             } => {
                 task::run_update(
                     &notes_path,
@@ -222,6 +226,7 @@ pub async fn run() -> Result<()> {
                     title.as_deref(),
                     body.as_deref(),
                     status.as_deref(),
+                    project.as_deref(),
                 )
                 .await?;
             }

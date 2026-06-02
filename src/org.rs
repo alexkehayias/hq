@@ -50,6 +50,8 @@ pub fn todo_keywords_config() -> ParseConfig {
 pub struct Document {
     properties: Vec<(String, String)>,
     title: Option<String>,
+    category: Option<String>,
+    date: Option<String>,
     filetags: Option<String>,
     headlines: Vec<Headline>,
 }
@@ -84,6 +86,8 @@ pub struct Headline {
 pub struct DocumentBuilder {
     properties: Vec<(String, String)>,
     title: Option<String>,
+    category: Option<String>,
+    date: Option<String>,
     filetags: Option<String>,
     headlines: Vec<Headline>,
 }
@@ -98,6 +102,18 @@ impl DocumentBuilder {
     /// Set the `#+TITLE` keyword value.
     pub fn title(mut self, title: &str) -> Self {
         self.title = Some(title.to_string());
+        self
+    }
+
+    /// Set the `#+CATEGORY` keyword value.
+    pub fn category(mut self, category: &str) -> Self {
+        self.category = Some(category.to_string());
+        self
+    }
+
+    /// Set the `#+DATE` keyword value.
+    pub fn date(mut self, date: &str) -> Self {
+        self.date = Some(date.to_string());
         self
     }
 
@@ -118,6 +134,8 @@ impl DocumentBuilder {
         Document {
             properties: self.properties,
             title: self.title,
+            category: self.category,
+            date: self.date,
             filetags: self.filetags,
             headlines: self.headlines,
         }
@@ -226,6 +244,12 @@ impl fmt::Display for Document {
         if let Some(title) = &self.title {
             writeln!(f, "#+TITLE: {title}")?;
         }
+        if let Some(category) = &self.category {
+            writeln!(f, "#+CATEGORY: {category}")?;
+        }
+        if let Some(date) = &self.date {
+            writeln!(f, "#+DATE: {date}")?;
+        }
         if let Some(tags) = &self.filetags {
             writeln!(f, "#+FILETAGS: {tags}")?;
         }
@@ -291,14 +315,18 @@ mod tests {
         let doc = Document::builder()
             .property("ID", "abc-123")
             .title("My Doc")
-            .filetags("project")
+            .category("My Doc")
+            .date("2026-06-01")
+            .filetags("~private~ ~project~")
             .build();
         let expected = "\
 :PROPERTIES:
 :ID:       abc-123
 :END:
 #+TITLE: My Doc
-#+FILETAGS: project
+#+CATEGORY: My Doc
+#+DATE: 2026-06-01
+#+FILETAGS: ~private~ ~project~
 ";
         assert_eq!(doc.to_string(), expected);
     }
@@ -360,7 +388,9 @@ Milk, eggs, bread
         let doc = Document::builder()
             .property("ID", "project-uuid")
             .title("Sprint 12")
-            .filetags("project")
+            .category("Sprint 12")
+            .date("2026-06-01")
+            .filetags("~private~ ~project~")
             .headline(
                 Headline::builder()
                     .level(1)
@@ -384,7 +414,9 @@ Milk, eggs, bread
 :ID:       project-uuid
 :END:
 #+TITLE: Sprint 12
-#+FILETAGS: project
+#+CATEGORY: Sprint 12
+#+DATE: 2026-06-01
+#+FILETAGS: ~private~ ~project~
 
 * TODO Fix login
 :PROPERTIES:
@@ -489,7 +521,9 @@ Investigate redirect issue
         let content = Document::builder()
             .property("ID", "proj-1")
             .title("Sprint 12")
-            .filetags("project")
+            .category("Sprint 12")
+            .date("2026-06-01")
+            .filetags("~private~ ~project~")
             .headline(
                 Headline::builder()
                     .level(1)
@@ -548,7 +582,9 @@ Investigate redirect issue
         let preamble = Document::builder()
             .property("ID", "proj-1")
             .title("My Project")
-            .filetags("project")
+            .category("My Project")
+            .date("2026-06-01")
+            .filetags("~private~ ~project~")
             .build()
             .to_string();
         fs::write(&path, &preamble).unwrap();
