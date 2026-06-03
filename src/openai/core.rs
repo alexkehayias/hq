@@ -88,6 +88,10 @@ impl Message {
             tool_calls: None,
         }
     }
+    pub fn tool_calls(&self) -> Option<&Vec<FunctionCall>> {
+        self.tool_calls.as_ref()
+    }
+
     pub fn new_tool_call_request(tool_calls: Vec<FunctionCall>) -> Self {
         Message {
             role: Role::Assistant,
