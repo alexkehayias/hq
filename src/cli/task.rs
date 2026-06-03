@@ -257,9 +257,9 @@ async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<
     let content = org::Document::builder()
         .property("ID", &project_id)
         .title(project_name)
-        .category(project_name)
+        .category(&slug)
         .date(&today.to_string())
-        .filetags("~private~ ~project~")
+        .filetags("private project")
         .build()
         .to_string();
     fs::write(&filename, &content)
@@ -976,7 +976,7 @@ Milk, eggs
 #+TITLE: my-project
 #+CATEGORY: my-project
 #+DATE: 2026-06-01
-#+FILETAGS: ~private~ ~project~
+#+FILETAGS: private project
 
 * TODO First task
 :PROPERTIES:
@@ -1015,7 +1015,7 @@ Milk, eggs
 #+TITLE: sprint-12
 #+CATEGORY: sprint-12
 #+DATE: 2026-06-01
-#+FILETAGS: ~private~ ~project~
+#+FILETAGS: private project
 
 * TODO Task A
 :PROPERTIES:
@@ -1101,7 +1101,7 @@ Milk, eggs
         assert!(content.contains("#+TITLE: my-project"));
         assert!(content.contains("#+CATEGORY: my-project"));
         assert!(content.contains("#+DATE:"));
-        assert!(content.contains("#+FILETAGS: ~private~ ~project~"));
+        assert!(content.contains("#+FILETAGS: private project"));
     }
 
     #[tokio::test]
@@ -1160,7 +1160,7 @@ Milk, eggs
 :ID:       proj-uuid-42
 :END:
 #+TITLE: sprint-12
-#+FILETAGS: ~private~ ~project~
+#+FILETAGS: private project
 ",
         )
         .unwrap();
@@ -1211,7 +1211,7 @@ Milk, eggs
 :ID:       proj-1
 :END:
 #+TITLE: My Project
-#+FILETAGS: ~private~ ~project~
+#+FILETAGS: private project
 
 * TODO Fix login
 :PROPERTIES:

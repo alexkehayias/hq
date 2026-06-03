@@ -317,7 +317,7 @@ mod tests {
             .title("My Doc")
             .category("My Doc")
             .date("2026-06-01")
-            .filetags("~private~ ~project~")
+            .filetags("private project")
             .build();
         let expected = "\
 :PROPERTIES:
@@ -326,7 +326,7 @@ mod tests {
 #+TITLE: My Doc
 #+CATEGORY: My Doc
 #+DATE: 2026-06-01
-#+FILETAGS: ~private~ ~project~
+#+FILETAGS: private project
 ";
         assert_eq!(doc.to_string(), expected);
     }
@@ -390,7 +390,7 @@ Milk, eggs, bread
             .title("Sprint 12")
             .category("Sprint 12")
             .date("2026-06-01")
-            .filetags("~private~ ~project~")
+            .filetags("private project")
             .headline(
                 Headline::builder()
                     .level(1)
@@ -416,7 +416,7 @@ Milk, eggs, bread
 #+TITLE: Sprint 12
 #+CATEGORY: Sprint 12
 #+DATE: 2026-06-01
-#+FILETAGS: ~private~ ~project~
+#+FILETAGS: private project
 
 * TODO Fix login
 :PROPERTIES:
@@ -523,7 +523,7 @@ Investigate redirect issue
             .title("Sprint 12")
             .category("Sprint 12")
             .date("2026-06-01")
-            .filetags("~private~ ~project~")
+            .filetags("private project")
             .headline(
                 Headline::builder()
                     .level(1)
@@ -584,7 +584,7 @@ Investigate redirect issue
             .title("My Project")
             .category("My Project")
             .date("2026-06-01")
-            .filetags("~private~ ~project~")
+            .filetags("private project")
             .build()
             .to_string();
         fs::write(&path, &preamble).unwrap();
