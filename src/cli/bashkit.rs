@@ -10,6 +10,11 @@ use std::os::fd::FromRawFd;
 /// captured via Unix pipes and returned as the builtin's output.
 pub struct HqBuiltin;
 
+struct CapturedOutput {
+    stdout: String,
+    stderr: String,
+}
+
 #[async_trait]
 impl Builtin for HqBuiltin {
     async fn execute(&self, ctx: BuiltinContext<'_>) -> Result<ExecResult> {
@@ -18,27 +23,27 @@ impl Builtin for HqBuiltin {
         args.extend(ctx.args.iter().cloned());
 
         match capture_async(move || async { cli::run_with_args(args).await }).await {
-            Ok((stdout, stderr)) => {
-                if stderr.is_empty() {
-                    Ok(ExecResult::ok(stdout))
+            Ok(output) => {
+                if output.stderr.is_empty() {
+                    Ok(ExecResult::ok(output.stdout))
                 } else {
                     Ok(ExecResult {
-                        stdout,
-                        stderr,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
                         exit_code: 0,
                         ..Default::default()
                     })
                 }
             }
-            Err((stdout, stderr, err)) => {
+            Err((output, err)) => {
                 let msg = format!("{err}");
-                let combined_stderr = if stderr.is_empty() {
+                let combined_stderr = if output.stderr.is_empty() {
                     msg
                 } else {
-                    format!("{stderr}\n{msg}")
+                    format!("{stderr}\n{msg}", stderr = output.stderr)
                 };
                 Ok(ExecResult {
-                    stdout,
+                    stdout: output.stdout,
                     stderr: combined_stderr,
                     exit_code: 1,
                     ..Default::default()
@@ -50,10 +55,9 @@ impl Builtin for HqBuiltin {
 
 /// Run an async closure with stdout and stderr redirected to pipes, capturing
 /// all output into the returned strings.
-///
-/// On success returns `Ok((stdout, stderr))`. On failure returns
-/// `Err((stdout, stderr, error))`.
-async fn capture_async<F, Fut>(f: F) -> std::result::Result<(String, String), (String, String, anyhow::Error)>
+async fn capture_async<F, Fut>(
+    f: F,
+) -> std::result::Result<CapturedOutput, (CapturedOutput, anyhow::Error)>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>>,
@@ -62,21 +66,39 @@ where
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
 
-    // Safety: we manipulate raw file descriptors to redirect stdout/stderr
-    // into pipes, then restore them after the closure completes. This is
-    // safe as long as no other code concurrently reads from or duplicates
-    // fd 1/2, which is the case in this single-threaded async context.
+    // Safety: We temporarily replace fd 1 and 2 with pipe write-ends so the
+    // closure's stdout/stderr output is captured instead of reaching the
+    // process's original output. The original fds are restored before the
+    // function returns. This is safe because:
+    //   - No other code in this process concurrently reads from or duplicates
+    //     fd 1/2 during the capture window (the bashkit sandbox has its own
+    //     fd setup and this builtin is called synchronously within it).
+    //   - The pipe read-ends are immediately moved into background reader
+    //     threads (via from_raw_fd, taking ownership) so there is no aliasing.
+    //   - Saved fds from dup() are closed after restore, avoiding leaks.
     unsafe {
         let mut stdout_fds: [libc::c_int; 2] = [0, 0];
         let mut stderr_fds: [libc::c_int; 2] = [0, 0];
 
         if libc::pipe(stdout_fds.as_mut_ptr()) != 0 {
-            return Err((String::new(), String::new(), anyhow::anyhow!("pipe failed")));
+            return Err((
+                CapturedOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                anyhow::anyhow!("pipe failed"),
+            ));
         }
         if libc::pipe(stderr_fds.as_mut_ptr()) != 0 {
             libc::close(stdout_fds[0]);
             libc::close(stdout_fds[1]);
-            return Err((String::new(), String::new(), anyhow::anyhow!("pipe failed")));
+            return Err((
+                CapturedOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                anyhow::anyhow!("pipe failed"),
+            ));
         }
 
         let saved_stdout = libc::dup(1);
@@ -120,9 +142,14 @@ where
         let captured_stdout = stdout_handle.join().unwrap_or_default();
         let captured_stderr = stderr_handle.join().unwrap_or_default();
 
+        let output = CapturedOutput {
+            stdout: captured_stdout,
+            stderr: captured_stderr,
+        };
+
         match result {
-            Ok(_) => Ok((captured_stdout, captured_stderr)),
-            Err(e) => Err((captured_stdout, captured_stderr, e)),
+            Ok(_) => Ok(output),
+            Err(e) => Err((output, e)),
         }
     }
 }
@@ -170,6 +197,10 @@ mod tests {
             !output.is_empty(),
             "running hq with no args should produce output"
         );
+        assert!(
+            output.contains("Usage") || output.contains("Commands"),
+            "no-args output should show usage or commands: {output}"
+        );
     }
 
     #[tokio::test]
@@ -197,6 +228,10 @@ mod tests {
         assert!(
             output.contains("hq"),
             "version output should mention hq: {output}"
+        );
+        assert!(
+            output.contains(env!("CARGO_PKG_VERSION")),
+            "version output should contain the package version: {output}"
         );
     }
 
