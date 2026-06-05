@@ -2,10 +2,14 @@
 # Set up a worktree for hq development.
 # Creates storage directories, initializes the database and search index,
 # and writes .worktree-env with session-level environment variables.
+#
+# Usage: ./bin/setup.sh [target-dir]
+#   target-dir: Worktree directory to set up (defaults to current repo root)
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+TARGET="${1:-$SCRIPT_DIR}"
+cd "$TARGET"
 
 STORAGE_DIR=".hq-data"
 ENV_FILE=".worktree-env"
@@ -79,7 +83,7 @@ cargo run -- example-data 2>&1 | sed 's/^/  /'
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "  Storage path: $ROOT/$STORAGE_DIR"
+echo "  Storage path: $PWD/$STORAGE_DIR"
 echo ""
 echo "  Next steps:"
 echo "    source .worktree-env    # Set env vars for this terminal session"

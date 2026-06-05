@@ -23,11 +23,8 @@ echo "=== Creating worktree for branch: $BRANCH ==="
 git worktree add "$WORKTREE_PATH" main -b "$BRANCH"
 echo "  Created worktree at $WORKTREE_PATH"
 
-# Change to the worktree directory
-cd "$WORKTREE_PATH"
-
-# Run the setup script
-./bin/setup.sh
+# Run the setup script from the original repo, targeting the worktree
+"$ROOT/bin/setup.sh" "$WORKTREE_PATH"
 
 echo ""
 echo "=== Starting tmux session ==="
