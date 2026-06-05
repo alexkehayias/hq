@@ -39,23 +39,12 @@ NOTES_REPO_URL="${HQ_NOTES_REPO_URL:-stub}"
 NOTES_DEPLOY_KEY="${HQ_NOTES_DEPLOY_KEY_PATH:-stub}"
 
 if [ -f "$SETTINGS_FILE" ] && [ -s "$SETTINGS_FILE" ]; then
-  python3 -c "
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    settings = json.load(f)
-settings.setdefault('env', {})
-settings['env']['HQ_STORAGE_PATH'] = '.hq-data'
-settings['env']['HQ_NOTES_REPO_URL'] = '$NOTES_REPO_URL'
-settings['env']['HQ_NOTES_DEPLOY_KEY_PATH'] = '$NOTES_DEPLOY_KEY'
-settings.setdefault('hooks', {})
-settings['hooks']['DirChanged'] = 'if [ -f .worktree-env ]; then set -a; source .worktree-env; set +a; fi'
-with open(path, 'w') as f:
-    json.dump(settings, f, indent=2)
-    f.write('\n')
-" "$SETTINGS_FILE"
-else
-  cat > "$SETTINGS_FILE" <<JSON
+  echo "  Warning: $SETTINGS_FILE already exists with custom settings."
+  echo "           Overwriting with worktree defaults. Back up the file if you"
+  echo "           need to preserve existing settings."
+fi
+
+cat > "$SETTINGS_FILE" <<JSON
 {
   "env": {
     "HQ_STORAGE_PATH": ".hq-data",
@@ -67,7 +56,6 @@ else
   }
 }
 JSON
-fi
 echo "  Updated $SETTINGS_FILE with HQ_STORAGE_PATH and DirChanged hook"
 
 # Initialize database and indices
