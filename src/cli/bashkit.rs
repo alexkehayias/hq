@@ -7,12 +7,28 @@ use std::os::fd::FromRawFd;
 ///
 /// Registered as the `hq` command inside bashkit sandboxes. Only subcommands
 /// in [`ALLOWED_SUBCOMMANDS`] are permitted; all others return an error.
+/// Help output is filtered to show only allowed subcommands.
 /// Arguments are forwarded to [`cli::run_with_args`], with stdout and stderr
 /// captured via Unix pipes and returned as the builtin's output.
 pub struct HqBuiltin;
 
 /// Subcommands that the `hq` builtin is allowed to run inside the sandbox.
 const ALLOWED_SUBCOMMANDS: &[&str] = &["task", "eval"];
+
+/// Help text shown for the `hq` builtin, listing only allowed subcommands.
+const FILTERED_HELP: &str = "\
+hq - personal AI assistant
+
+Usage: hq <COMMAND>
+
+Commands:
+  task    Create, update, or delete tasks
+  eval    Run an eval
+
+Options:
+  -h, --help       Print help
+  -V, --version    Print version
+";
 
 struct CapturedOutput {
     stdout: String,
@@ -22,6 +38,13 @@ struct CapturedOutput {
 #[async_trait]
 impl Builtin for HqBuiltin {
     async fn execute(&self, ctx: BuiltinContext<'_>) -> Result<ExecResult> {
+        let wants_help = ctx.args.is_empty()
+            || ctx.args.iter().any(|a| a == "--help" || a == "-h");
+
+        if wants_help {
+            return Ok(ExecResult::ok(FILTERED_HELP));
+        }
+
         // Check the subcommand against the allowlist before running anything.
         if let Some(cmd) = ctx.args.iter().find(|a| !a.starts_with('-')) {
             if !ALLOWED_SUBCOMMANDS.contains(&cmd.as_str()) {
@@ -188,9 +211,6 @@ mod tests {
         let mut bash = bash_with_hq();
         let result = bash.exec("hq --help").await.unwrap();
 
-        // --help prints usage info; clap returns it as an error via
-        // try_parse_from, so exit_code should be non-zero and the help
-        // text ends up in stderr (or stdout if clap wrote it there).
         let output = format!("{}{}", result.stdout, result.stderr);
         assert!(
             output.contains("hq"),
@@ -199,6 +219,22 @@ mod tests {
         assert!(
             output.contains("Usage") || output.contains("Commands"),
             "help output should list usage or commands: {output}"
+        );
+        assert!(
+            output.contains("task"),
+            "help output should list allowed subcommand 'task': {output}"
+        );
+        assert!(
+            output.contains("eval"),
+            "help output should list allowed subcommand 'eval': {output}"
+        );
+        assert!(
+            !output.contains("serve"),
+            "help output should not list disallowed subcommand 'serve': {output}"
+        );
+        assert!(
+            !output.contains("query"),
+            "help output should not list disallowed subcommand 'query': {output}"
         );
     }
 
