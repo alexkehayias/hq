@@ -1,3 +1,4 @@
+use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
@@ -66,7 +67,10 @@ impl ToolCall for BashTool {
         let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite)
             .expect("Failed to create RealFs");
         let fs = Arc::new(PosixFs::new(backend));
-        let mut bash = Bash::new();
+
+        let mut bash = Bash::builder()
+            .builtin("hq", Box::new(HqBuiltin))
+            .build();
         bash.mount(SANDBOX_ROOT, fs)?;
 
         let output = bash.exec(&fn_args.command).await?;
