@@ -5,10 +5,14 @@ use std::os::fd::FromRawFd;
 
 /// A bashkit custom builtin that wraps the `hq` CLI.
 ///
-/// Registered as the `hq` command inside bashkit sandboxes. Arguments are
-/// forwarded directly to [`cli::run_with_args`], with stdout and stderr
+/// Registered as the `hq` command inside bashkit sandboxes. Only subcommands
+/// in [`ALLOWED_SUBCOMMANDS`] are permitted; all others return an error.
+/// Arguments are forwarded to [`cli::run_with_args`], with stdout and stderr
 /// captured via Unix pipes and returned as the builtin's output.
 pub struct HqBuiltin;
+
+/// Subcommands that the `hq` builtin is allowed to run inside the sandbox.
+const ALLOWED_SUBCOMMANDS: &[&str] = &["task", "eval"];
 
 struct CapturedOutput {
     stdout: String,
@@ -18,6 +22,19 @@ struct CapturedOutput {
 #[async_trait]
 impl Builtin for HqBuiltin {
     async fn execute(&self, ctx: BuiltinContext<'_>) -> Result<ExecResult> {
+        // Check the subcommand against the allowlist before running anything.
+        if let Some(cmd) = ctx.args.iter().find(|a| !a.starts_with('-')) {
+            if !ALLOWED_SUBCOMMANDS.contains(&cmd.as_str()) {
+                return Ok(ExecResult::err(
+                    format!(
+                        "subcommand '{cmd}' is not allowed. Allowed subcommands: {}",
+                        ALLOWED_SUBCOMMANDS.join(", "),
+                    ),
+                    1,
+                ));
+            }
+        }
+
         // Build args: program name + user-supplied subcommand and flags
         let mut args = vec!["hq".to_string()];
         args.extend(ctx.args.iter().cloned());
@@ -204,18 +221,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hq_invalid_subcommand() {
+    async fn test_hq_disallowed_subcommand() {
         let mut bash = bash_with_hq();
-        let result = bash.exec("hq nonexistent-subcommand").await.unwrap();
+        let result = bash.exec("hq serve").await.unwrap();
 
         assert_ne!(result.exit_code, 0);
         let output = format!("{}{}", result.stdout, result.stderr);
         assert!(
-            output.contains("error")
-                || output.contains("unrecognized")
-                || output.contains("not found")
-                || output.contains("valid"),
-            "output should indicate an invalid subcommand: {output}"
+            output.contains("not allowed"),
+            "output should indicate the subcommand is not allowed: {output}"
+        );
+        assert!(
+            output.contains("task") && output.contains("eval"),
+            "output should list allowed subcommands: {output}"
         );
     }
 
