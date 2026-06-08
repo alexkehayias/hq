@@ -4,6 +4,7 @@ use std::env;
 
 pub mod auth;
 pub mod chat;
+pub mod develop;
 pub mod eval;
 pub mod example_data;
 pub mod index;
@@ -72,6 +73,20 @@ enum Command {
     },
     /// Start a chat bot session
     Chat {},
+    /// Set up a development worktree with tmux and Claude Code
+    Develop {
+        /// Branch/worktree name
+        name: String,
+        /// Skip initialization
+        #[arg(long)]
+        no_init: bool,
+        /// Skip loading example data
+        #[arg(long)]
+        no_examples: bool,
+        /// Starting port for scanning (default: 2222)
+        #[arg(long)]
+        base_port: Option<u16>,
+    },
     /// Perform oauth and store credentials
     Auth {
         #[arg(long, value_enum)]
@@ -157,6 +172,9 @@ pub async fn run() -> Result<()> {
         }
         Some(Command::Chat {}) => {
             chat::run(&vec_db_path).await?;
+        }
+        Some(Command::Develop { name, no_init, no_examples, base_port }) => {
+            develop::run(name, no_init, no_examples, base_port).await?;
         }
         Some(Command::Auth { service }) => {
             auth::run(service, &vec_db_path).await?;
