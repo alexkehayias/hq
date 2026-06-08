@@ -48,9 +48,33 @@ pub async fn run(
     fs::create_dir_all(".hq-data/storage")?;
     println!("  Created base directories under .hq-data/");
 
-    // Step 4: Pick port
+    // Step 4: Pick port and write custom zsh config
     let port = pick_port(base_port);
     println!("  Picked port {port}");
+
+    let zsh_config_dir = ".hq-data/zsh-config";
+    fs::create_dir_all(zsh_config_dir)?;
+    let zshrc_content = format!(
+        "# hq worktree zsh configuration\n\
+         # Sources the user's config first, then overrides with worktree env vars.\n\
+         \n\
+         # Source user's global zsh config (sourced for all zsh invocations)\n\
+         if [ -f \"$HOME/.zshenv\" ]; then\n\
+         \x20  source \"$HOME/.zshenv\"\n\
+         fi\n\
+         \n\
+         # Source user's interactive zsh config\n\
+         if [ -f \"$HOME/.zshrc\" ]; then\n\
+         \x20  source \"$HOME/.zshrc\"\n\
+         fi\n\
+         \n\
+         # Override with worktree-specific env vars (set after user config)\n\
+         export HQ_STORAGE_PATH=.hq-data\n\
+         export HQ_PORT={port}\n\
+         export HQ_HOST=localhost\n"
+    );
+    fs::write(format!("{zsh_config_dir}/.zshrc"), zshrc_content)?;
+    println!("  Wrote zsh config with worktree env vars");
 
     // Step 5: Set env vars for child processes
     // SAFETY: setting HQ_STORAGE_PATH before spawning init/example-data.
@@ -69,27 +93,24 @@ pub async fn run(
         example_data::run(".hq-data/notes", ".hq-data/index", ".hq-data/db").await?;
     }
 
-    // Step 9: Create tmux session with env vars
+    // Step 8: Create tmux session with ZDOTDIR pointing to custom zsh config
     println!("\n--- Creating tmux session ---");
     let abs_path = fs::canonicalize(".")?;
     let tmux_path = abs_path.to_string_lossy().to_string();
-    let port_str = port.to_string();
 
     let status = Command::new("tmux")
         .args([
             "new-session", "-d", "-s", &name, "-c", &tmux_path,
-            "-e", "HQ_STORAGE_PATH=.hq-data",
-            "-e", &format!("HQ_PORT={port_str}"),
-            "-e", "HQ_HOST=localhost",
+            "-e", &format!("ZDOTDIR={tmux_path}/.hq-data/zsh-config"),
         ])
         .status()
         .context("Failed to create tmux session")?;
     if !status.success() {
         anyhow::bail!("tmux new-session failed");
     }
-    println!("  Set session environment variables");
+    println!("  Created tmux session with worktree environment");
 
-    // Step 8: Start Claude Code
+    // Step 9: Start Claude Code
     let status = Command::new("tmux")
         .args(["send-keys", "-t", &name, "claude", "Enter"])
         .status()
@@ -99,7 +120,7 @@ pub async fn run(
     }
     println!("  Started Claude Code in tmux session '{name}'");
 
-    // Step 9: Attach to the tmux session
+    // Step 10: Attach to the tmux session
     println!("\n=== Setup complete ===");
     println!("  Attaching to tmux session '{name}'...");
     println!("  (Use Ctrl-b d to detach, or exit Claude Code to return)\n");
