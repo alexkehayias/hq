@@ -1,7 +1,8 @@
 #!/usr/bin/env zsh
 # Set up a worktree for hq development.
-# Creates storage directories, initializes the database and search index,
-# and writes .worktree-env with session-level environment variables.
+# Creates storage directories, initializes the database and search index.
+# Note: prefer `cargo run -- develop <name>` which handles everything
+# including tmux session creation and env var setup.
 #
 # Usage: ./bin/setup.sh [target-dir]
 #   target-dir: Worktree directory to set up (defaults to current repo root)
@@ -12,8 +13,6 @@ TARGET="${1:-$SCRIPT_DIR}"
 cd "$TARGET"
 
 STORAGE_DIR=".hq-data"
-ENV_FILE=".worktree-env"
-SETTINGS_FILE=".claude/settings.local.json"
 
 echo "=== Setting up hq worktree ==="
 echo "Storage: $STORAGE_DIR"
@@ -21,12 +20,6 @@ echo "Storage: $STORAGE_DIR"
 # Create storage directories
 mkdir -p "$STORAGE_DIR"/storage
 echo "  Created base directories under $STORAGE_DIR/"
-
-# Write .worktree-env for shell sessions
-cat > "$ENV_FILE" <<EOF
-export HQ_STORAGE_PATH=.hq-data
-EOF
-echo "  Wrote $ENV_FILE (source it for shell sessions)"
 
 # Initialize database and indices
 echo ""
@@ -44,6 +37,6 @@ echo ""
 echo "  Storage path: $PWD/$STORAGE_DIR"
 echo ""
 echo "  Next steps:"
-echo "    source .worktree-env    # Set env vars for this terminal session"
-echo "    ./bin/run.sh            # Start the dev server"
+echo "    export HQ_STORAGE_PATH=.hq-data    # Set env vars for this terminal session"
+echo "    ./bin/run.sh                       # Start the dev server"
 echo ""

@@ -22,8 +22,7 @@ cargo run -- serve
 
 # Start dev server on a dynamic port (avoids conflicts with other worktrees)
 ./bin/run.sh
-# Picks the next available port starting from 2222.
-# Writes the chosen port to .worktree-env (e.g., HQ_PORT=2223).
+# Picks the next available port starting from 2222, or uses $HQ_PORT if set.
 
 # Run tests
 cargo test
@@ -125,7 +124,7 @@ This project uses git worktrees for isolated development. Each worktree gets its
 
 ```bash
 # One-command: create worktree, set up env, start Claude Code in tmux
-./bin/develop.sh <branch-name>
+cargo run -- develop <branch-name>
 
 # Or manually:
 git worktree add .claude/worktrees/<name> main -b <name>
@@ -135,13 +134,12 @@ cd .claude/worktrees/<name>
 ```
 
 Key behaviors:
-- **Ports**: `bin/pick-port.sh` scans from 2222 upward for an available port. Each worktree gets a unique port.
-- **Env file**: `run.sh` writes `.worktree-env` with `HQ_PORT` and `HQ_HOST` so other tools can discover the server.
-- **`.worktree-env`** is gitignored — each worktree generates its own.
+- **`hq develop`**: Creates a worktree, sets up storage, picks a port, runs init, loads example data, writes `.hq-data/.zshrc` with env vars (`HQ_STORAGE_PATH`, `HQ_PORT`, `HQ_HOST`), creates a tmux session with `ZDOTDIR` set, and starts Claude Code with `--worktree`.
+- **Ports**: `bin/pick-port.sh` scans from 2222 upward for an available port. Each worktree gets a unique port. When running in a `hq develop` tmux session, `$HQ_PORT` is already set.
+- **Environment**: `hq develop` writes `.hq-data/.zshrc` that sources your zsh config then sets worktree-specific env vars. No env files are persisted to disk.
 - **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
-- **Storage**: `bin/setup.sh` creates `.hq-data/` with subdirs (`db/`, `index/`, `notes/`, etc.) and writes `HQ_STORAGE_PATH` into `.claude/settings.local.json` so Claude Code picks it up automatically.
-- **Claude Code**: Each worktree has its own `.claude/settings.local.json` with `HQ_STORAGE_PATH` set and a `DirChanged` hook that sources `.worktree-env`.
-- **Quick start**: `./bin/develop.sh <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a tmux session.
+- **Storage**: `bin/setup.sh` creates `.hq-data/` with subdirs (`db/`, `index/`, `notes/`, etc.).
+- **Quick start**: `cargo run -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a tmux session.
 
 ## Testing
 
