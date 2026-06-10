@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use orgize::ParseConfig;
 use orgize::rowan::ast::AstNode;
 use tantivy::schema::*;
 use tantivy::{Index, IndexWriter, doc};
@@ -72,21 +71,7 @@ struct Note {
 
 /// Parse the content into a `Note`
 fn parse_note(content: &str) -> Note {
-    let config = ParseConfig {
-        todo_keywords: (
-            vec![
-                "TODO".to_string(),
-                "NEXT".to_string(),
-                "WAITING".to_string(),
-            ],
-            vec![
-                "DONE".to_string(),
-                "CANCELED".to_string(),
-                "SOMEDAY".to_string(),
-            ],
-        ),
-        ..Default::default()
-    };
+    let config = crate::org::todo_keywords_config();
     let p = config.parse(content);
     let d = p.document();
 

@@ -38,6 +38,8 @@ COPY ./web-ui/src/chat/img/ ./web-ui/src/chat/img/
 COPY ./web-ui/src/chat/sessions/index.html ./web-ui/src/chat/sessions/index.html
 COPY ./web-ui/src/chat/sessions/index.js ./web-ui/src/chat/sessions/index.js
 COPY ./web-ui/src/output.css ./web-ui/src/output.css
+COPY ./web-ui/src/skills/index.html ./web-ui/src/skills/index.html
+COPY ./web-ui/src/skills/index.js ./web-ui/src/skills/index.js
 COPY ./web-ui/src/favicon.ico ./web-ui/src/favicon.ico
 COPY ./web-ui/src/icon512_maskable.png ./web-ui/src/icon512_maskable.png
 COPY ./web-ui/src/manifest.json ./web-ui/src/manifest.json
@@ -45,6 +47,15 @@ COPY ./web-ui/src/service-worker.js ./web-ui/src/service-worker.js
 COPY ./web-ui/src/vendor/marked.min.js ./web-ui/src/vendor/marked.min.js
 COPY ./web-ui/src/vendor/highlight.min.js ./web-ui/src/vendor/highlight.min.js
 COPY ./web-ui/src/vendor/echarts.simple.min.js ./web-ui/src/vendor/echarts.simple.min.js
+COPY ./web-ui/src/vendor/codemirror/codemirror.min.js ./web-ui/src/vendor/codemirror/codemirror.min.js
+COPY ./web-ui/src/vendor/codemirror/codemirror.min.css ./web-ui/src/vendor/codemirror/codemirror.min.css
+COPY ./web-ui/src/vendor/codemirror/theme/dracula.min.css ./web-ui/src/vendor/codemirror/theme/dracula.min.css
+COPY ./web-ui/src/vendor/codemirror/mode/javascript.min.js ./web-ui/src/vendor/codemirror/mode/javascript.min.js
+COPY ./web-ui/src/vendor/codemirror/mode/python.min.js ./web-ui/src/vendor/codemirror/mode/python.min.js
+COPY ./web-ui/src/vendor/codemirror/mode/markdown.min.js ./web-ui/src/vendor/codemirror/mode/markdown.min.js
+COPY ./web-ui/src/vendor/codemirror/mode/shell.min.js ./web-ui/src/vendor/codemirror/mode/shell.min.js
+COPY ./web-ui/src/vendor/codemirror/mode/xml.min.js ./web-ui/src/vendor/codemirror/mode/xml.min.js
+COPY ./web-ui/src/vendor/codemirror/mode/yaml.min.js ./web-ui/src/vendor/codemirror/mode/yaml.min.js
 
 EXPOSE 2222
 

@@ -58,6 +58,10 @@ pub mod webhook {
     pub use crate::api::routes::webhook::public::*;
 }
 
+pub mod skills {
+    pub use crate::api::routes::skills::public::*;
+}
+
 pub mod web {
     pub use crate::api::routes::web::public::*;
 }

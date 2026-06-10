@@ -12,6 +12,7 @@
       "!src/vendor/**/*.js",
       "src/**/*.css",
       "!src/output.css",
+      "!src/vendor/**/*.css",
       "src/**/*.html"
     ]
   },

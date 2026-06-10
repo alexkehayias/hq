@@ -50,11 +50,12 @@ cargo run -- chat
 
 ### Web UI
 ```bash
-cd web-ui
-# Lint with Biome (ARM: uses bundled binary; x86: uses npx)
-./bin/biome check  # or biome ci .
-# Build Tailwind CSS
-./bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
+# Lint with Biome (vendored binary — always run from web-ui/)
+cd web-ui && ../bin/biome check
+# Auto-fix formatting and lint issues
+cd web-ui && ../bin/biome check --write
+# Build Tailwind CSS (vendored binary — always run from web-ui/)
+cd web-ui && ../bin/tailwindcss -i ./src/input.css -o ./src/output.css -m
 ```
 
 ### Docker
@@ -91,6 +92,46 @@ Routes built with Axum:
 - `/api/push` - web push notification subscriptions
 - `/api/webhook` - inbound webhook handling
 - `/api/metrics` - usage metrics
+
+#### Adding a New API Endpoint
+
+**Module structure** — each route group lives in `src/api/routes/<name>/`:
+- `mod.rs` — `mod router; pub use router::router;` (re-exports)
+- `router.rs` — handler functions + `pub fn router() -> Router<SharedState>`
+- `public.rs` — request/response structs (derive `Deserialize`/`Serialize`)
+
+**Handler pattern:**
+```rust
+type SharedState = Arc<RwLock<AppState>>;
+
+async fn my_handler(
+    State(state): State<SharedState>,
+    // Optional: Query(params): Query<MyQuery>,
+    // Optional: Json(body): Json<MyBody>,
+    // Optional: Path(id): Path<String>,
+) -> Result<Json<MyResponse>, crate::api::public::ApiError> {
+    // Clone what you need from state inside a read lock, then drop it
+    let db = state.read().unwrap().db.clone();
+
+    // Async DB: use db.call(move |conn| { ... }).await
+    let result = db.call(move |conn| { /* rusqlite */ }).await?;
+
+    // External API calls: direct .await
+    let data = some_async_fn().await?;
+
+    Ok(Json(my_response))
+}
+```
+
+**Error handling:**
+- Return `Result<Json<T>, crate::api::public::ApiError>` for fallible handlers
+- `ApiError` converts any `Into<anyhow::Error>` via `?`, logs the error, and returns 500
+- For non-500 responses: `Ok((StatusCode::NOT_FOUND, "msg").into_response())`
+
+**Registration (3 places):**
+1. In `router.rs`: `pub fn router() -> Router<SharedState> { Router::new().route("/path", get(handler)) }`
+2. In `routes/mod.rs`: add `pub mod my_module;` and `.nest("/path", my_module::router())`
+3. In `src/api/public.rs`: add `pub mod my_module { pub use crate::api::routes::my_module::public::*; }`
 
 ### Background Jobs (`src/jobs/`)
 Periodic jobs spawned on server start using Tokio tasks:

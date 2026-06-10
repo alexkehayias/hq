@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>HQ - Skills</title>
+    <link href="/output.css" rel="stylesheet">
+    <link href="/vendor/codemirror/codemirror.min.css" rel="stylesheet">
+    <link href="/vendor/codemirror/theme/dracula.min.css" rel="stylesheet" id="cm-theme">
+  </head>
+  <body class="bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);">
+    <!-- ===== List View (no ?name=) ===== -->
+    <div id="list-view" class="px-4 sm:px-6 lg:px-8">
+      <div class="max-w-4xl mx-auto my-6">
+        <a href="/" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors">
+          <svg class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+          </svg>
+          Back to Home
+        </a>
+      </div>
+
+      <div class="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
+        <div class="px-6 py-8 border-b border-gray-100 dark:border-gray-700">
+          <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Skills</h1>
+          <p class="mt-2 text-gray-600 dark:text-gray-400">Browse and edit available skills</p>
+        </div>
+
+        <!-- Loading -->
+        <div id="list-loading" class="px-6 py-12 text-center">
+          <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <p class="mt-2 text-gray-600 dark:text-gray-400">Loading skills...</p>
+        </div>
+
+        <!-- Error -->
+        <div id="list-error" class="px-6 py-12 text-center hidden">
+          <svg class="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <p id="list-error-msg" class="mt-2 text-red-600 dark:text-red-400">Failed to load skills</p>
+          <button id="list-retry" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">Retry</button>
+        </div>
+
+        <!-- Empty -->
+        <div id="list-empty" class="px-6 py-12 text-center hidden">
+          <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12a7.5 7.5 0 1115 0 7.5 7.5 0 01-15 0zM9 12h6" />
+          </svg>
+          <p class="mt-2 text-gray-600 dark:text-gray-400">No skills available</p>
+        </div>
+
+        <!-- Skill Grid -->
+        <div id="skill-grid" class="px-6 py-6 grid grid-cols-1 sm:grid-cols-2 gap-4 hidden"></div>
+      </div>
+    </div>
+
+    <!-- ===== Detail View (?name=xxx) ===== -->
+    <div id="detail-view" class="px-4 sm:px-6 lg:px-8 hidden">
+      <div class="max-w-6xl mx-auto my-6">
+        <a href="/skills/" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors">
+          <svg class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+          </svg>
+          Back to Skills
+        </a>
+      </div>
+
+      <div class="max-w-6xl mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
+        <!-- Header -->
+        <div id="detail-header" class="px-6 py-6 border-b border-gray-100 dark:border-gray-700">
+          <div id="detail-loading" class="text-center py-4">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p class="mt-2 text-gray-600 dark:text-gray-400">Loading skill...</p>
+          </div>
+          <div id="detail-content" class="hidden">
+            <div class="flex items-start justify-between flex-wrap gap-4">
+              <div>
+                <h1 id="skill-name" class="text-3xl font-bold text-gray-900 dark:text-white"></h1>
+                <p id="skill-description" class="mt-1 text-gray-600 dark:text-gray-400"></p>
+              </div>
+              <div id="skill-badges" class="flex flex-wrap gap-2"></div>
+            </div>
+          </div>
+          <div id="detail-error" class="text-center py-4 hidden">
+            <p id="detail-error-msg" class="text-red-600 dark:text-red-400"></p>
+            <a href="/skills/" class="mt-4 inline-block px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">Back to Skills</a>
+          </div>
+        </div>
+
+        <!-- Main Content: sidebar + editor -->
+        <div id="detail-body" class="hidden">
+          <div class="flex flex-col lg:flex-row">
+            <!-- File Tree Sidebar -->
+            <div class="w-full lg:w-64 bg-gray-50 dark:bg-gray-700 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-600 overflow-y-auto" style="max-height: 70vh;">
+              <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-600">
+                <h2 class="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Files</h2>
+              </div>
+              <div id="file-tree-loading" class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">Loading files...</div>
+              <div id="file-tree" class="hidden"></div>
+            </div>
+
+            <!-- Editor -->
+            <div class="flex-1 flex flex-col min-w-0">
+              <!-- Toolbar -->
+              <div class="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+                <span id="editor-filename" class="text-sm font-medium text-gray-700 dark:text-gray-300 truncate"></span>
+                <button id="save-btn" class="px-3 py-1.5 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors" disabled>Save</button>
+              </div>
+              <!-- CodeMirror container -->
+              <div id="editor-container" class="flex-1 min-h-[400px]"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/vendor/codemirror/codemirror.min.js"></script>
+    <script src="/vendor/codemirror/mode/markdown.min.js"></script>
+    <script src="/vendor/codemirror/mode/javascript.min.js"></script>
+    <script src="/vendor/codemirror/mode/python.min.js"></script>
+    <script src="/vendor/codemirror/mode/shell.min.js"></script>
+    <script src="/vendor/codemirror/mode/yaml.min.js"></script>
+    <script src="/vendor/codemirror/mode/xml.min.js"></script>
+    <script src="/skills/index.js"></script>
+  </body>
+</html>

@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::env;
 
 pub mod auth;
+pub mod bashkit;
 pub mod chat;
 pub mod develop;
 pub mod eval;
@@ -14,6 +15,7 @@ pub mod migrate;
 pub mod query;
 pub mod rebuild;
 pub mod serve;
+pub mod task;
 
 use auth::ServiceKind;
 use job::JobId;
@@ -110,6 +112,50 @@ enum Command {
     },
     /// Load example .org notes for development
     ExampleData {},
+    /// Create, update, or delete tasks
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaskCommand {
+    /// Create a new task
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "TODO")]
+        status: String,
+    },
+    /// Update an existing task by UUID
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        /// Project ID or filename (skips slug-based lookup)
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Delete a task by UUID
+    Delete {
+        id: String,
+    },
+    /// List tasks, optionally filtered by project and/or status
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+    },
 }
 
 #[derive(Parser)]
@@ -121,25 +167,30 @@ pub struct Cli {
     command: Option<Command>,
 }
 
+/// Run the CLI, parsing args from the environment.
 pub async fn run() -> Result<()> {
-    let args = Cli::parse();
+    let cli = Cli::parse();
+    run_dispatch(cli).await
+}
 
+/// Run the CLI with explicit arguments (for programmatic use, e.g. bashkit).
+///
+/// The first element should be the program name (e.g. "hq"), followed by
+/// subcommand and flags — matching what would be passed on the command line.
+pub async fn run_with_args(args: Vec<String>) -> Result<()> {
+    let cli = Cli::try_parse_from(args)?;
+    run_dispatch(cli).await
+}
+
+async fn run_dispatch(cli: Cli) -> Result<()> {
     let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
     let index_path = format!("{}/index", storage_path);
     let notes_path = format!("{}/notes", storage_path);
     let vec_db_path = format!("{}/db", storage_path);
 
-    // Handle each sub command
-    match args.command {
+    match cli.command {
         Some(Command::Init { db, index, notes, skills, workspace }) => {
-            // No flags defaults to everything
-            let any_flag = db || index || notes || skills || workspace;
-            let do_db = db || !any_flag;
-            let do_index = index || !any_flag;
-            let do_notes = notes || !any_flag;
-            let do_skills = skills || !any_flag;
-            let do_workspace = workspace || !any_flag;
-            init::run(do_db, do_index, do_notes, do_skills, do_workspace, &vec_db_path, &index_path, &notes_path).await?;
+            init::run(db, index, notes, skills, workspace, &vec_db_path, &index_path, &notes_path).await?;
         }
         Some(Command::Migrate { db, index }) => {
             migrate::run(db, index, &vec_db_path, &index_path).await?;
@@ -183,7 +234,6 @@ pub async fn run() -> Result<()> {
             job::run(id).await?;
         }
         Some(Command::Eval { model, file, dry_run }) => {
-
             let api_key = env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let api_hostname = env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
             let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
@@ -193,6 +243,40 @@ pub async fn run() -> Result<()> {
         Some(Command::ExampleData {}) => {
             example_data::run(&notes_path, &index_path, &vec_db_path).await?;
         }
+        Some(Command::Task { command }) => match command {
+            TaskCommand::Create {
+                title,
+                body,
+                project,
+                status,
+            } => {
+                task::run_create(&notes_path, &title, body.as_deref(), project.as_deref(), &status)
+                    .await?;
+            }
+            TaskCommand::Update {
+                id,
+                title,
+                body,
+                status,
+                project,
+            } => {
+                task::run_update(
+                    &notes_path,
+                    &id,
+                    title.as_deref(),
+                    body.as_deref(),
+                    status.as_deref(),
+                    project.as_deref(),
+                )
+                .await?;
+            }
+            TaskCommand::Delete { id } => {
+                task::run_delete(&notes_path, &id).await?;
+            }
+            TaskCommand::List { project, status } => {
+                task::run_list(&notes_path, project.as_deref(), status.as_deref()).await?;
+            }
+        },
         None => {}
     }
 
