@@ -14,11 +14,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Rust Server & Development
 ```bash
-# Run the server (default: localhost:2222)
+# Run the server (default: localhost:2222, or next available port)
 cargo run -- serve
 
 # Start dev server with auto-reload (requires watchexec-cli: cargo install --locked watchexec-cli)
 ./bin/watch.sh
+
+# Start dev server on a dynamic port (avoids conflicts with other worktrees)
+./bin/run.sh
+# Picks the next available port starting from 2222, or uses $HQ_PORT if set.
 
 # Run tests
 cargo test
@@ -154,6 +158,29 @@ Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `
 | `HQ_NOTES_REPO_URL` | Git repo URL for notes |
 | `HQ_GMAIL_CLIENT_ID/SECRET` | Gmail OAuth credentials |
 | `HQ_VAPID_KEY_PATH` | Web push notification keys |
+
+## Worktree Development
+
+This project uses git worktrees for isolated development. Each worktree gets its own storage, database, and server port.
+
+```bash
+# One-command: create worktree, set up env, start Claude Code in tmux
+cargo run -- develop <branch-name>
+
+# Or manually:
+git worktree add .claude/worktrees/<name> main -b <name>
+cd .claude/worktrees/<name>
+cargo run -- develop . --no-init --no-examples
+./bin/run.sh
+```
+
+Key behaviors:
+- **`hq develop`**: Creates a worktree, sets up storage, picks a port, runs init, loads example data, writes `.hq-data/.zshrc` with env vars (`HQ_STORAGE_PATH`, `HQ_PORT`, `HQ_HOST`), creates a tmux session with `ZDOTDIR` set, and starts Claude Code with `--worktree`.
+- **Ports**: `hq develop` picks an available port starting from 2222 and sets `$HQ_PORT` in the tmux session. `run.sh` requires `$HQ_PORT` to be set.
+- **Environment**: `hq develop` writes `.hq-data/.zshrc` that sources your zsh config then sets worktree-specific env vars. No env files are persisted to disk.
+- **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
+- **Storage**: `.hq-data/` contains subdirs (`db/`, `index/`, `notes/`, etc.).
+- **Quick start**: `cargo run -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a tmux session.
 
 ## Testing
 

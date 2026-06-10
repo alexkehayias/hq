@@ -13,32 +13,30 @@ else
 fi
 
 cd ..
-# cargo test
 
-# Start server in background
 HOST=localhost
-PORT=2222
-RUST_BACKTRACE=1 cargo run -- serve --host $HOST --port $PORT &
+PORT="${HQ_PORT:?HQ_PORT must be set (hq develop sets this automatically)}"
+
+RUST_BACKTRACE=1 cargo run -- serve --host "$HOST" --port "$PORT" &
 PID=$!
 
-# Function to cleanup server
+echo "Starting server on http://${HOST}:${PORT}"
+
 cleanup() {
     kill $PID 2>/dev/null || true
     exit
 }
 
-# Trap exit signals to cleanup
 trap cleanup EXIT INT TERM
 
-# Wait for port 2222
 TIMEOUT=30
 start=$(date +%s)
-while ! nc -z ${HOST} ${PORT}; do
+while ! nc -z "${HOST}" "${PORT}"; do
     (( $(date +%s) - start > TIMEOUT )) && { kill $PID 2>/dev/null || true; exit 1; }
     sleep 0.5
 done
 
-echo "Server ready"
+echo "Server ready: http://${HOST}:${PORT}"
 
 # Reload the active Chrome browser tab
 osascript ./bin/reloadChromeTab.scptd

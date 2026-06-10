@@ -1,0 +1,39 @@
+:PROPERTIES:
+:ID:       example-rust-tips
+:END:
+#+TITLE: Rust Tips and Patterns
+#+CATEGORY: reference
+
+* Rust Tips and Patterns
+
+** Using Result with multiple error types
+
+When a function can fail for different reasons, use Box<dyn Error> or
+define a custom enum:
+
+#+begin_src rust
+#[derive(Debug)]
+enum MyError {
+    Io(std::io::Error),
+    Parse(String),
+}
+#+end_src
+
+** Builder pattern for complex constructors
+
+Use the builder pattern when a struct has many optional fields:
+
+#+begin_src rust
+#[derive(Default)]
+struct ConfigBuilder {
+    host: Option<String>,
+    port: Option<u16>,
+    timeout: Option<Duration>,
+}
+#+end_src
+
+** Async trait patterns
+
+- Prefer returning impl Future for library code
+- Use #[async_trait] for simplicity in application code
+- Consider boxed futures when you need dynamic dispatch

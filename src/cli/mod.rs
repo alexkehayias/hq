@@ -5,7 +5,9 @@ use std::env;
 pub mod auth;
 pub mod bashkit;
 pub mod chat;
+pub mod develop;
 pub mod eval;
+pub mod example_data;
 pub mod index;
 pub mod init;
 pub mod job;
@@ -28,6 +30,10 @@ enum Command {
         index: bool,
         #[arg(long, action, default_value = "false")]
         notes: bool,
+        #[arg(long, action, default_value = "false")]
+        skills: bool,
+        #[arg(long, action, default_value = "false")]
+        workspace: bool,
     },
     /// Migrate indices and db schema
     Migrate {
@@ -69,6 +75,20 @@ enum Command {
     },
     /// Start a chat bot session
     Chat {},
+    /// Set up a development worktree with tmux and Claude Code
+    Develop {
+        /// Branch/worktree name
+        name: String,
+        /// Skip initialization
+        #[arg(long)]
+        no_init: bool,
+        /// Skip loading example data
+        #[arg(long)]
+        no_examples: bool,
+        /// Starting port for scanning (default: 2222)
+        #[arg(long)]
+        base_port: Option<u16>,
+    },
     /// Perform oauth and store credentials
     Auth {
         #[arg(long, value_enum)]
@@ -90,6 +110,8 @@ enum Command {
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },
+    /// Load example .org notes for development
+    ExampleData {},
     /// Create, update, or delete tasks
     Task {
         #[command(subcommand)]
@@ -166,10 +188,9 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
     let notes_path = format!("{}/notes", storage_path);
     let vec_db_path = format!("{}/db", storage_path);
 
-    // Handle each sub command
     match cli.command {
-        Some(Command::Init { db, index, notes }) => {
-            init::run(db, index, notes, &vec_db_path, &index_path, &notes_path).await?;
+        Some(Command::Init { db, index, notes, skills, workspace }) => {
+            init::run(db, index, notes, skills, workspace, &vec_db_path, &index_path, &notes_path).await?;
         }
         Some(Command::Migrate { db, index }) => {
             migrate::run(db, index, &vec_db_path, &index_path).await?;
@@ -203,6 +224,9 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         Some(Command::Chat {}) => {
             chat::run(&vec_db_path).await?;
         }
+        Some(Command::Develop { name, no_init, no_examples, base_port }) => {
+            develop::run(name, no_init, no_examples, base_port).await?;
+        }
         Some(Command::Auth { service }) => {
             auth::run(service, &vec_db_path).await?;
         }
@@ -210,12 +234,14 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             job::run(id).await?;
         }
         Some(Command::Eval { model, file, dry_run }) => {
-
             let api_key = env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let api_hostname = env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
             let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
+        }
+        Some(Command::ExampleData {}) => {
+            example_data::run(&notes_path, &index_path, &vec_db_path).await?;
         }
         Some(Command::Task { command }) => match command {
             TaskCommand::Create {

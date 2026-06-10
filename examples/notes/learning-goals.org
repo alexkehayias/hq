@@ -1,0 +1,29 @@
+:PROPERTIES:
+:ID:       example-learning-goals
+:END:
+#+TITLE: Learning Goals 2025
+#+CATEGORY: personal
+
+* Learning Goals 2025
+
+** Deepen Rust knowledge
+- [X] Complete Rust book chapters on async/await
+- [X] Build a CLI tool with clap
+- [ ] Learn unsafe Rust patterns
+- [ ] Contribute to an open-source Rust project
+- [ ] Read Rustnomicon for unsafe deep-dive
+
+** Explore machine learning
+- [ ] Fastembed embeddings for semantic search
+- [ ] Build a small recommendation engine
+- [ ] Experiment with local LLM inference
+
+** System design
+- [ ] Read Designing Data-Intensive Applications
+- [ ] Practice system design interviews
+- [ ] Build a simple key-value store from scratch
+
+** Books to read this quarter
+1. Designing Data-Intensive Applications by Martin Kleppmann
+2. Rust for Rustaceans by Jon Gjengset
+3. The Staff Engineer's Path by Tanya Reilly

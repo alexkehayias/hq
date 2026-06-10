@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID:       example-project-ideas
+:END:
+#+TITLE: Project Ideas
+#+CATEGORY: projects
+
+* Project Ideas
+
+** CLI task tracker with natural language dates
+A command-line task tracker that understands "next week", "tomorrow",
+"end of month" for scheduling. Could use the existing datetime tooling.
+
+** Personal dashboard
+A single-page dashboard showing:
+- Upcoming meetings and events
+- Open tasks grouped by priority
+- Recent notes and changes
+- Weather and quick-links
+
+** Habit tracker with streaks
+Track daily habits with a heatmap visualization. Streak counting with
+grace days for missed entries. Weekly email summary.
+
+** Recipe manager
+Store recipes with ingredient parsing, scale servings automatically,
+generate shopping lists grouped by grocery aisle.
+
+*** Backlog
+- TODO RSS reader with AI summarization
+- TODO Budget tracker with category splitting
+- DONE Photo organization by EXIF data
+- DONE Markdown to org-mode converter
