@@ -176,7 +176,7 @@ cargo run -- develop . --no-init --no-examples
 
 Key behaviors:
 - **`hq develop`**: Creates a worktree, sets up storage, picks a port, runs init, loads example data, writes `.hq-data/.zshrc` with env vars (`HQ_STORAGE_PATH`, `HQ_PORT`, `HQ_HOST`), creates a tmux session with `ZDOTDIR` set, and starts Claude Code with `--worktree`.
-- **Ports**: `hq develop` picks an available port starting from 2222. When running in the created tmux session, `$HQ_PORT` is already set. When using `./bin/run.sh` directly, it falls back to the same port-scanning logic if `$HQ_PORT` is unset.
+- **Ports**: `hq develop` picks an available port starting from 2222 and sets `$HQ_PORT` in the tmux session. `run.sh` requires `$HQ_PORT` to be set.
 - **Environment**: `hq develop` writes `.hq-data/.zshrc` that sources your zsh config then sets worktree-specific env vars. No env files are persisted to disk.
 - **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
 - **Storage**: `.hq-data/` contains subdirs (`db/`, `index/`, `notes/`, etc.).

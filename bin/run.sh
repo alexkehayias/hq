@@ -15,18 +15,7 @@ fi
 cd ..
 
 HOST=localhost
-if [ -z "${HQ_PORT:-}" ]; then
-    PORT=2222
-    while nc -z 127.0.0.1 "$PORT" 2>/dev/null; do
-        PORT=$((PORT + 1))
-        if [ "$PORT" -gt 65535 ]; then
-            echo "Error: no available ports found" >&2
-            exit 1
-        fi
-    done
-else
-    PORT="$HQ_PORT"
-fi
+PORT="${HQ_PORT:?HQ_PORT must be set (hq develop sets this automatically)}"
 
 RUST_BACKTRACE=1 cargo run -- serve --host "$HOST" --port "$PORT" &
 PID=$!
