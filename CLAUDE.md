@@ -126,10 +126,13 @@ This project uses git worktrees for isolated development. Each worktree gets its
 # One-command: create worktree, set up env, start Claude Code in tmux
 cargo run -- develop <branch-name>
 
+# Or use the wrapper script:
+./bin/develop.sh <branch-name>
+
 # Or manually:
 git worktree add .claude/worktrees/<name> main -b <name>
 cd .claude/worktrees/<name>
-./bin/setup.sh
+cargo run -- develop . --no-init --no-examples
 ./bin/run.sh
 ```
 
@@ -138,7 +141,7 @@ Key behaviors:
 - **Ports**: `bin/pick-port.sh` scans from 2222 upward for an available port. Each worktree gets a unique port. When running in a `hq develop` tmux session, `$HQ_PORT` is already set.
 - **Environment**: `hq develop` writes `.hq-data/.zshrc` that sources your zsh config then sets worktree-specific env vars. No env files are persisted to disk.
 - **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
-- **Storage**: `bin/setup.sh` creates `.hq-data/` with subdirs (`db/`, `index/`, `notes/`, etc.).
+- **Storage**: `.hq-data/` contains subdirs (`db/`, `index/`, `notes/`, etc.).
 - **Quick start**: `cargo run -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a tmux session.
 
 ## Testing

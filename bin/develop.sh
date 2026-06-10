@@ -3,6 +3,8 @@
 # start Claude Code in a tmux session.
 #
 # Usage: ./bin/develop.sh <branch-name>
+#
+# This is a thin wrapper around `cargo run -- develop <branch-name>`.
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
@@ -13,26 +15,5 @@ if [ $# -ne 1 ]; then
     exit 1
 fi
 
-BRANCH="$1"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORKTREE_PATH="$ROOT/.claude/worktrees/$BRANCH"
-
-echo "=== Creating worktree for branch: $BRANCH ==="
-
-# Create the worktree from main
-git worktree add "$WORKTREE_PATH" main -b "$BRANCH"
-echo "  Created worktree at $WORKTREE_PATH"
-
-# Run the setup script from the original repo, targeting the worktree
-"$ROOT/bin/setup.sh" "$WORKTREE_PATH"
-
-echo ""
-echo "=== Starting tmux session ==="
-
-# Start a tmux session in the worktree directory with Claude Code
-tmux new-session -d -s "$BRANCH" -c "$WORKTREE_PATH"
-tmux send-keys -t "$BRANCH" "claude" Enter
-
-echo "  Started tmux session: $BRANCH"
-echo "  Attach with: tmux attach -t $BRANCH"
-echo ""
+cd "$(cd "$(dirname "$0")/.." && pwd)"
+cargo run -- develop "$1"
