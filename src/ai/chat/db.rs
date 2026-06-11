@@ -64,13 +64,22 @@ pub async fn get_or_create_session(
             // Insert a new session record if it doesn't already exist. If
             // it does exist, use the existing session mode, do not
             // overwrite it.
-            let (id, mode): (String, String) = tx.query_row(
-                r"INSERT INTO session (id, mode)
-VALUES (?, ?)
-ON CONFLICT(id) DO UPDATE
-SET mode = session.mode
-RETURNING id, mode",
+            tx.execute(
+                "INSERT OR IGNORE INTO session (id, mode) VALUES (?1, ?2)",
                 rusqlite::params![session_id_owned, mode_str],
+            )?;
+
+            // Record a metric event when a new session is created
+            if tx.changes() > 0 {
+                tx.execute(
+                    "INSERT INTO metric_event (name, value) VALUES ('session-count', 1)",
+                    [],
+                )?;
+            }
+
+            let (id, mode): (String, String) = tx.query_row(
+                "SELECT id, mode FROM session WHERE id = ?1",
+                [&session_id_owned],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
             // Handle inserting tags if they don't exist and associating

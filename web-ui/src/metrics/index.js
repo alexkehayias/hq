@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const retryBtn = document.getElementById('retryBtn');
 
   // Summary metric elements
+  const totalSessionsEl = document.getElementById('totalSessions');
+  const avgSessionsPerDayEl = document.getElementById('avgSessionsPerDay');
   const totalTokensEl = document.getElementById('totalTokens');
   const avgTokensPerDayEl = document.getElementById('avgTokensPerDay');
   const estCostEl = document.getElementById('estCost');
@@ -186,6 +188,25 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateSummaryMetrics(events, _limitDays) {
+    // Filter for session-count events
+    const sessionEvents = events.filter((e) => e.name === 'session-count');
+
+    if (sessionEvents.length > 0) {
+      const totalSessions = sessionEvents.reduce((sum, e) => sum + e.value, 0);
+      const uniqueDays = new Set(sessionEvents.map((e) => e.timestamp));
+      const daysWithData = uniqueDays.size;
+      const avgSessionsPerDay =
+        daysWithData > 0 ? totalSessions / daysWithData : 0;
+
+      totalSessionsEl.textContent = formatNumber(totalSessions);
+      avgSessionsPerDayEl.textContent = formatNumber(
+        Math.round(avgSessionsPerDay),
+      );
+    } else {
+      totalSessionsEl.textContent = '--';
+      avgSessionsPerDayEl.textContent = '--';
+    }
+
     // Filter for token-count events
     const tokenEvents = events.filter((e) => e.name === 'token-count');
 

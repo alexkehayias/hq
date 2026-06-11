@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum MetricName {
     #[serde(rename = "token-count")]
     TokenCount,
+    #[serde(rename = "session-count")]
+    SessionCount,
 }
 
 /// Request to record a metric event
