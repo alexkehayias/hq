@@ -85,7 +85,7 @@ pub async fn run(
     // Step 6: Run init
     if !no_init {
         println!("\n--- Running init ---");
-        init::run(true, true, true, true, true, ".hq-data/db", ".hq-data/index", ".hq-data/notes").await?;
+        init::run(true, true, false, true, true, ".hq-data/db", ".hq-data/index", ".hq-data/notes").await?;
     }
 
     // Step 7: Load example data
