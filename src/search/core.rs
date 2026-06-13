@@ -50,7 +50,7 @@ fn fulltext_search(index_path: &str, query: &aql::Expr, limit: usize) -> Result<
 
     if let Some(idx_query) = index_query {
         let results = searcher
-            .search(&idx_query, &TopDocs::with_limit(limit))
+            .search(&idx_query, &TopDocs::with_limit(limit).order_by_score())
             .expect("Search failed")
             .iter()
             .map(|(score, doc_addr)| {
