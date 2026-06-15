@@ -14,7 +14,7 @@ mod tests {
     use serial_test::serial;
     use tower::util::ServiceExt;
 
-    use crate::test_utils::{body_to_string, test_app, test_app_with_skills};
+    use crate::test_utils::{body_to_string, test_app, test_app_with_skills, create_test_skill};
 
     /// Helper: create a test skill with subdirectories (scripts/, references/).
     fn create_test_skill_with_files(base_dir: &Path, name: &str) {
@@ -432,5 +432,60 @@ This skill has scripts and references.
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Tests that skills created after the app started are visible via the API
+    /// when the shared registry is reloaded.
+    #[tokio::test]
+    #[serial]
+    async fn it_discovers_new_skills_after_registry_reload() {
+        let (app, state) = crate::test_utils::test_app_with_state().await;
+
+        // Verify initial empty state
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/skills")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"skills\":[]"), "Expected empty skills: {}", body);
+
+        // Create a new skill on disk (simulating save_skill)
+        let skills_path = state.config.skills_path.clone();
+        create_test_skill(
+            std::path::Path::new(&skills_path),
+            "new-skill",
+            "A newly created skill",
+        );
+
+        // Reload the shared registry
+        state.skill_registry.write().unwrap().reload().unwrap();
+
+        // Verify the new skill is now visible via the API
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/skills")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(
+            body.contains("new-skill"),
+            "Expected new-skill in response: {}",
+            body
+        );
     }
 }

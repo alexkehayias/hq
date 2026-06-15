@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use serde::Deserialize;
 use tokio_rusqlite::Connection;
 
@@ -17,7 +19,7 @@ pub struct AppState {
     pub latest_selection: Option<LastSelection>,
     pub db: Connection,
     pub config: AppConfig,
-    pub skill_registry: SkillRegistry,
+    pub skill_registry: Arc<RwLock<SkillRegistry>>,
 }
 
 impl AppState {
@@ -30,7 +32,7 @@ impl AppState {
             latest_selection: None,
             db,
             config,
-            skill_registry,
+            skill_registry: Arc::new(RwLock::new(skill_registry)),
         }
     }
 }
