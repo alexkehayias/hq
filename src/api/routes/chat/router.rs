@@ -27,7 +27,6 @@ use crate::ai::chat::{
     ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message,
     set_session_mode,
 };
-use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::{
     BashTool, CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool,
     NoteSearchTool, NotifyTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool,
@@ -243,7 +242,6 @@ async fn chat_handler(
             note_search_api_url,
             storage_path,
             index_path,
-            skills_path,
             openai_api_hostname,
             openai_api_key,
             openai_model,
@@ -263,10 +261,7 @@ async fn chat_handler(
             DateTimeTool::new(),
             BashTool::new(storage_path, &session_id),
             NotifyTool::new(db.clone(), vapid_key_path),
-            Arc::new(RwLock::new(
-                SkillRegistry::new(skills_path)
-                    .expect("Failed to create skill registry"),
-            )),
+            shared_state.skill_registry.clone(),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
             openai_model.clone(),
