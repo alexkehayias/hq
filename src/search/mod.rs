@@ -4,7 +4,10 @@ mod export;
 pub mod fts;
 pub use fts::utils::recreate_index;
 mod indexing;
-pub use indexing::{index_all, index_all_chat_sessions, index_chat_messages};
+pub use indexing::{
+    index_all, index_all_chat_sessions, index_chat_messages, index_single_file,
+    remove_task_from_indexes,
+};
 mod query;
 mod source;
 pub use core::search_notes;

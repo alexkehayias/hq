@@ -250,8 +250,16 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 project,
                 status,
             } => {
-                task::run_create(&notes_path, &title, body.as_deref(), project.as_deref(), &status)
-                    .await?;
+                task::run_create(
+                    &notes_path,
+                    &title,
+                    body.as_deref(),
+                    project.as_deref(),
+                    &status,
+                    &index_path,
+                    &vec_db_path,
+                )
+                .await?;
             }
             TaskCommand::Update {
                 id,
@@ -267,11 +275,13 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     body.as_deref(),
                     status.as_deref(),
                     project.as_deref(),
+                    &index_path,
+                    &vec_db_path,
                 )
                 .await?;
             }
             TaskCommand::Delete { id } => {
-                task::run_delete(&notes_path, &id).await?;
+                task::run_delete(&notes_path, &id, &index_path, &vec_db_path).await?;
             }
             TaskCommand::List { project, status } => {
                 task::run_list(&notes_path, project.as_deref(), status.as_deref()).await?;

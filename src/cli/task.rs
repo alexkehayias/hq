@@ -9,6 +9,7 @@ use tokio::fs;
 use uuid::Uuid;
 
 use crate::org;
+use crate::search::{index_single_file, remove_task_from_indexes};
 
 fn slugify(s: &str) -> Result<String> {
     let slug: String = s
@@ -275,12 +276,14 @@ pub async fn run_create(
     body: Option<&str>,
     project: Option<&str>,
     status: &str,
+    index_path: &str,
+    vec_db_path: &str,
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
     let status_upper = status.to_uppercase();
 
-    if let Some(project_name) = project {
+    let file_path = if let Some(project_name) = project {
         let project_path = find_or_create_project(notes_path, project_name).await?;
         let headline = build_headline(&id, title, body, &status_upper, 1);
         let mut project_content = fs::read_to_string(&project_path).await?;
@@ -293,6 +296,7 @@ pub async fn run_create(
             .await
             .context("Failed to write project file")?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
+        project_path
     } else {
         let slug = slugify(title)?;
         let today = Local::now().format("%Y-%m-%d");
@@ -302,7 +306,14 @@ pub async fn run_create(
             .await
             .context("Failed to write task file")?;
         println!("Created task '{title}' (id: {id}, file: {filename})");
-    }
+        PathBuf::from(filename)
+    };
+
+    // Index the new/modified file so the task is immediately searchable
+    let db = crate::core::db::async_db(vec_db_path)
+        .await
+        .context("Failed to connect to async db for indexing")?;
+    index_single_file(&db, index_path, file_path).await?;
 
     Ok(())
 }
@@ -345,6 +356,8 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
+    index_path: &str,
+    vec_db_path: &str,
 ) -> Result<()> {
     let location = if let Some(project_ref) = project {
         let project_path = find_project_file_by_id_or_name(notes_path, project_ref).await?;
@@ -368,10 +381,22 @@ pub async fn run_update(
         .context("Failed to write updated task file")?;
 
     println!("Task {id} updated");
+
+    // Re-index the modified file so the task changes are searchable
+    let db = crate::core::db::async_db(vec_db_path)
+        .await
+        .context("Failed to connect to async db for indexing")?;
+    index_single_file(&db, index_path, location.path).await?;
+
     Ok(())
 }
 
-pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
+pub async fn run_delete(
+    notes_path: &str,
+    id: &str,
+    index_path: &str,
+    vec_db_path: &str,
+) -> Result<()> {
     let location = find_task(notes_path, id).await?;
 
     let before = &location.content[..location.range.start];
@@ -383,6 +408,12 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
         .await
         .context("Failed to write project file after deletion")?;
     println!("Deleted task {id} from {}", location.path.display());
+
+    // Remove the task from all search indexes
+    let db = crate::core::db::async_db(vec_db_path)
+        .await
+        .context("Failed to connect to async db for indexing")?;
+    remove_task_from_indexes(&db, index_path, id).await?;
 
     Ok(())
 }
@@ -480,9 +511,47 @@ pub async fn run_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::db::{async_db, initialize_db};
     use orgize::ParseConfig;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Holds temporary directories for testing task CRUD with indexing.
+    struct TestEnv {
+        notes: String,
+        index: String,
+        db: String,
+        _dir: TempDir,
+    }
+
+    impl TestEnv {
+        async fn new() -> Self {
+            let dir = TempDir::new().unwrap();
+            let notes = dir.path().join("notes").to_str().unwrap().to_string();
+            let index = dir.path().join("index").to_str().unwrap().to_string();
+            let db_path = dir.path().join("db").to_str().unwrap().to_string();
+
+            std::fs::create_dir_all(&notes).unwrap();
+            std::fs::create_dir_all(&index).unwrap();
+            std::fs::create_dir_all(&db_path).unwrap();
+
+            let connection = async_db(&db_path).await.unwrap();
+            connection
+                .call(|conn| {
+                    initialize_db(conn).unwrap();
+                    Ok(())
+                })
+                .await
+                .unwrap();
+
+            TestEnv {
+                notes,
+                index,
+                db: db_path,
+                _dir: dir,
+            }
+        }
+    }
 
     fn parsing_config() -> ParseConfig {
         ParseConfig {
@@ -554,15 +623,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Test Task", None, None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Test Task",
+            None,
+            None,
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Should create a single .org file
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(&env.notes).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert!(path.extension().unwrap() == "org");
@@ -575,14 +651,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task_with_body() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Buy milk",
+            Some("Milk, eggs, bread"),
+            None,
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(&env.notes).unwrap().collect();
         let path = entries[0].as_ref().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("Milk, eggs, bread"));
@@ -590,14 +673,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task_custom_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Urgent fix", None, None, "NEXT")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Urgent fix",
+            None,
+            None,
+            "NEXT",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(&env.notes).unwrap().collect();
         let path = entries[0].as_ref().unwrap().path();
         let (_, status, _) = parse_headline(&path);
         assert_eq!(status, "NEXT");
@@ -609,15 +699,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_project_task_creates_project_file() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Fix login",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Should create project file with one headline
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(&env.notes).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert!(path.to_str().unwrap().contains("--project-sprint-12"));
@@ -631,18 +728,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_second_task_in_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
-        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Task one",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
+        run_create(
+            &env.notes,
+            "Task two",
+            None,
+            Some("sprint-12"),
+            "DONE",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Single project file with two headlines
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(&env.notes).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert_eq!(headline_count(&path), 2);
@@ -654,20 +766,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_standalone_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "My task", None, None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "My task",
+            None,
+            None,
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Find the created task's ID
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
+        run_update(&env.notes, &id, None, None, Some("DONE"), None, &env.index, &env.db)
             .await
             .unwrap();
 
@@ -677,21 +796,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_standalone_title_and_body() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Old title", Some("Old body"), None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Old title",
+            Some("Old body"),
+            None,
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None)
-            .await
-            .unwrap();
+        run_update(
+            &env.notes,
+            &id,
+            Some("New title"),
+            Some("New body"),
+            None,
+            None,
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         let (_, status, title) = parse_headline(&path);
         assert_eq!(status, "TODO");
@@ -703,22 +838,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_project_task_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Fix bug",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Find the task ID from the project file
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         // The headline ID is the second occurrence (after the project-level ID)
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
+        run_update(&env.notes, &id, None, None, Some("DONE"), None, &env.index, &env.db)
             .await
             .unwrap();
 
@@ -735,10 +877,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_nonexistent_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
+        let result = run_update(&env.notes, "nonexistent-uuid", None, None, Some("DONE"), None, &env.index, &env.db).await;
         assert!(result.is_err());
     }
 
@@ -748,19 +889,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_standalone_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Temp task", None, None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Temp task",
+            None,
+            None,
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&env.notes, &id, &env.index, &env.db)
+            .await
+            .unwrap();
 
         // File should still exist (as a note with no task headlines)
         assert!(path.exists());
@@ -769,24 +919,41 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_project_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
-        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Task one",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
+        run_create(
+            &env.notes,
+            "Task two",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         // Find the first headline's ID (second :ID: in file)
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&env.notes, &id, &env.index, &env.db)
+            .await
+            .unwrap();
 
         // One headline should remain
         assert_eq!(headline_count(&path), 1);
@@ -794,20 +961,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_last_project_task_leaves_project_file() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Only task",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&env.notes, &id, &env.index, &env.db)
+            .await
+            .unwrap();
 
         // Project file should still exist (preamble remains)
         assert!(path.exists());
@@ -816,10 +992,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_nonexistent_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        let result = run_delete(&notes, "nonexistent-uuid").await;
+        let result = run_delete(&env.notes, "nonexistent-uuid", &env.index, &env.db).await;
         assert!(result.is_err());
     }
 
@@ -1268,15 +1443,22 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_by_filename() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Fix bug",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Find the task ID from the project file
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -1284,9 +1466,18 @@ Investigate the redirect
 
         // Update using --project with filename
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))
-            .await
-            .unwrap();
+        run_update(
+            &env.notes,
+            &id,
+            Some("Fixed bug"),
+            None,
+            Some("DONE"),
+            Some(&filename),
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         let config = parsing_config();
         let org = config.parse(&fs::read_to_string(&path).unwrap());
@@ -1298,15 +1489,22 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_by_id() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Add tests",
+            None,
+            Some("sprint-12"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Find the project file's ID (first :ID: in the file)
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(&env.notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let first_id_start = content.find(id_marker).unwrap() + id_marker.len();
@@ -1317,9 +1515,18 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id))
-            .await
-            .unwrap();
+        run_update(
+            &env.notes,
+            &task_id,
+            None,
+            None,
+            Some("DONE"),
+            Some(&project_id),
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         let config = parsing_config();
         let org = config.parse(&fs::read_to_string(&path).unwrap());
@@ -1330,22 +1537,37 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_not_found_in_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
         // Create a standalone task (not in any project)
-        run_create(&notes, "Standalone", None, None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Standalone",
+            None,
+            None,
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Create a project with a different task
-        run_create(&notes, "Project task", None, Some("my-project"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &env.notes,
+            "Project task",
+            None,
+            Some("my-project"),
+            "TODO",
+            &env.index,
+            &env.db,
+        )
+        .await
+        .unwrap();
 
         // Find the standalone task's ID
-        let standalone_path = dir.path().join(
-            fs::read_dir(&notes)
+        let standalone_path = env._dir.path().join(
+            fs::read_dir(&env.notes)
                 .unwrap()
                 .filter_map(|e| {
                     let p = e.unwrap().path();
@@ -1360,16 +1582,35 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Try to update it scoped to the project — should fail
-        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
+        let result = run_update(
+            &env.notes,
+            &task_id,
+            None,
+            None,
+            Some("DONE"),
+            Some("my-project"),
+            &env.index,
+            &env.db,
+        )
+        .await;
         assert!(result.is_err(), "should not find standalone task in project file");
     }
 
     #[tokio::test]
     async fn test_update_project_task_nonexistent_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let env = TestEnv::new().await;
 
-        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
+        let result = run_update(
+            &env.notes,
+            "some-id",
+            None,
+            None,
+            Some("DONE"),
+            Some("nonexistent"),
+            &env.index,
+            &env.db,
+        )
+        .await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 }
