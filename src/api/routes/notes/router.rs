@@ -112,7 +112,6 @@ async fn update_note(
         )
     };
 
-    // Check if the note exists and is a task
     let note = notes_db::get_note_by_id(&db, id.clone()).await?;
     let note = match note {
         Some(n) => n,
@@ -127,27 +126,15 @@ async fn update_note(
             .into_response());
     }
 
-    // Update the org file on disk using the CLI task update logic
-    task::run_update(
-        &notes_path,
-        &id,
-        None,   // title
-        None,   // body
-        Some(&body.status),
-        None,   // project
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("Failed to update task: {}", e))?;
+    task::run_update(&notes_path, &id, None, None, Some(&body.status), None)
+        .await?;
 
-    // Re-index the notes to reflect the change in the search index
-    index_all(&db, &index_path, &notes_path, true, true, None)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to re-index: {}", e))?;
+    index_all(&db, &index_path, &notes_path, true, true, None).await?;
 
-    // Return the updated note
+    // Re-fetch to return the indexed state
     match notes_db::get_note_by_id(&db, id).await? {
         Some(updated) => Ok(axum::Json(updated).into_response()),
-        None => Ok((StatusCode::NOT_FOUND, "Note not found after update").into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "Note not found").into_response()),
     }
 }
 

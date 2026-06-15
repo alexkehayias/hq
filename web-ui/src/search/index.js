@@ -241,7 +241,6 @@
               })
               .then((noteData) => {
                 let html = '';
-                // Task status controls
                 if (noteData.type === 'task' && noteData.status) {
                   const statuses = [
                     'TODO',
@@ -261,7 +260,6 @@
                     <span id="status-update-msg" class="text-xs text-gray-400 hidden"></span>
                   </div>`;
                 }
-                // Tags
                 if (noteData.tags) {
                   html += `<div class="mb-4">${noteData.tags
                     .split(',')
@@ -271,20 +269,16 @@
                     )
                     .join('')}</div>`;
                 }
-                // Render markdown into HTML
                 const messageHtml = marked.parse(noteData.body, {
                   breaks: true,
                 });
-                // Content
                 html += `<div class="markdown leading-relaxed text-base text-gray-800 dark:text-gray-200">${messageHtml || ''}</div>`;
-                // Insert and keep the close button on top
                 content.innerHTML =
                   `<button id="modal-close-btn" class="absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black dark:hover:text-white cursor-pointer">×</button>` +
                   html;
                 content.querySelector('#modal-close-btn').onclick =
                   dismissModal;
 
-                // Wire up task status change handler
                 const statusSelect =
                   document.getElementById('task-status-select');
                 if (statusSelect) {
