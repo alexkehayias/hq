@@ -38,7 +38,9 @@ done
 
 echo "Server ready: http://${HOST}:${PORT}"
 
-# Reload the active Chrome browser tab
-osascript ./bin/reloadChromeTab.scptd
+# Reload the active Chrome browser tab (macOS only)
+if [ "$(uname)" = "Darwin" ]; then
+    osascript ./bin/reloadChromeTab.scptd
+fi
 
 wait $PID
