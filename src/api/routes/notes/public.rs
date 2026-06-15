@@ -58,4 +58,11 @@ pub struct ViewNoteResponse {
     pub title: String,
     pub body: String,
     pub tags: Option<String>,
+    pub r#type: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateNoteRequest {
+    pub status: String,
 }

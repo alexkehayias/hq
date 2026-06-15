@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use axum_extra::extract::Query;
 use serde_json::{Value, json};
@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use super::public;
 use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
+use crate::cli::task;
 use crate::search::aql;
 use crate::search::index_all;
 use crate::search::search_notes;
@@ -96,10 +97,65 @@ async fn view_note(
     }
 }
 
+// Update note status endpoint
+async fn update_note(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<public::UpdateNoteRequest>,
+) -> Result<axum::response::Response, crate::api::public::ApiError> {
+    let (db, notes_path, index_path) = {
+        let shared_state = state.read().unwrap();
+        (
+            shared_state.db.clone(),
+            shared_state.config.notes_path.clone(),
+            shared_state.config.index_path.clone(),
+        )
+    };
+
+    // Check if the note exists and is a task
+    let note = notes_db::get_note_by_id(&db, id.clone()).await?;
+    let note = match note {
+        Some(n) => n,
+        None => return Ok((StatusCode::NOT_FOUND, "Note not found").into_response()),
+    };
+
+    if note.r#type.as_deref() != Some("task") {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "Only task notes can have their status updated",
+        )
+            .into_response());
+    }
+
+    // Update the org file on disk using the CLI task update logic
+    task::run_update(
+        &notes_path,
+        &id,
+        None,   // title
+        None,   // body
+        Some(&body.status),
+        None,   // project
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to update task: {}", e))?;
+
+    // Re-index the notes to reflect the change in the search index
+    index_all(&db, &index_path, &notes_path, true, true, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to re-index: {}", e))?;
+
+    // Return the updated note
+    match notes_db::get_note_by_id(&db, id).await? {
+        Some(updated) => Ok(axum::Json(updated).into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "Note not found after update").into_response()),
+    }
+}
+
 /// Create the notes router
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/search", get(note_search))
         .route("/index", post(index_notes))
         .route("/{id}/view", get(view_note))
+        .route("/{id}", patch(update_note))
 }

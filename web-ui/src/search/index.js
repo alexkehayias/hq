@@ -241,10 +241,26 @@
               })
               .then((noteData) => {
                 let html = '';
-                // Render markdown into HTML
-                const messageHtml = marked.parse(noteData.body, {
-                  breaks: true,
-                });
+                // Task status controls
+                if (noteData.type === 'task' && noteData.status) {
+                  const statuses = [
+                    'TODO',
+                    'NEXT',
+                    'WAITING',
+                    'DONE',
+                    'CANCELED',
+                    'SOMEDAY',
+                  ];
+                  html += `<div class="mb-4 flex items-center gap-2 pb-4 border-b border-gray-200 dark:border-gray-700">
+                    <span class="text-sm font-medium text-gray-600 dark:text-gray-400">Status:</span>
+                    <select id="task-status-select" class="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100">`;
+                  statuses.forEach((s) => {
+                    html += `<option value="${s}"${noteData.status === s ? ' selected' : ''}>${s}</option>`;
+                  });
+                  html += `</select>
+                    <span id="status-update-msg" class="text-xs text-gray-400 hidden"></span>
+                  </div>`;
+                }
                 // Tags
                 if (noteData.tags) {
                   html += `<div class="mb-4">${noteData.tags
@@ -255,14 +271,56 @@
                     )
                     .join('')}</div>`;
                 }
+                // Render markdown into HTML
+                const messageHtml = marked.parse(noteData.body, {
+                  breaks: true,
+                });
                 // Content
-                html += `<div class="markdown leading-relaxed text-base text-gray-800">${messageHtml || ''}</div>`;
+                html += `<div class="markdown leading-relaxed text-base text-gray-800 dark:text-gray-200">${messageHtml || ''}</div>`;
                 // Insert and keep the close button on top
                 content.innerHTML =
                   `<button id="modal-close-btn" class="absolute top-3 right-6 bg-transparent border-0 text-3xl text-gray-500 hover:text-black dark:hover:text-white cursor-pointer">×</button>` +
                   html;
                 content.querySelector('#modal-close-btn').onclick =
                   dismissModal;
+
+                // Wire up task status change handler
+                const statusSelect =
+                  document.getElementById('task-status-select');
+                if (statusSelect) {
+                  statusSelect.addEventListener('change', async (e) => {
+                    const newStatus = e.target.value;
+                    const msgEl = document.getElementById('status-update-msg');
+                    msgEl.classList.remove('hidden');
+                    msgEl.textContent = 'Updating...';
+                    msgEl.classList.remove('text-red-500');
+                    try {
+                      const resp = await fetch(`/api/notes/${noteData.id}`, {
+                        method: 'PATCH',
+                        headers: {
+                          'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                          status: newStatus,
+                        }),
+                      });
+                      if (!resp.ok) {
+                        throw new Error(`Failed to update: ${resp.status}`);
+                      }
+                      const updated = await resp.json();
+                      statusSelect.value = updated.status;
+                      msgEl.textContent = '✓ Updated';
+                      msgEl.classList.remove('hidden');
+                      setTimeout(() => {
+                        msgEl.classList.add('hidden');
+                      }, 2000);
+                    } catch (err) {
+                      msgEl.textContent = `✗ ${err.message}`;
+                      msgEl.classList.remove('hidden');
+                      msgEl.classList.add('text-red-500');
+                    }
+                  });
+                }
               })
               .catch((err) => {
                 content.innerHTML = `<div class="text-center text-red-700 p-8">Failed to load note: ${err.message}</div>`;
