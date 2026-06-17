@@ -52,6 +52,21 @@ pub async fn run(
     let port = pick_port(base_port);
     println!("  Picked port {port}");
 
+    // Get Tailscale IPv4 address for HQ_HOST, falling back to localhost
+    let host = Command::new("tailscale")
+        .args(["ip", "-4"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+
     let zsh_config_dir = ".hq-data";
     fs::create_dir_all(zsh_config_dir)?;
     let zshrc_path = format!("{zsh_config_dir}/.zshrc");
@@ -72,7 +87,7 @@ pub async fn run(
          # Override with worktree-specific env vars (set after user config)\n\
          export HQ_STORAGE_PATH=.hq-data\n\
          export HQ_PORT={port}\n\
-         export HQ_HOST=localhost\n"
+         export HQ_HOST={host}\n"
     );
     fs::write(&zshrc_path, zshrc_content)?;
     println!("  Wrote .hq-data/.zshrc with worktree env vars");
