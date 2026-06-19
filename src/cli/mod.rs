@@ -9,6 +9,7 @@ pub mod develop;
 pub mod eval;
 pub mod example_data;
 pub mod index;
+pub mod web;
 pub mod init;
 pub mod job;
 pub mod migrate;
@@ -109,6 +110,11 @@ enum Command {
         /// Run without saving results to the database
         #[arg(long, default_value = "false")]
         dry_run: bool,
+    },
+    /// Web-related commands (fetch, etc.)
+    Web {
+        #[command(subcommand)]
+        command: web::WebCommand,
     },
     /// Load example .org notes for development
     ExampleData {},
@@ -239,6 +245,9 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
+        }
+        Some(Command::Web { command }) => {
+            web::run(command).await?;
         }
         Some(Command::ExampleData {}) => {
             example_data::run(&notes_path, &index_path, &vec_db_path).await?;
