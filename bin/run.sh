@@ -14,7 +14,7 @@ fi
 
 cd ..
 
-HOST="${HOST:-localhost}"
+HOST="${HQ_HOST:-localhost}"
 PORT="${HQ_PORT:?HQ_PORT must be set (hq develop sets this automatically)}"
 
 RUST_BACKTRACE=1 cargo run -- serve --host "$HOST" --port "$PORT" &
