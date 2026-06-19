@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::core::http::html_to_markdown;
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
-use htmd::HtmlToMarkdown;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
@@ -100,10 +100,7 @@ impl ToolCall for WebsiteViewTool {
 
                 // Convert HTML to markdown
                 let html_content = resp.text().await?;
-                let converter = HtmlToMarkdown::builder()
-                    .skip_tags(vec!["script", "style", "footer", "img", "svg"])
-                    .build();
-                converter.convert(&html_content)?
+                html_to_markdown(&html_content)?
             }
             Err(e) => {
                 // If the request failed, provide a default answer so we

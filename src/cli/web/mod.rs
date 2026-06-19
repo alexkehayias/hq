@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
+use std::env;
 
 pub mod fetch;
 pub mod search;
@@ -41,7 +42,11 @@ pub async fn run(command: WebCommand) -> Result<()> {
             if query.is_empty() {
                 anyhow::bail!("A search query is required");
             }
-            search::run(query, limit).await
+            let api_key = env::var("HQ_GOOGLE_SEARCH_API_KEY")
+                .map_err(|_| anyhow::anyhow!("HQ_GOOGLE_SEARCH_API_KEY is not set"))?;
+            let cx_id = env::var("HQ_GOOGLE_SEARCH_CX_ID")
+                .map_err(|_| anyhow::anyhow!("HQ_GOOGLE_SEARCH_CX_ID is not set"))?;
+            search::run(query, limit, api_key, cx_id).await
         }
     }
 }

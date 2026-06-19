@@ -9,7 +9,6 @@ pub mod develop;
 pub mod eval;
 pub mod example_data;
 pub mod index;
-pub mod web;
 pub mod init;
 pub mod job;
 pub mod migrate;
@@ -17,6 +16,7 @@ pub mod query;
 pub mod rebuild;
 pub mod serve;
 pub mod task;
+pub mod web;
 
 use auth::ServiceKind;
 use job::JobId;
