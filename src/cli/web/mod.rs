@@ -46,7 +46,7 @@ pub async fn run(command: WebCommand) -> Result<()> {
                 .map_err(|_| anyhow::anyhow!("HQ_GOOGLE_SEARCH_API_KEY is not set"))?;
             let cx_id = env::var("HQ_GOOGLE_SEARCH_CX_ID")
                 .map_err(|_| anyhow::anyhow!("HQ_GOOGLE_SEARCH_CX_ID is not set"))?;
-            search::run(query, limit, api_key, cx_id).await
+            search::run(api_key, cx_id, query, limit).await
         }
     }
 }
