@@ -128,7 +128,7 @@ async function showDetailView(name) {
     // Render file tree
     if (filesRes.ok) {
       const filesData = await filesRes.json();
-      renderFileTree(filesData.files || []);
+      await renderFileTree(filesData.files || []);
     }
 
     body.classList.remove('hidden');
