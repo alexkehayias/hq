@@ -43,6 +43,7 @@
         const hits = data.results.map((r) => {
           // Create a list item for each hit
           const hit = document.createElement('li');
+          hit.dataset.noteId = r.id;
           hit.classList.add(
             ...[
               'group',
@@ -148,6 +149,11 @@
             // Highlight the selected hit
             hit.classList.add(...['bg-blue-700', 'text-white']);
 
+            // Update URL with the selected note ID
+            const url = new URL(window.location);
+            url.searchParams.set('note_id', r.id);
+            window.history.replaceState(null, '', url);
+
             // Store the selected hit in the search session
             const resp = await fetch(`/api/notes/search/latest`, {
               method: 'POST',
@@ -193,6 +199,10 @@
               if (addedModal) {
                 modal.remove();
               }
+              // Remove note_id from URL when modal is dismissed
+              const url = new URL(window.location);
+              url.searchParams.delete('note_id');
+              window.history.replaceState(null, '', url);
             }
 
             // Click outside the modal content to close
@@ -278,7 +288,16 @@
 
   if (initQuery) {
     searchInput.value = decodeURIComponent(initQuery);
-    handleSearch(includeSimilarity, searchInput.value);
+    await handleSearch(includeSimilarity, searchInput.value);
+
+    // If there's a note_id param, open the corresponding note modal
+    const noteId = urlParams.get('note_id');
+    if (noteId) {
+      const targetHit = resultList.querySelector(`[data-note-id="${noteId}"]`);
+      if (targetHit) {
+        targetHit.click();
+      }
+    }
   }
 
   // Handle search as you type
