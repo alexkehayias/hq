@@ -49,18 +49,11 @@ pub struct Chat {
 impl Chat {
     async fn handle_tool_call(
         tools: &Vec<BoxedToolCall>,
-        tool_call: &Value,
-    ) -> Result<Vec<Message>, Error> {
-        let tool_call_id = &tool_call["id"]
-            .as_str()
-            .ok_or(anyhow!("Tool call missing ID: {}", tool_call))?;
-        let tool_call_function = &tool_call["function"];
-        let tool_call_args = tool_call_function["arguments"]
-            .as_str()
-            .ok_or(anyhow!("Tool call missing arguments: {}", tool_call))?;
-        let tool_call_name = tool_call_function["name"]
-            .as_str()
-            .ok_or(anyhow!("Tool call missing name: {}", tool_call))?;
+        tool_call: &FunctionCall,
+    ) -> Result<Message, Error> {
+        let tool_call_name = &tool_call.function.name;
+        let tool_call_args = &tool_call.function.arguments;
+        let tool_call_id = &tool_call.id;
 
         tracing::debug!(
             "\nTool call: {}\nargs: {}",
@@ -92,25 +85,12 @@ impl Chat {
         // file and change the response text to a summary that points
         // to the file to use other tools to inspect if needed.
 
-        let tool_call_request = vec![FunctionCall {
-            function: FunctionCallFn {
-                arguments: tool_call_args.to_string(),
-                name: tool_call_name.to_string(),
-            },
-            id: tool_call_id.to_string(),
-            r#type: String::from("function"),
-        }];
-        let results = vec![
-            Message::new_tool_call_request(tool_call_request),
-            Message::new_tool_call_response(&tool_call_result, tool_call_id),
-        ];
-
-        Ok(results)
+        Ok(Message::new_tool_call_response(&tool_call_result, tool_call_id))
     }
 
     async fn handle_tool_calls(
         tools: &Vec<BoxedToolCall>,
-        tool_calls: &[Value],
+        tool_calls: &[FunctionCall],
     ) -> Result<Vec<Message>, Error> {
         // Run each tool call concurrently and return them in order. I'm
         // not sure if ordering really matters for OpenAI compatible API
@@ -122,9 +102,7 @@ impl Chat {
         let futures = tool_calls
             .iter()
             .map(|call| Self::handle_tool_call(tools, call));
-        // Flatten the results to match what the API is expecting.
-        let results = try_join_all(futures).await?.into_iter().flatten().collect();
-        Ok(results)
+        try_join_all(futures).await
     }
 
     /// The inner chat loop that handles sending and receiving the
@@ -190,10 +168,10 @@ impl Chat {
         Ok(messages)
     }
 
-    /// Build an assistant `Message` containing tool call requests from
-    /// the raw JSON value array returned by the API.
-    fn tool_calls_to_message(tool_calls: &[Value]) -> Message {
-        let calls: Vec<FunctionCall> = tool_calls
+    /// Parse raw JSON tool calls from the API response into typed
+    /// `FunctionCall` structs.
+    fn parse_tool_calls(tool_calls: &[Value]) -> Vec<FunctionCall> {
+        tool_calls
             .iter()
             .map(|tc| {
                 let function = &tc["function"];
@@ -209,8 +187,7 @@ impl Chat {
                     r#type: "function".to_string(),
                 }
             })
-            .collect();
-        Message::new_tool_call_request(calls)
+            .collect()
     }
 
     /// Run the middleware chain. Returns modifications to inject and
@@ -255,14 +232,20 @@ impl Chat {
                 break;
             }
 
-            // Build a transcript that includes the pending tool call
-            // request so middleware can see the full picture.
-            let mut transcript_for_mw = updated_history.clone();
-            transcript_for_mw.push(Self::tool_calls_to_message(tool_calls));
+            // Parse tool calls into typed structs immediately so
+            // middleware and tool handling always operate on `Message`
+            // and `FunctionCall` types, not raw JSON `Value`.
+            let calls = Self::parse_tool_calls(tool_calls);
+
+            // Build the tool call request message and add to transcript
+            // before middleware runs, so middleware sees the full picture.
+            let tool_call_msg = Message::new_tool_call_request(calls.clone());
+            messages.push(tool_call_msg.clone());
+            updated_history.push(tool_call_msg);
 
             // Run middleware before executing tool calls
             if let Some((modifications, err)) =
-                Self::run_middleware(middleware, &transcript_for_mw).await?
+                Self::run_middleware(middleware, &updated_history).await?
             {
                 for m in modifications {
                     messages.push(m.clone());
@@ -275,7 +258,7 @@ impl Chat {
                 .as_ref()
                 .expect("Received tool call but no tools were specified");
 
-            let tool_call_msgs = Self::handle_tool_calls(tools_ref, tool_calls).await?;
+            let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
             for m in tool_call_msgs.into_iter() {
                 messages.push(m.clone());
                 updated_history.push(m);
@@ -320,14 +303,20 @@ impl Chat {
                 break;
             }
 
-            // Build a transcript that includes the pending tool call
-            // request so middleware can see the full picture.
-            let mut transcript_for_mw = updated_history.clone();
-            transcript_for_mw.push(Self::tool_calls_to_message(tool_calls));
+            // Parse tool calls into typed structs immediately so
+            // middleware and tool handling always operate on `Message`
+            // and `FunctionCall` types, not raw JSON `Value`.
+            let calls = Self::parse_tool_calls(tool_calls);
+
+            // Build the tool call request message and add to transcript
+            // before middleware runs, so middleware sees the full picture.
+            let tool_call_msg = Message::new_tool_call_request(calls.clone());
+            messages.push(tool_call_msg.clone());
+            updated_history.push(tool_call_msg);
 
             // Run middleware before executing tool calls
             if let Some((modifications, err)) =
-                Self::run_middleware(middleware, &transcript_for_mw).await?
+                Self::run_middleware(middleware, &updated_history).await?
             {
                 for m in modifications {
                     messages.push(m.clone());
@@ -341,7 +330,7 @@ impl Chat {
                 .expect("Received tool call but no tools were specified");
 
             // TODO: Update this to be streaming
-            let tool_call_msgs = Self::handle_tool_calls(tools_ref, tool_calls).await?;
+            let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
             for m in tool_call_msgs.into_iter() {
                 messages.push(m.clone());
                 updated_history.push(m);
