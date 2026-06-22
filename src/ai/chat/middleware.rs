@@ -8,13 +8,10 @@ pub enum MiddlewareAction {
     Continue,
     /// Stop the chat with an error.
     StopWithError(Error),
-    /// Inject messages into the transcript, then stop with an error.
-    StopWithModifications(Vec<Message>, Error),
-    /// Reject the pending tool calls by returning rejection responses.
-    /// Each entry is `(tool_call_id, rejection_message)`. The chat loop
-    /// sends these back as tool call responses, allowing the model to
-    /// recover with a normal response.
-    Reject(Vec<(String, String)>),
+    /// Reject the pending tool calls by returning tool call response
+    /// messages. The chat loop inserts these into the transcript and
+    /// continues, allowing the model to recover with a normal response.
+    Reject(Vec<Message>),
 }
 
 /// Middleware that runs before each batch of tool calls.
@@ -66,7 +63,7 @@ impl ToolCallMiddleware for InfiniteLoopDetector {
             .iter()
             .filter(|m| *m.role() == Role::Assistant)
             .filter_map(|m| {
-                m.tool_calls().map(|calls| {
+                m.tool_calls.as_ref().map(|calls| {
                     calls
                         .iter()
                         .map(|call| {
@@ -83,24 +80,29 @@ impl ToolCallMiddleware for InfiniteLoopDetector {
             let last_n = &tool_calls[tool_calls.len() - self.max_repeats..];
             let first = &last_n[0];
             if last_n.iter().all(|(name, args)| name == &first.0 && args == &first.1) {
-                // Extract tool call IDs from the latest assistant message
-                // (the pending tool calls that triggered the rejection)
-                let ids: Vec<String> = transcript
-                    .iter()
-                    .last()
-                    .and_then(|m| m.tool_calls())
-                    .map(|calls| calls.iter().map(|c| c.id.clone()).collect())
-                    .unwrap_or_default();
-
                 let rejection_msg = format!(
                     "Tool call rejected due to infinite loop: tool '{name}' called \
                      with the same arguments {n} times in a row.",
                     name = first.0,
                     n = self.max_repeats,
                 );
-                return Ok(MiddlewareAction::Reject(
-                    ids.into_iter().map(|id| (id, rejection_msg.clone())).collect(),
-                ));
+
+                // Build rejection responses for the pending tool calls
+                let rejection_msgs: Vec<Message> = transcript
+                    .iter()
+                    .last()
+                    .and_then(|m| m.tool_calls.as_ref())
+                    .map(|calls| {
+                        calls
+                            .iter()
+                            .map(|call| {
+                                Message::new_tool_call_response(&rejection_msg, &call.id)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                return Ok(MiddlewareAction::Reject(rejection_msgs));
             }
         }
 
@@ -114,7 +116,7 @@ mod tests {
     use crate::openai::FunctionCall;
 
     #[tokio::test]
-    async fn test_no_loop_allowed() {
+    async fn test_single_tool_call_not_a_loop() {
         let detector = InfiniteLoopDetector::new(3);
         let transcript = vec![
             Message::new(Role::User, "search for something"),
@@ -242,11 +244,14 @@ mod tests {
 
         let action = detector.before_tool_calls(&transcript).await.unwrap();
         match action {
-            MiddlewareAction::Reject(rejections) => {
-                assert!(!rejections.is_empty());
-                let (id, msg) = &rejections[0];
-                assert_eq!(id, "call_1");
-                assert!(msg.contains("Tool call rejected due to infinite loop"));
+            MiddlewareAction::Reject(msgs) => {
+                assert!(!msgs.is_empty());
+                assert_eq!(*msgs[0].role(), Role::Tool);
+                assert!(
+                    msgs[0].content.as_ref().unwrap().contains("Tool call rejected due to infinite loop"),
+                    "Expected rejection message, got: {:?}",
+                    msgs[0].content
+                );
             }
             _ => panic!("Expected Reject"),
         }

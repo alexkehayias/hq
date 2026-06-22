@@ -52,9 +52,8 @@ enum MiddlewareOutcome {
     Proceed,
     /// Stop the chat with modifications and an error.
     Stop(Vec<Message>, Error),
-    /// Reject the pending tool calls. Each entry is
-    /// `(tool_call_id, rejection_message)`.
-    Reject(Vec<(String, String)>),
+    /// Reject the pending tool calls with tool call response messages.
+    Reject(Vec<Message>),
 }
 
 impl Chat {
@@ -213,11 +212,8 @@ impl Chat {
                 MiddlewareAction::StopWithError(err) => {
                     return Ok(MiddlewareOutcome::Stop(vec![], err))
                 }
-                MiddlewareAction::StopWithModifications(msgs, err) => {
-                    return Ok(MiddlewareOutcome::Stop(msgs, err));
-                }
-                MiddlewareAction::Reject(rejections) => {
-                    return Ok(MiddlewareOutcome::Reject(rejections));
+                MiddlewareAction::Reject(msgs) => {
+                    return Ok(MiddlewareOutcome::Reject(msgs));
                 }
             }
         }
@@ -278,12 +274,10 @@ impl Chat {
                     }
                     return Err(err);
                 }
-                MiddlewareOutcome::Reject(rejections) => {
-                    for (tool_call_id, rejection_msg) in rejections {
-                        let response =
-                            Message::new_tool_call_response(&rejection_msg, &tool_call_id);
-                        messages.push(response.clone());
-                        updated_history.push(response);
+                MiddlewareOutcome::Reject(rejection_msgs) => {
+                    for m in rejection_msgs {
+                        messages.push(m.clone());
+                        updated_history.push(m);
                     }
                 }
             }
@@ -360,12 +354,10 @@ impl Chat {
                     }
                     return Err(err);
                 }
-                MiddlewareOutcome::Reject(rejections) => {
-                    for (tool_call_id, rejection_msg) in rejections {
-                        let response =
-                            Message::new_tool_call_response(&rejection_msg, &tool_call_id);
-                        messages.push(response.clone());
-                        updated_history.push(response);
+                MiddlewareOutcome::Reject(rejection_msgs) => {
+                    for m in rejection_msgs {
+                        messages.push(m.clone());
+                        updated_history.push(m);
                     }
                 }
             }
@@ -484,9 +476,8 @@ impl ChatBuilder {
     /// Add tool call middleware.
     ///
     /// Middleware runs before each batch of tool calls in order of
-    /// registration. If any middleware returns `StopWithError` or
-    /// `StopWithModifications`, the remaining middleware is skipped
-    /// and the chat returns the error.
+    /// registration. If any middleware returns `StopWithError`, the
+    /// remaining middleware is skipped and the chat returns the error.
     pub fn middleware(mut self, middleware: Vec<Box<dyn ToolCallMiddleware>>) -> Self {
         self.middleware = middleware;
         self
@@ -1221,22 +1212,6 @@ data: [DONE]
         }
     }
 
-    /// A mock middleware that always stops and injects messages.
-    struct StopWithModsMiddleware;
-    #[async_trait::async_trait]
-    impl ToolCallMiddleware for StopWithModsMiddleware {
-        async fn before_tool_calls(
-            &self,
-            _transcript: &[Message],
-        ) -> Result<MiddlewareAction> {
-            let msg = Message::new(Role::System, "Middleware injected this");
-            Ok(MiddlewareAction::StopWithModifications(
-                vec![msg],
-                anyhow!("Middleware stopped with modifications"),
-            ))
-        }
-    }
-
     /// A mock middleware that always continues.
     struct ContinueMiddleware;
     #[async_trait::async_trait]
@@ -1364,70 +1339,6 @@ data: [DONE]
         assert!(
             err.to_string().contains("Middleware stopped"),
             "Expected 'Middleware stopped', got: {}",
-            err
-        );
-    }
-
-    #[tokio::test]
-    async fn test_middleware_stops_with_modifications() {
-        let mut server = mockito::Server::new_async().await;
-
-        let tool_call_response = r#"{
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1694268190,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "tool_calls": [{
-                        "id": "call_abc123",
-                        "type": "function",
-                        "function": {
-                            "name": "mock_tool",
-                            "arguments": "{}"
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        }"#;
-
-        let _mock = server
-            .mock("POST", "/v1/chat/completions")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(tool_call_response)
-            .create();
-
-        #[derive(serde::Serialize)]
-        struct MockTool;
-        #[async_trait::async_trait]
-        impl crate::openai::ToolCall for MockTool {
-            async fn call(&self, _args: &str) -> anyhow::Result<String> {
-                Ok("result".to_string())
-            }
-            fn function_name(&self) -> String {
-                "mock_tool".to_string()
-            }
-        }
-
-        let url = server.url();
-        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
-        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
-            .tools(tools)
-            .middleware(vec![Box::new(StopWithModsMiddleware)])
-            .build();
-
-        let msg = Message::new(Role::User, "Search");
-        let result = chat.next_msg(msg).await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("Middleware stopped with modifications"),
-            "Expected modification error, got: {}",
             err
         );
     }

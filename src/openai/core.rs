@@ -71,7 +71,7 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<FunctionCall>>,
+    pub tool_calls: Option<Vec<FunctionCall>>,
 }
 
 impl Message {
@@ -88,10 +88,6 @@ impl Message {
             tool_calls: None,
         }
     }
-    pub fn tool_calls(&self) -> Option<&Vec<FunctionCall>> {
-        self.tool_calls.as_ref()
-    }
-
     pub fn new_tool_call_request(tool_calls: Vec<FunctionCall>) -> Self {
         Message {
             role: Role::Assistant,
