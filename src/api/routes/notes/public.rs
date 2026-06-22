@@ -60,6 +60,7 @@ pub struct ViewNoteResponse {
     pub tags: Option<String>,
     pub r#type: Option<String>,
     pub status: Option<String>,
+    pub file_name: String,
 }
 
 #[derive(Deserialize)]

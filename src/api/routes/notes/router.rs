@@ -126,10 +126,12 @@ async fn update_note(
             .into_response());
     }
 
-    task::run_update(&notes_path, &id, None, None, Some(&body.status), None)
+    task::run_update(&notes_path, &id, None, None, Some(&body.status), None, Some(&note.file_name))
         .await?;
 
-    index_all(&db, &index_path, &notes_path, true, true, None).await?;
+    // Re-index only the file that was modified
+    let file_path = std::path::PathBuf::from(&notes_path).join(&note.file_name);
+    index_all(&db, &index_path, &notes_path, true, true, Some(vec![file_path])).await?;
 
     // Re-fetch to return the indexed state
     match notes_db::get_note_by_id(&db, id).await? {

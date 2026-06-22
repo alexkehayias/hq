@@ -130,18 +130,30 @@ struct TaskLocation {
     current_level: usize,
 }
 
+/// Recursively collect all .org files in a directory tree.
+fn collect_org_files(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            files.extend(collect_org_files(&p));
+        } else if p.extension().map_or(false, |e| e == "org")
+            && p.file_name().unwrap_or_default() != "config.org"
+        {
+            files.push(p);
+        }
+    }
+    files
+}
+
 async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     let id_pattern = format!(":ID:       {id}");
+    let files = collect_org_files(std::path::Path::new(notes_path));
 
-    let mut dir = fs::read_dir(notes_path)
-        .await
-        .with_context(|| format!("Cannot read notes directory: {notes_path}"))?;
-
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        if path.extension().map_or(true, |e| e != "org") {
-            continue;
-        }
+    for path in files {
         if path.file_name().unwrap_or_default() == "config.org" {
             continue;
         }
@@ -345,10 +357,22 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
+    file_name: Option<&str>,
 ) -> Result<()> {
     let location = if let Some(project_ref) = project {
         let project_path = find_project_file_by_id_or_name(notes_path, project_ref).await?;
         find_task_in_file(&project_path, id).await?
+    } else if let Some(fname) = file_name {
+        let path = std::path::Path::new(notes_path).join(fname);
+        match find_task_in_file(&path, id).await {
+            Ok(loc) => loc,
+            Err(_) => {
+                tracing::warn!(
+                    "Task {id} not found in expected file {fname}, searching all files"
+                );
+                find_task(notes_path, id).await?
+            }
+        }
     } else {
         find_task(notes_path, id).await?
     };
@@ -667,8 +691,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
-            .await
+        run_update(&notes, &id, None, None, Some("DONE"), None, None)            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -689,8 +712,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None)
-            .await
+        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, None)            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -718,8 +740,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
-            .await
+        run_update(&notes, &id, None, None, Some("DONE"), None, None)            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -738,7 +759,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
+        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None, None).await;
         assert!(result.is_err());
     }
 
@@ -1284,8 +1305,7 @@ Investigate the redirect
 
         // Update using --project with filename
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))
-            .await
+        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), None)            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1317,8 +1337,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id))
-            .await
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), None)            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1360,7 +1379,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Try to update it scoped to the project — should fail
-        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
+        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), None).await;
         assert!(result.is_err(), "should not find standalone task in project file");
     }
 
@@ -1369,7 +1388,7 @@ Investigate the redirect
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
+        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), None).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 }
