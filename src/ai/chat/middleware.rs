@@ -10,6 +10,11 @@ pub enum MiddlewareAction {
     StopWithError(Error),
     /// Inject messages into the transcript, then stop with an error.
     StopWithModifications(Vec<Message>, Error),
+    /// Reject the pending tool calls by returning rejection responses.
+    /// Each entry is `(tool_call_id, rejection_message)`. The chat loop
+    /// sends these back as tool call responses, allowing the model to
+    /// recover with a normal response.
+    Reject(Vec<(String, String)>),
 }
 
 /// Middleware that runs before each batch of tool calls.
@@ -78,23 +83,23 @@ impl ToolCallMiddleware for InfiniteLoopDetector {
             let last_n = &tool_calls[tool_calls.len() - self.max_repeats..];
             let first = &last_n[0];
             if last_n.iter().all(|(name, args)| name == &first.0 && args == &first.1) {
-                let msg = Message::new(
-                    Role::System,
-                    &format!(
-                        "Infinite tool call loop detected: tool '{name}' called \
-                         with the same arguments {n} times in a row. Stopping.",
-                        name = first.0,
-                        n = self.max_repeats,
-                    ),
+                // Extract tool call IDs from the latest assistant message
+                // (the pending tool calls that triggered the rejection)
+                let ids: Vec<String> = transcript
+                    .iter()
+                    .last()
+                    .and_then(|m| m.tool_calls())
+                    .map(|calls| calls.iter().map(|c| c.id.clone()).collect())
+                    .unwrap_or_default();
+
+                let rejection_msg = format!(
+                    "Tool call rejected due to infinite loop: tool '{name}' called \
+                     with the same arguments {n} times in a row.",
+                    name = first.0,
+                    n = self.max_repeats,
                 );
-                return Ok(MiddlewareAction::StopWithModifications(
-                    vec![msg],
-                    anyhow::anyhow!(
-                        "Infinite tool call loop detected: tool '{}' called \
-                         with same arguments {} times",
-                        first.0,
-                        self.max_repeats,
-                    ),
+                return Ok(MiddlewareAction::Reject(
+                    ids.into_iter().map(|id| (id, rejection_msg.clone())).collect(),
                 ));
             }
         }
@@ -153,7 +158,7 @@ mod tests {
         ];
 
         let action = detector.before_tool_calls(&transcript).await.unwrap();
-        assert!(matches!(action, MiddlewareAction::StopWithModifications(_, _)));
+        assert!(matches!(action, MiddlewareAction::Reject(_)));
     }
 
     #[tokio::test]
@@ -216,7 +221,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_loop_detected_has_error() {
+    async fn test_loop_detected_has_rejection() {
         let detector = InfiniteLoopDetector::new(2);
 
         let tool_call = || FunctionCall {
@@ -237,11 +242,13 @@ mod tests {
 
         let action = detector.before_tool_calls(&transcript).await.unwrap();
         match action {
-            MiddlewareAction::StopWithModifications(msgs, err) => {
-                assert!(!msgs.is_empty());
-                assert!(err.to_string().contains("Infinite tool call loop detected"));
+            MiddlewareAction::Reject(rejections) => {
+                assert!(!rejections.is_empty());
+                let (id, msg) = &rejections[0];
+                assert_eq!(id, "call_1");
+                assert!(msg.contains("Tool call rejected due to infinite loop"));
             }
-            _ => panic!("Expected StopWithModifications"),
+            _ => panic!("Expected Reject"),
         }
     }
 }

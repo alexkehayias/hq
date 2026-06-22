@@ -46,6 +46,17 @@ pub struct Chat {
     // TODO: Permissions
 }
 
+/// The outcome of running the middleware chain.
+enum MiddlewareOutcome {
+    /// Proceed with normal tool call execution.
+    Proceed,
+    /// Stop the chat with modifications and an error.
+    Stop(Vec<Message>, Error),
+    /// Reject the pending tool calls. Each entry is
+    /// `(tool_call_id, rejection_message)`.
+    Reject(Vec<(String, String)>),
+}
+
 impl Chat {
     async fn handle_tool_call(
         tools: &Vec<BoxedToolCall>,
@@ -190,23 +201,27 @@ impl Chat {
             .collect()
     }
 
-    /// Run the middleware chain. Returns modifications to inject and
-    /// an optional error. When `StopWithModifications` is returned, the
-    /// modifications are applied to both `messages` and `updated_history`.
+    /// Run the middleware chain. Returns the outcome: proceed with tool
+    /// execution, stop with an error, or reject tool calls.
     async fn run_middleware(
         middleware: &[Box<dyn ToolCallMiddleware>],
         transcript: &[Message],
-    ) -> Result<Option<(Vec<Message>, Error)>> {
+    ) -> Result<MiddlewareOutcome> {
         for mw in middleware {
             match mw.before_tool_calls(transcript).await? {
                 MiddlewareAction::Continue => {}
-                MiddlewareAction::StopWithError(err) => return Ok(Some((vec![], err))),
+                MiddlewareAction::StopWithError(err) => {
+                    return Ok(MiddlewareOutcome::Stop(vec![], err))
+                }
                 MiddlewareAction::StopWithModifications(msgs, err) => {
-                    return Ok(Some((msgs, err)));
+                    return Ok(MiddlewareOutcome::Stop(msgs, err));
+                }
+                MiddlewareAction::Reject(rejections) => {
+                    return Ok(MiddlewareOutcome::Reject(rejections));
                 }
             }
         }
-        Ok(None)
+        Ok(MiddlewareOutcome::Proceed)
     }
 
     /// Runs the next turn in chat by passing a transcript to the LLM for
@@ -244,27 +259,37 @@ impl Chat {
             updated_history.push(tool_call_msg);
 
             // Run middleware before executing tool calls
-            if let Some((modifications, err)) =
-                Self::run_middleware(middleware, &updated_history).await?
-            {
-                for m in modifications {
-                    messages.push(m.clone());
-                    updated_history.push(m);
+            match Self::run_middleware(middleware, &updated_history).await? {
+                MiddlewareOutcome::Proceed => {
+                    let tools_ref = tools
+                        .as_ref()
+                        .expect("Received tool call but no tools were specified");
+
+                    let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
+                    for m in tool_call_msgs.into_iter() {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
                 }
-                return Err(err);
+                MiddlewareOutcome::Stop(modifications, err) => {
+                    for m in modifications {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
+                    return Err(err);
+                }
+                MiddlewareOutcome::Reject(rejections) => {
+                    for (tool_call_id, rejection_msg) in rejections {
+                        let response =
+                            Message::new_tool_call_response(&rejection_msg, &tool_call_id);
+                        messages.push(response.clone());
+                        updated_history.push(response);
+                    }
+                }
             }
 
-            let tools_ref = tools
-                .as_ref()
-                .expect("Received tool call but no tools were specified");
-
-            let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
-            for m in tool_call_msgs.into_iter() {
-                messages.push(m.clone());
-                updated_history.push(m);
-            }
-
-            // Provide the results of the tool calls back to the chat
+            // Provide the results of the tool calls (or rejections) back
+            // to the chat
             resp = completion(&updated_history, tools, api_hostname, api_key, model).await?;
         }
 
@@ -315,28 +340,38 @@ impl Chat {
             updated_history.push(tool_call_msg);
 
             // Run middleware before executing tool calls
-            if let Some((modifications, err)) =
-                Self::run_middleware(middleware, &updated_history).await?
-            {
-                for m in modifications {
-                    messages.push(m.clone());
-                    updated_history.push(m);
+            match Self::run_middleware(middleware, &updated_history).await? {
+                MiddlewareOutcome::Proceed => {
+                    let tools_ref = tools
+                        .as_ref()
+                        .expect("Received tool call but no tools were specified");
+
+                    // TODO: Update this to be streaming
+                    let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
+                    for m in tool_call_msgs.into_iter() {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
                 }
-                return Err(err);
+                MiddlewareOutcome::Stop(modifications, err) => {
+                    for m in modifications {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
+                    return Err(err);
+                }
+                MiddlewareOutcome::Reject(rejections) => {
+                    for (tool_call_id, rejection_msg) in rejections {
+                        let response =
+                            Message::new_tool_call_response(&rejection_msg, &tool_call_id);
+                        messages.push(response.clone());
+                        updated_history.push(response);
+                    }
+                }
             }
 
-            let tools_ref = tools
-                .as_ref()
-                .expect("Received tool call but no tools were specified");
-
-            // TODO: Update this to be streaming
-            let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
-            for m in tool_call_msgs.into_iter() {
-                messages.push(m.clone());
-                updated_history.push(m);
-            }
-
-            // Provide the results of the tool calls back to the chat
+            // Provide the results of the tool calls (or rejections) back
+            // to the chat
             resp = completion_stream(
                 tx.clone(),
                 &updated_history,
@@ -1490,6 +1525,22 @@ data: [DONE]
             }]
         }"#;
 
+        // After rejection, the model responds with a normal message
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I see the tool is looping. Let me try a different approach."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
         let _mock1 = server
             .mock("POST", "/v1/chat/completions")
             .with_status(200)
@@ -1507,6 +1558,12 @@ data: [DONE]
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(tool_call_response)
+            .create();
+        let _mock4 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
             .create();
 
         #[derive(serde::Serialize)]
@@ -1532,12 +1589,24 @@ data: [DONE]
         let msg = Message::new(Role::User, "Keep searching");
         let result = chat.next_msg(msg).await;
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+        assert!(result.is_ok(), "Expected OK (model recovers from rejection), got: {:?}", result.err());
+        let messages = result.unwrap();
+        // Messages should include:
+        // 1. Tool call request (iter 1)
+        // 2. Tool call response (iter 1)
+        // 3. Tool call request (iter 2)
+        // 4. Tool call response (iter 2)
+        // 5. Tool call request (iter 3)
+        // 6. Tool call rejection response
+        // 7. Final assistant content
+        assert_eq!(messages.len(), 7);
+        // The rejection response should contain the loop detection message
+        let rejection = &messages[5];
+        assert_eq!(*rejection.role(), crate::openai::Role::Tool);
         assert!(
-            err.to_string().contains("Infinite tool call loop detected"),
-            "Expected loop detection error, got: {}",
-            err
+            rejection.content.as_ref().unwrap().contains("Tool call rejected due to infinite loop"),
+            "Expected rejection message, got: {:?}",
+            rejection.content
         );
     }
 
