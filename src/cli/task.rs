@@ -1,13 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Local;
-use orgize::export::{Container, Event, TraversalContext, Traverser};
-use orgize::rowan::ast::AstNode;
-use orgize::SyntaxElement;
-use std::ops::Range;
 use std::path::PathBuf;
 use tokio::fs;
 use uuid::Uuid;
 
+use crate::core::task;
 use crate::org;
 
 fn slugify(s: &str) -> Result<String> {
@@ -34,14 +31,16 @@ fn slugify(s: &str) -> Result<String> {
 }
 
 fn build_document(id: &str, title: &str, body: &str, status: &str) -> String {
-    let mut headline = org::Headline::builder()
+    let headline = org::Headline::builder()
         .level(1)
         .status(status)
         .title(title)
         .property("ID", id);
-    if !body.is_empty() {
-        headline = headline.body(body);
-    }
+    let headline = if !body.is_empty() {
+        headline.body(body)
+    } else {
+        headline
+    };
     org::Document::builder()
         .property("ID", id)
         .title(title)
@@ -49,202 +48,6 @@ fn build_document(id: &str, title: &str, body: &str, status: &str) -> String {
         .headline(headline.build())
         .build()
         .to_string()
-}
-
-fn build_headline(id: &str, title: &str, body: &str, status: &str, level: usize) -> String {
-    let mut h = org::Headline::builder()
-        .level(level)
-        .status(status)
-        .title(title)
-        .property("ID", id);
-    if !body.is_empty() {
-        h = h.body(body);
-    }
-    h.build().to_string()
-}
-
-/// Traverses a headline's syntax subtree and extracts body text,
-/// skipping the headline title and property drawer.
-#[derive(Default)]
-struct BodyExtractor {
-    output: String,
-    in_headline_title: bool,
-}
-
-impl BodyExtractor {
-    fn finish(self) -> String {
-        self.output.trim().to_string()
-    }
-}
-
-impl Traverser for BodyExtractor {
-    fn event(&mut self, event: Event, ctx: &mut TraversalContext) {
-        match event {
-            Event::Enter(Container::Headline(_)) => {
-                self.in_headline_title = true;
-            }
-            Event::Leave(Container::Headline(_)) => {
-                self.in_headline_title = false;
-            }
-            // Entering a Section means we've passed the headline title
-            // and are now in the body area.
-            Event::Enter(Container::Section(_)) => {
-                self.in_headline_title = false;
-            }
-            // Skip property drawers entirely
-            Event::Enter(Container::PropertyDrawer(_)) => {
-                ctx.skip();
-            }
-            Event::Leave(Container::PropertyDrawer(_)) => {}
-            // Add newline between paragraphs
-            Event::Leave(Container::Paragraph(_)) => {
-                if !self.in_headline_title {
-                    self.output.push('\n');
-                }
-            }
-            Event::Text(text) => {
-                if !self.in_headline_title {
-                    self.output.push_str(&text);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Extract body text from a headline's syntax node using the orgize Traverser.
-fn body_from_headline(headline: &orgize::ast::Headline) -> String {
-    let mut extractor = BodyExtractor::default();
-    let mut ctx = TraversalContext::default();
-    extractor.element(SyntaxElement::Node(headline.syntax().clone()), &mut ctx);
-    extractor.finish()
-}
-
-struct TaskLocation {
-    path: PathBuf,
-    range: Range<usize>,
-    content: String,
-    current_title: String,
-    current_body: String,
-    current_status: String,
-    current_level: usize,
-}
-
-/// Recursively collect all .org files in a directory tree.
-fn collect_org_files(path: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return files;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            files.extend(collect_org_files(&p));
-        } else if p.extension().map_or(false, |e| e == "org")
-            && p.file_name().unwrap_or_default() != "config.org"
-        {
-            files.push(p);
-        }
-    }
-    files
-}
-
-async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
-    let id_pattern = format!(":ID:       {id}");
-    let files = collect_org_files(std::path::Path::new(notes_path));
-
-    for path in files {
-        if path.file_name().unwrap_or_default() == "config.org" {
-            continue;
-        }
-
-        let content = fs::read_to_string(&path).await?;
-        if !content.contains(&id_pattern) {
-            continue;
-        }
-
-        // Parse to find the matching headline
-        let config = org::todo_keywords_config();
-        let org = config.parse(&content);
-        for headline in org.document().headlines() {
-            if let Some(props) = headline.properties() {
-                if props.get("ID").is_some_and(|v| v == id) {
-                    let range = headline.syntax().text_range();
-                    let usize_range =
-                        u32::from(range.start()) as usize..u32::from(range.end()) as usize;
-                    let current_status = headline
-                        .todo_keyword()
-                        .map(|k| k.to_string())
-                        .unwrap_or_else(|| "TODO".to_string());
-                    let current_title = headline.title_raw().trim().to_string();
-                    let current_level = headline.level();
-                    let current_body = body_from_headline(&headline);
-
-                    return Ok(TaskLocation {
-                        path,
-                        range: usize_range,
-                        content,
-                        current_title,
-                        current_body,
-                        current_status,
-                        current_level,
-                    });
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "Found ID {id} in {} but could not locate its headline",
-            path.display()
-        );
-    }
-
-    anyhow::bail!("Task with ID {id} not found in {notes_path}");
-}
-
-/// Find a task by UUID within a specific file (not across all notes).
-async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation> {
-    let id_pattern = format!(":ID:       {id}");
-    let content = fs::read_to_string(path)
-        .await
-        .with_context(|| format!("Cannot read file: {}", path.display()))?;
-
-    if !content.contains(&id_pattern) {
-        anyhow::bail!("Task with ID {id} not found in {}", path.display());
-    }
-
-    let config = org::todo_keywords_config();
-    let org = config.parse(&content);
-    for headline in org.document().headlines() {
-        if let Some(props) = headline.properties() {
-            if props.get("ID").is_some_and(|v| v == id) {
-                let range = headline.syntax().text_range();
-                let usize_range = u32::from(range.start()) as usize..u32::from(range.end()) as usize;
-                let current_status = headline
-                    .todo_keyword()
-                    .map(|k| k.to_string())
-                    .unwrap_or_else(|| "TODO".to_string());
-                let current_title = headline.title_raw().trim().to_string();
-                let current_level = headline.level();
-                let current_body = body_from_headline(&headline);
-
-                return Ok(TaskLocation {
-                    path: path.clone(),
-                    range: usize_range,
-                    content,
-                    current_title,
-                    current_body,
-                    current_status,
-                    current_level,
-                });
-            }
-        }
-    }
-
-    anyhow::bail!(
-        "Found ID {id} in {} but could not locate its headline",
-        path.display()
-    );
 }
 
 async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
@@ -294,7 +97,7 @@ pub async fn run_create(
 
     if let Some(project_name) = project {
         let project_path = find_or_create_project(notes_path, project_name).await?;
-        let headline = build_headline(&id, title, body, &status_upper, 1);
+        let headline = task::build_headline(&id, title, body, &status_upper, 1);
         let mut project_content = fs::read_to_string(&project_path).await?;
         if !project_content.ends_with('\n') {
             project_content.push('\n');
@@ -319,37 +122,6 @@ pub async fn run_create(
     Ok(())
 }
 
-/// Find a project file by ID (UUID property) or by exact filename match.
-/// Unlike `find_or_create_project`, this does NOT slugify the input.
-async fn find_project_file_by_id_or_name(notes_path: &str, project_ref: &str) -> Result<PathBuf> {
-    let mut dir = fs::read_dir(notes_path)
-        .await
-        .with_context(|| format!("Cannot read notes directory: {notes_path}"))?;
-
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-
-        // Skip non-org files
-        if path.extension().map_or(true, |e| e != "org") {
-            continue;
-        }
-
-        // Match by filename (exact or project-name suffix)
-        if file_name == project_ref || file_name.ends_with(&format!("--project-{}.org", project_ref)) {
-            return Ok(path);
-        }
-
-        // Match by ID (UUID property in the org file)
-        let content = fs::read_to_string(&path).await?;
-        if content.contains(&format!(":ID:       {project_ref}")) {
-            return Ok(path);
-        }
-    }
-
-    anyhow::bail!("Project '{project_ref}' not found by ID or filename");
-}
-
 pub async fn run_update(
     notes_path: &str,
     id: &str,
@@ -359,44 +131,13 @@ pub async fn run_update(
     project: Option<&str>,
     file_name: Option<&str>,
 ) -> Result<()> {
-    let location = if let Some(project_ref) = project {
-        let project_path = find_project_file_by_id_or_name(notes_path, project_ref).await?;
-        find_task_in_file(&project_path, id).await?
-    } else if let Some(fname) = file_name {
-        let path = std::path::Path::new(notes_path).join(fname);
-        match find_task_in_file(&path, id).await {
-            Ok(loc) => loc,
-            Err(_) => {
-                tracing::warn!(
-                    "Task {id} not found in expected file {fname}, searching all files"
-                );
-                find_task(notes_path, id).await?
-            }
-        }
-    } else {
-        find_task(notes_path, id).await?
-    };
-    let new_title = title.unwrap_or(&location.current_title);
-    let new_body = body.unwrap_or(&location.current_body);
-    let status = status.map(|s| s.to_uppercase());
-    let new_status = status.as_deref().unwrap_or(&location.current_status);
-
-    let new_headline = build_headline(id, new_title, new_body, new_status, location.current_level);
-    let new_content = format!(
-        "{before}{new_headline}{after}",
-        before = &location.content[..location.range.start],
-        after = &location.content[location.range.end..]
-    );
-    fs::write(&location.path, &new_content)
-        .await
-        .context("Failed to write updated task file")?;
-
+    task::update_task(notes_path, id, file_name, project, title, body, status).await?;
     println!("Task {id} updated");
     Ok(())
 }
 
 pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
-    let location = find_task(notes_path, id).await?;
+    let location = task::find_task(notes_path, id).await?;
 
     let before = &location.content[..location.range.start];
     let after = &location.content[location.range.end..];
@@ -691,7 +432,8 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None, None)            .await
+        run_update(&notes, &id, None, None, Some("DONE"), None, None)
+            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -712,7 +454,8 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, None)            .await
+        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, None)
+            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -740,7 +483,8 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None, None)            .await
+        run_update(&notes, &id, None, None, Some("DONE"), None, None)
+            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -1137,7 +881,7 @@ Milk, eggs
     }
 
     // -----------------------------------------------------------------------
-    // find_project_file_by_id_or_name
+    // find_project_file_by_id_or_name — now delegated to core::task
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -1148,7 +892,7 @@ Milk, eggs
         let path = dir.path().join("my-project.org");
         fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
 
-        let result = find_project_file_by_id_or_name(&notes, "my-project.org")
+        let result = task::find_project_file_by_id_or_name(&notes, "my-project.org")
             .await
             .unwrap();
         assert_eq!(result, path);
@@ -1162,7 +906,7 @@ Milk, eggs
         let path = dir.path().join("2026-06-01--project-my-project.org");
         fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
 
-        let result = find_project_file_by_id_or_name(&notes, "my-project")
+        let result = task::find_project_file_by_id_or_name(&notes, "my-project")
             .await
             .unwrap();
         assert_eq!(result, path);
@@ -1186,7 +930,7 @@ Milk, eggs
         )
         .unwrap();
 
-        let result = find_project_file_by_id_or_name(&notes, "proj-uuid-42")
+        let result = task::find_project_file_by_id_or_name(&notes, "proj-uuid-42")
             .await
             .unwrap();
         assert_eq!(result, path);
@@ -1197,7 +941,7 @@ Milk, eggs
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = find_project_file_by_id_or_name(&notes, "nonexistent").await;
+        let result = task::find_project_file_by_id_or_name(&notes, "nonexistent").await;
         assert!(result.is_err());
     }
 
@@ -1213,12 +957,12 @@ Milk, eggs
         )
         .unwrap();
 
-        let result = find_project_file_by_id_or_name(&notes, "project-1").await;
+        let result = task::find_project_file_by_id_or_name(&notes, "project-1").await;
         assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------
-    // find_task_in_file
+    // find_task_in_file — now delegated to core::task
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -1248,7 +992,7 @@ Investigate the redirect
         )
         .unwrap();
 
-        let location = find_task_in_file(&path, "task-1").await.unwrap();
+        let location = task::find_task_in_file(&path, "task-1").await.unwrap();
         assert_eq!(location.current_title, "Fix login");
         assert_eq!(location.current_status, "TODO");
         assert!(location.current_body.contains("Investigate the redirect"));
@@ -1269,7 +1013,7 @@ Investigate the redirect
         )
         .unwrap();
 
-        let result = find_task_in_file(&path, "nonexistent").await;
+        let result = task::find_task_in_file(&path, "nonexistent").await;
         assert!(result.is_err());
     }
 
@@ -1279,7 +1023,7 @@ Investigate the redirect
         let path = dir.path().join("empty.org");
         fs::write(&path, "").unwrap();
 
-        let result = find_task_in_file(&path, "task-1").await;
+        let result = task::find_task_in_file(&path, "task-1").await;
         assert!(result.is_err());
     }
 
@@ -1305,7 +1049,8 @@ Investigate the redirect
 
         // Update using --project with filename
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), None)            .await
+        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), None)
+            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1337,7 +1082,8 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), None)            .await
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), None)
+            .await
             .unwrap();
 
         let config = parsing_config();

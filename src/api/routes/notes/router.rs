@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::public;
 use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
-use crate::cli::task;
+use crate::core::task as core_task;
 use crate::search::aql;
 use crate::search::index_all;
 use crate::search::search_notes;
@@ -126,11 +126,10 @@ async fn update_note(
             .into_response());
     }
 
-    task::run_update(&notes_path, &id, None, None, Some(&body.status), None, Some(&note.file_name))
-        .await?;
+    let file_path = std::path::PathBuf::from(&notes_path).join(&note.file_name);
+    core_task::update_task_in_file(&file_path, &id, None, None, Some(&body.status)).await?;
 
     // Re-index only the file that was modified
-    let file_path = std::path::PathBuf::from(&notes_path).join(&note.file_name);
     index_all(&db, &index_path, &notes_path, true, true, Some(vec![file_path])).await?;
 
     // Re-fetch to return the indexed state
