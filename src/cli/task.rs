@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::core::task;
+use crate::core::orgmode;
 use crate::org;
 
 fn slugify(s: &str) -> Result<String> {
@@ -97,7 +97,7 @@ pub async fn run_create(
 
     if let Some(project_name) = project {
         let project_path = find_or_create_project(notes_path, project_name).await?;
-        let headline = task::build_headline(&id, title, body, &status_upper, 1);
+        let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
         let mut project_content = fs::read_to_string(&project_path).await?;
         if !project_content.ends_with('\n') {
             project_content.push('\n');
@@ -131,13 +131,13 @@ pub async fn run_update(
     project: Option<&str>,
     file_name: Option<&str>,
 ) -> Result<()> {
-    task::update_task(notes_path, id, file_name, project, title, body, status).await?;
+    orgmode::update_task(notes_path, id, file_name, project, title, body, status).await?;
     println!("Task {id} updated");
     Ok(())
 }
 
 pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
-    let location = task::find_task(notes_path, id).await?;
+    let location = orgmode::find_task(notes_path, id).await?;
 
     let before = &location.content[..location.range.start];
     let after = &location.content[location.range.end..];
@@ -892,7 +892,7 @@ Milk, eggs
         let path = dir.path().join("my-project.org");
         fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
 
-        let result = task::find_project_file_by_id_or_name(&notes, "my-project.org")
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project.org")
             .await
             .unwrap();
         assert_eq!(result, path);
@@ -906,7 +906,7 @@ Milk, eggs
         let path = dir.path().join("2026-06-01--project-my-project.org");
         fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
 
-        let result = task::find_project_file_by_id_or_name(&notes, "my-project")
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project")
             .await
             .unwrap();
         assert_eq!(result, path);
@@ -930,7 +930,7 @@ Milk, eggs
         )
         .unwrap();
 
-        let result = task::find_project_file_by_id_or_name(&notes, "proj-uuid-42")
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "proj-uuid-42")
             .await
             .unwrap();
         assert_eq!(result, path);
@@ -941,7 +941,7 @@ Milk, eggs
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = task::find_project_file_by_id_or_name(&notes, "nonexistent").await;
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "nonexistent").await;
         assert!(result.is_err());
     }
 
@@ -957,12 +957,12 @@ Milk, eggs
         )
         .unwrap();
 
-        let result = task::find_project_file_by_id_or_name(&notes, "project-1").await;
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "project-1").await;
         assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------
-    // find_task_in_file — now delegated to core::task
+    // find_task_in_file — now delegated to core::orgmode
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -992,7 +992,7 @@ Investigate the redirect
         )
         .unwrap();
 
-        let location = task::find_task_in_file(&path, "task-1").await.unwrap();
+        let location = orgmode::find_task_in_file(&path, "task-1").await.unwrap();
         assert_eq!(location.current_title, "Fix login");
         assert_eq!(location.current_status, "TODO");
         assert!(location.current_body.contains("Investigate the redirect"));
@@ -1013,7 +1013,7 @@ Investigate the redirect
         )
         .unwrap();
 
-        let result = task::find_task_in_file(&path, "nonexistent").await;
+        let result = orgmode::find_task_in_file(&path, "nonexistent").await;
         assert!(result.is_err());
     }
 
@@ -1023,7 +1023,7 @@ Investigate the redirect
         let path = dir.path().join("empty.org");
         fs::write(&path, "").unwrap();
 
-        let result = task::find_task_in_file(&path, "task-1").await;
+        let result = orgmode::find_task_in_file(&path, "task-1").await;
         assert!(result.is_err());
     }
 
