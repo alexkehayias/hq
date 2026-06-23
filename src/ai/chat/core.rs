@@ -46,16 +46,6 @@ pub struct Chat {
     // TODO: Permissions
 }
 
-/// The outcome of running the middleware chain.
-enum MiddlewareOutcome {
-    /// Proceed with normal tool call execution.
-    Proceed,
-    /// Stop the chat with modifications and an error.
-    Stop(Vec<Message>, Error),
-    /// Reject the pending tool calls with tool call response messages.
-    Reject(Vec<Message>),
-}
-
 impl Chat {
     async fn handle_tool_call(
         tools: &Vec<BoxedToolCall>,
@@ -200,24 +190,19 @@ impl Chat {
             .collect()
     }
 
-    /// Run the middleware chain. Returns the outcome: proceed with tool
-    /// execution, stop with an error, or reject tool calls.
+    /// Run the middleware chain. Returns the first non-`Continue` action,
+    /// or `Continue` if all middleware continued.
     async fn run_middleware(
         middleware: &[Box<dyn ToolCallMiddleware>],
         transcript: &[Message],
-    ) -> Result<MiddlewareOutcome> {
+    ) -> Result<MiddlewareAction> {
         for mw in middleware {
             match mw.before_tool_calls(transcript).await? {
                 MiddlewareAction::Continue => {}
-                MiddlewareAction::StopWithError(err) => {
-                    return Ok(MiddlewareOutcome::Stop(vec![], err))
-                }
-                MiddlewareAction::Reject(msgs) => {
-                    return Ok(MiddlewareOutcome::Reject(msgs));
-                }
+                other => return Ok(other),
             }
         }
-        Ok(MiddlewareOutcome::Proceed)
+        Ok(MiddlewareAction::Continue)
     }
 
     /// Runs the next turn in chat by passing a transcript to the LLM for
@@ -256,7 +241,7 @@ impl Chat {
 
             // Run middleware before executing tool calls
             match Self::run_middleware(middleware, &updated_history).await? {
-                MiddlewareOutcome::Proceed => {
+                MiddlewareAction::Continue => {
                     let tools_ref = tools
                         .as_ref()
                         .expect("Received tool call but no tools were specified");
@@ -267,14 +252,10 @@ impl Chat {
                         updated_history.push(m);
                     }
                 }
-                MiddlewareOutcome::Stop(modifications, err) => {
-                    for m in modifications {
-                        messages.push(m.clone());
-                        updated_history.push(m);
-                    }
+                MiddlewareAction::StopWithError(err) => {
                     return Err(err);
                 }
-                MiddlewareOutcome::Reject(rejection_msgs) => {
+                MiddlewareAction::Reject(rejection_msgs) => {
                     for m in rejection_msgs {
                         messages.push(m.clone());
                         updated_history.push(m);
@@ -335,7 +316,7 @@ impl Chat {
 
             // Run middleware before executing tool calls
             match Self::run_middleware(middleware, &updated_history).await? {
-                MiddlewareOutcome::Proceed => {
+                MiddlewareAction::Continue => {
                     let tools_ref = tools
                         .as_ref()
                         .expect("Received tool call but no tools were specified");
@@ -347,14 +328,10 @@ impl Chat {
                         updated_history.push(m);
                     }
                 }
-                MiddlewareOutcome::Stop(modifications, err) => {
-                    for m in modifications {
-                        messages.push(m.clone());
-                        updated_history.push(m);
-                    }
+                MiddlewareAction::StopWithError(err) => {
                     return Err(err);
                 }
-                MiddlewareOutcome::Reject(rejection_msgs) => {
+                MiddlewareAction::Reject(rejection_msgs) => {
                     for m in rejection_msgs {
                         messages.push(m.clone());
                         updated_history.push(m);
