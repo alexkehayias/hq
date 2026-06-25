@@ -71,7 +71,7 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<FunctionCall>>,
+    pub tool_calls: Option<Vec<FunctionCall>>,
 }
 
 impl Message {

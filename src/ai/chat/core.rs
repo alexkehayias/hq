@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::db::{get_or_create_session, insert_chat_message};
 use super::models::{SessionMode, Transcript};
+use crate::ai::chat::middleware::{MiddlewareAction, ToolCallMiddleware};
 use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::skills::{
     ListSkillsTool, LoadSkillTool, ReadSkillFileTool, SaveSkillTool, SearchSkillsTool,
@@ -39,6 +40,7 @@ pub struct Chat {
     transcript: Transcript,
     pub session_id: Option<String>,
     tags: Option<Vec<String>>,
+    middleware: Vec<Box<dyn ToolCallMiddleware>>,
     // TODO: Skills
     // TODO: MCP
     // TODO: Permissions
@@ -47,18 +49,11 @@ pub struct Chat {
 impl Chat {
     async fn handle_tool_call(
         tools: &Vec<BoxedToolCall>,
-        tool_call: &Value,
-    ) -> Result<Vec<Message>, Error> {
-        let tool_call_id = &tool_call["id"]
-            .as_str()
-            .ok_or(anyhow!("Tool call missing ID: {}", tool_call))?;
-        let tool_call_function = &tool_call["function"];
-        let tool_call_args = tool_call_function["arguments"]
-            .as_str()
-            .ok_or(anyhow!("Tool call missing arguments: {}", tool_call))?;
-        let tool_call_name = tool_call_function["name"]
-            .as_str()
-            .ok_or(anyhow!("Tool call missing name: {}", tool_call))?;
+        tool_call: &FunctionCall,
+    ) -> Result<Message, Error> {
+        let tool_call_name = &tool_call.function.name;
+        let tool_call_args = &tool_call.function.arguments;
+        let tool_call_id = &tool_call.id;
 
         tracing::debug!(
             "\nTool call: {}\nargs: {}",
@@ -90,25 +85,12 @@ impl Chat {
         // file and change the response text to a summary that points
         // to the file to use other tools to inspect if needed.
 
-        let tool_call_request = vec![FunctionCall {
-            function: FunctionCallFn {
-                arguments: tool_call_args.to_string(),
-                name: tool_call_name.to_string(),
-            },
-            id: tool_call_id.to_string(),
-            r#type: String::from("function"),
-        }];
-        let results = vec![
-            Message::new_tool_call_request(tool_call_request),
-            Message::new_tool_call_response(&tool_call_result, tool_call_id),
-        ];
-
-        Ok(results)
+        Ok(Message::new_tool_call_response(&tool_call_result, tool_call_id))
     }
 
     async fn handle_tool_calls(
         tools: &Vec<BoxedToolCall>,
-        tool_calls: &[Value],
+        tool_calls: &[FunctionCall],
     ) -> Result<Vec<Message>, Error> {
         // Run each tool call concurrently and return them in order. I'm
         // not sure if ordering really matters for OpenAI compatible API
@@ -120,9 +102,7 @@ impl Chat {
         let futures = tool_calls
             .iter()
             .map(|call| Self::handle_tool_call(tools, call));
-        // Flatten the results to match what the API is expecting.
-        let results = try_join_all(futures).await?.into_iter().flatten().collect();
-        Ok(results)
+        try_join_all(futures).await
     }
 
     /// The inner chat loop that handles sending and receiving the
@@ -144,6 +124,7 @@ impl Chat {
                 &self.api_hostname,
                 &self.api_key,
                 &self.model,
+                &self.middleware,
             )
             .await?
         } else {
@@ -153,6 +134,7 @@ impl Chat {
                 &self.api_hostname,
                 &self.api_key,
                 &self.model,
+                &self.middleware,
             )
             .await?
         };
@@ -186,6 +168,43 @@ impl Chat {
         Ok(messages)
     }
 
+    /// Parse raw JSON tool calls from the API response into typed
+    /// `FunctionCall` structs.
+    fn parse_tool_calls(tool_calls: &[Value]) -> Vec<FunctionCall> {
+        tool_calls
+            .iter()
+            .map(|tc| {
+                let function = &tc["function"];
+                FunctionCall {
+                    function: FunctionCallFn {
+                        arguments: function["arguments"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: function["name"].as_str().unwrap_or_default().to_string(),
+                    },
+                    id: tc["id"].as_str().unwrap_or_default().to_string(),
+                    r#type: "function".to_string(),
+                }
+            })
+            .collect()
+    }
+
+    /// Run the middleware chain. Returns the first non-`Continue` action,
+    /// or `Continue` if all middleware continued.
+    async fn run_middleware(
+        middleware: &[Box<dyn ToolCallMiddleware>],
+        transcript: &[Message],
+    ) -> MiddlewareAction {
+        for mw in middleware {
+            match mw.before_tool_calls(transcript).await {
+                MiddlewareAction::Continue => {}
+                other => return other,
+            }
+        }
+        MiddlewareAction::Continue
+    }
+
     /// Runs the next turn in chat by passing a transcript to the LLM for
     /// the next response. Can return multiple messages when there are
     /// tool calls.
@@ -195,6 +214,7 @@ impl Chat {
         api_hostname: &str,
         api_key: &str,
         model: &str,
+        middleware: &[Box<dyn ToolCallMiddleware>],
     ) -> Result<Vec<Message>, Error> {
         let history = transcript.messages();
         let mut updated_history = history.to_owned();
@@ -208,17 +228,43 @@ impl Chat {
                 break;
             }
 
-            let tools_ref = tools
-                .as_ref()
-                .expect("Received tool call but no tools were specified");
+            // Parse tool calls into typed structs immediately so
+            // middleware and tool handling always operate on `Message`
+            // and `FunctionCall` types, not raw JSON `Value`.
+            let calls = Self::parse_tool_calls(tool_calls);
 
-            let tool_call_msgs = Self::handle_tool_calls(tools_ref, tool_calls).await?;
-            for m in tool_call_msgs.into_iter() {
-                messages.push(m.clone());
-                updated_history.push(m);
+            // Build the tool call request message and add to transcript
+            // before middleware runs, so middleware sees the full picture.
+            let tool_call_msg = Message::new_tool_call_request(calls.clone());
+            messages.push(tool_call_msg.clone());
+            updated_history.push(tool_call_msg);
+
+            // Run middleware before executing tool calls
+            match Self::run_middleware(middleware, &updated_history).await {
+                MiddlewareAction::Continue => {
+                    let tools_ref = tools
+                        .as_ref()
+                        .expect("Received tool call but no tools were specified");
+
+                    let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
+                    for m in tool_call_msgs.into_iter() {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
+                }
+                MiddlewareAction::StopWithError(err) => {
+                    return Err(err);
+                }
+                MiddlewareAction::Reject(rejection_msgs) => {
+                    for m in rejection_msgs {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
+                }
             }
 
-            // Provide the results of the tool calls back to the chat
+            // Provide the results of the tool calls (or rejections) back
+            // to the chat
             resp = completion(&updated_history, tools, api_hostname, api_key, model).await?;
         }
 
@@ -242,6 +288,7 @@ impl Chat {
         api_hostname: &str,
         api_key: &str,
         model: &str,
+        middleware: &[Box<dyn ToolCallMiddleware>],
     ) -> Result<Vec<Message>, Error> {
         let history = transcript.messages();
         let mut updated_history = history.to_owned();
@@ -255,18 +302,45 @@ impl Chat {
             if tool_calls.is_empty() {
                 break;
             }
-            let tools_ref = tools
-                .as_ref()
-                .expect("Received tool call but no tools were specified");
 
-            // TODO: Update this to be streaming
-            let tool_call_msgs = Self::handle_tool_calls(tools_ref, tool_calls).await?;
-            for m in tool_call_msgs.into_iter() {
-                messages.push(m.clone());
-                updated_history.push(m);
+            // Parse tool calls into typed structs immediately so
+            // middleware and tool handling always operate on `Message`
+            // and `FunctionCall` types, not raw JSON `Value`.
+            let calls = Self::parse_tool_calls(tool_calls);
+
+            // Build the tool call request message and add to transcript
+            // before middleware runs, so middleware sees the full picture.
+            let tool_call_msg = Message::new_tool_call_request(calls.clone());
+            messages.push(tool_call_msg.clone());
+            updated_history.push(tool_call_msg);
+
+            // Run middleware before executing tool calls
+            match Self::run_middleware(middleware, &updated_history).await {
+                MiddlewareAction::Continue => {
+                    let tools_ref = tools
+                        .as_ref()
+                        .expect("Received tool call but no tools were specified");
+
+                    // TODO: Update this to be streaming
+                    let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
+                    for m in tool_call_msgs.into_iter() {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
+                }
+                MiddlewareAction::StopWithError(err) => {
+                    return Err(err);
+                }
+                MiddlewareAction::Reject(rejection_msgs) => {
+                    for m in rejection_msgs {
+                        messages.push(m.clone());
+                        updated_history.push(m);
+                    }
+                }
             }
 
-            // Provide the results of the tool calls back to the chat
+            // Provide the results of the tool calls (or rejections) back
+            // to the chat
             resp = completion_stream(
                 tx.clone(),
                 &updated_history,
@@ -300,6 +374,7 @@ pub struct ChatBuilder {
     streaming: bool,
     tx: Option<mpsc::UnboundedSender<String>>,
     tags: Option<Vec<String>>,
+    middleware: Vec<Box<dyn ToolCallMiddleware>>,
 }
 
 impl ChatBuilder {
@@ -317,6 +392,7 @@ impl ChatBuilder {
             tools: None,
             streaming: false,
             tags: None,
+            middleware: Vec::new(),
         }
     }
 
@@ -332,6 +408,7 @@ impl ChatBuilder {
             transcript: self.transcript,
             session_id: self.session_id,
             tags: self.tags,
+            middleware: self.middleware,
         }
     }
 
@@ -370,6 +447,16 @@ impl ChatBuilder {
 
     pub fn tools(mut self, tools: Vec<BoxedToolCall>) -> Self {
         self.tools = Some(tools);
+        self
+    }
+
+    /// Add tool call middleware.
+    ///
+    /// Middleware runs before each batch of tool calls in order of
+    /// registration. If any middleware returns `StopWithError`, the
+    /// remaining middleware is skipped and the chat returns the error.
+    pub fn middleware(mut self, middleware: Vec<Box<dyn ToolCallMiddleware>>) -> Self {
+        self.middleware = middleware;
         self
     }
 
@@ -441,6 +528,7 @@ impl ChatBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::chat::InfiniteLoopDetector;
     use crate::openai::{Message, Role};
     use tokio::sync::mpsc;
 
@@ -1082,6 +1170,383 @@ data: [DONE]
         assert_eq!(
             tool_response.content.as_ref().unwrap(),
             "Website is temporarily unavailable (HTTP 503). Try again later."
+        );
+    }
+
+    // --- Middleware integration tests ---
+
+    /// A mock middleware that always stops with an error.
+    struct StopMiddleware;
+    #[async_trait::async_trait]
+    impl ToolCallMiddleware for StopMiddleware {
+        async fn before_tool_calls(
+            &self,
+            _transcript: &[Message],
+        ) -> MiddlewareAction {
+            MiddlewareAction::StopWithError(anyhow!(
+                "Middleware stopped"
+            ))
+        }
+    }
+
+    /// A mock middleware that always continues.
+    struct ContinueMiddleware;
+    #[async_trait::async_trait]
+    impl ToolCallMiddleware for ContinueMiddleware {
+        async fn before_tool_calls(
+            &self,
+            _transcript: &[Message],
+        ) -> MiddlewareAction {
+            MiddlewareAction::Continue
+        }
+    }
+
+    #[tokio::test]
+    async fn test_builder_middleware() {
+        let mw: Vec<Box<dyn ToolCallMiddleware>> =
+            vec![Box::new(StopMiddleware)];
+
+        let builder =
+            ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
+                .middleware(mw);
+
+        assert_eq!(builder.middleware.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_middleware_continues_does_not_interfere() {
+        let mut server = mockito::Server::new_async().await;
+
+        let response_body = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!"
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response_body)
+            .create();
+
+        let url = server.url();
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .middleware(vec![Box::new(ContinueMiddleware)])
+            .build();
+
+        let msg = Message::new(Role::User, "Hi");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].content.as_ref().unwrap(),
+            "Hello!"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_middleware_stops_tool_calls() {
+        let mut server = mockito::Server::new_async().await;
+
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "mock_tool",
+                            "arguments": "{\"query\":\"test\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("mock result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .tools(tools)
+            .middleware(vec![Box::new(StopMiddleware)])
+            .build();
+
+        let msg = Message::new(Role::User, "Search");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Middleware stopped"),
+            "Expected 'Middleware stopped', got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_middleware_chain_stops_at_first_error() {
+        let mut server = mockito::Server::new_async().await;
+
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "mock_tool",
+                            "arguments": "{}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .tools(tools)
+            .middleware(vec![
+                Box::new(ContinueMiddleware),
+                Box::new(StopMiddleware),
+            ])
+            .build();
+
+        let msg = Message::new(Role::User, "Search");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Middleware stopped"),
+            "Expected 'Middleware stopped', got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_infinite_loop_detector_integration() {
+        let mut server = mockito::Server::new_async().await;
+
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "mock_tool",
+                            "arguments": "{\"query\":\"test\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        // After rejection, the model responds with a normal message
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I see the tool is looping. Let me try a different approach."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let _mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+        let _mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+        let _mock3 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+        let _mock4 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("same result every time".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+        let detector = InfiniteLoopDetector::new(3);
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .tools(tools)
+            .middleware(vec![Box::new(detector)])
+            .build();
+
+        let msg = Message::new(Role::User, "Keep searching");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_ok(), "Expected OK (model recovers from rejection), got: {:?}", result.err());
+        let messages = result.unwrap();
+        // Messages should include:
+        // 1. Tool call request (iter 1)
+        // 2. Tool call response (iter 1)
+        // 3. Tool call request (iter 2)
+        // 4. Tool call response (iter 2)
+        // 5. Tool call request (iter 3)
+        // 6. Tool call rejection response
+        // 7. Final assistant content
+        assert_eq!(messages.len(), 7);
+        // The rejection response should contain the loop detection message
+        let rejection = &messages[5];
+        assert_eq!(*rejection.role(), crate::openai::Role::Tool);
+        assert!(
+            rejection.content.as_ref().unwrap().contains("Tool call rejected due to infinite loop"),
+            "Expected rejection message, got: {:?}",
+            rejection.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_middleware_streaming_stops_tool_calls() {
+        let mut server = mockito::Server::new_async().await;
+
+        let sse_tool_call = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_abc123","index":0,"function":{"name":"mock_tool","arguments":"{}"},"type":"function"}]},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .streaming(tx)
+            .tools(tools)
+            .middleware(vec![Box::new(StopMiddleware)])
+            .build();
+
+        let msg = Message::new(Role::User, "Search");
+        let result = chat.next_msg(msg).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Middleware stopped"),
+            "Expected 'Middleware stopped', got: {}",
+            err
         );
     }
 }
