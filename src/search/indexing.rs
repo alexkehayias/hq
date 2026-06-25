@@ -1,7 +1,5 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::hash::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -70,7 +68,7 @@ struct Note {
 }
 
 /// Parse the content into a `Note`
-fn parse_note(content: &str) -> Note {
+fn parse_note(content: &str) -> Result<Note> {
     let config = crate::org::todo_keywords_config();
     let p = config.parse(content);
     let d = p.document();
@@ -135,24 +133,12 @@ fn parse_note(content: &str) -> Note {
         };
         let title = i.title_raw().trim().to_string();
 
-        // Tasks sometimes don't have an org-id.
-        let mut hasher = DefaultHasher::new();
-        title.hash(&mut hasher);
-        let default_id = hasher.finish().to_string();
-
-        // Note: Can't use a question mark operator as that
-        // will cause an early return rather than handling the
-        // case where properties don't exist
-        let task_properties = i.properties();
-        let id = if let Some(task_props) = task_properties {
-            // Properties might exist but the ID might be missing
-            task_props
-                .get("ID")
-                .map(|j| j.to_string())
-                .unwrap_or(default_id)
-        } else {
-            default_id
-        };
+        let id = i
+            .properties()
+            .with_context(|| format!("Missing property drawer for heading: {}", title))?
+            .get("ID")
+            .with_context(|| format!("Missing org-id for heading: {}", title))?
+            .to_string();
 
         let mut plain_text = MarkdownExport::default();
         plain_text.render(i.syntax());
@@ -246,7 +232,7 @@ fn parse_note(content: &str) -> Note {
         headings.push(heading);
     }
 
-    Note {
+    Ok(Note {
         id: note_id,
         title: note_title,
         category: note_category,
@@ -255,7 +241,7 @@ fn parse_note(content: &str) -> Note {
         tasks,
         meetings,
         headings,
-    }
+    })
 }
 
 #[derive(Serialize, Deserialize)]
@@ -577,7 +563,9 @@ pub async fn index_all(
         let content = fs::read_to_string(&p)
             .await
             .unwrap_or_else(|err| panic!("Error {} file: {:?}", err, p));
-        let note = Arc::new(parse_note(&content));
+        let note = Arc::new(parse_note(&content).with_context(|| {
+            format!("Failed to parse note: {:?}", p)
+        })?);
         let note_id = note.id.clone();
         let note_body = note.body.clone();
         let embeddings_model = Arc::clone(&embeddings_model);

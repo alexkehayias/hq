@@ -15,7 +15,10 @@ pub async fn get_note_by_id(
             id,
             title,
             body,
-            tags
+            tags,
+            type,
+            status,
+            file_name
           FROM note_meta
           WHERE id = ?1
         ",
@@ -27,6 +30,9 @@ pub async fn get_note_by_id(
                         title: row.get(1)?,
                         body: row.get(2)?,
                         tags: row.get(3)?,
+                        r#type: row.get(4)?,
+                        status: row.get(5)?,
+                        file_name: row.get(6)?,
                     })
                 })
             });
