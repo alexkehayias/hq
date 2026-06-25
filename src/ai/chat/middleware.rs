@@ -1,5 +1,5 @@
 use crate::openai::{Message, Role};
-use anyhow::{Error, Result};
+use anyhow::Error;
 use async_trait::async_trait;
 
 /// The action a middleware wants to take after inspecting the transcript.
@@ -31,7 +31,7 @@ pub trait ToolCallMiddleware: Send + Sync {
     async fn before_tool_calls(
         &self,
         transcript: &[Message],
-    ) -> Result<MiddlewareAction>;
+    ) -> MiddlewareAction;
 }
 
 /// Detects when the LLM repeatedly calls the same tool with the same
@@ -57,7 +57,7 @@ impl ToolCallMiddleware for InfiniteLoopDetector {
     async fn before_tool_calls(
         &self,
         transcript: &[Message],
-    ) -> Result<MiddlewareAction> {
+    ) -> MiddlewareAction {
         // Extract all tool call (name, args) pairs from assistant messages
         let tool_calls: Vec<(String, String)> = transcript
             .iter()
@@ -102,11 +102,11 @@ impl ToolCallMiddleware for InfiniteLoopDetector {
                     })
                     .unwrap_or_default();
 
-                return Ok(MiddlewareAction::Reject(rejection_msgs));
+                return MiddlewareAction::Reject(rejection_msgs);
             }
         }
 
-        Ok(MiddlewareAction::Continue)
+        MiddlewareAction::Continue
     }
 }
 
@@ -129,7 +129,7 @@ mod tests {
                 r#type: "function".into(),
             }]),
         ];
-        let action = detector.before_tool_calls(&transcript).await.unwrap();
+        let action = detector.before_tool_calls(&transcript).await;
         assert!(matches!(action, MiddlewareAction::Continue));
     }
 
@@ -159,7 +159,7 @@ mod tests {
             Message::new_tool_call_request(vec![tool_call()]),
         ];
 
-        let action = detector.before_tool_calls(&transcript).await.unwrap();
+        let action = detector.before_tool_calls(&transcript).await;
         assert!(matches!(action, MiddlewareAction::Reject(_)));
     }
 
@@ -193,7 +193,7 @@ mod tests {
             Message::new_tool_call_request(vec![tool_call_1.clone()]),
         ];
 
-        let action = detector.before_tool_calls(&transcript).await.unwrap();
+        let action = detector.before_tool_calls(&transcript).await;
         assert!(matches!(action, MiddlewareAction::Continue));
     }
 
@@ -217,7 +217,7 @@ mod tests {
             Message::new_tool_call_request(vec![tool_call()]),
         ];
 
-        let action = detector.before_tool_calls(&transcript).await.unwrap();
+        let action = detector.before_tool_calls(&transcript).await;
         // Only 2 repeats, threshold is 3 — should continue
         assert!(matches!(action, MiddlewareAction::Continue));
     }
@@ -242,7 +242,7 @@ mod tests {
             Message::new_tool_call_request(vec![tool_call()]),
         ];
 
-        let action = detector.before_tool_calls(&transcript).await.unwrap();
+        let action = detector.before_tool_calls(&transcript).await;
         match action {
             MiddlewareAction::Reject(msgs) => {
                 assert!(!msgs.is_empty());

@@ -195,14 +195,14 @@ impl Chat {
     async fn run_middleware(
         middleware: &[Box<dyn ToolCallMiddleware>],
         transcript: &[Message],
-    ) -> Result<MiddlewareAction> {
+    ) -> MiddlewareAction {
         for mw in middleware {
-            match mw.before_tool_calls(transcript).await? {
+            match mw.before_tool_calls(transcript).await {
                 MiddlewareAction::Continue => {}
-                other => return Ok(other),
+                other => return other,
             }
         }
-        Ok(MiddlewareAction::Continue)
+        MiddlewareAction::Continue
     }
 
     /// Runs the next turn in chat by passing a transcript to the LLM for
@@ -240,7 +240,7 @@ impl Chat {
             updated_history.push(tool_call_msg);
 
             // Run middleware before executing tool calls
-            match Self::run_middleware(middleware, &updated_history).await? {
+            match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
                     let tools_ref = tools
                         .as_ref()
@@ -315,7 +315,7 @@ impl Chat {
             updated_history.push(tool_call_msg);
 
             // Run middleware before executing tool calls
-            match Self::run_middleware(middleware, &updated_history).await? {
+            match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
                     let tools_ref = tools
                         .as_ref()
@@ -1182,10 +1182,10 @@ data: [DONE]
         async fn before_tool_calls(
             &self,
             _transcript: &[Message],
-        ) -> Result<MiddlewareAction> {
-            Ok(MiddlewareAction::StopWithError(anyhow!(
+        ) -> MiddlewareAction {
+            MiddlewareAction::StopWithError(anyhow!(
                 "Middleware stopped"
-            )))
+            ))
         }
     }
 
@@ -1196,8 +1196,8 @@ data: [DONE]
         async fn before_tool_calls(
             &self,
             _transcript: &[Message],
-        ) -> Result<MiddlewareAction> {
-            Ok(MiddlewareAction::Continue)
+        ) -> MiddlewareAction {
+            MiddlewareAction::Continue
         }
     }
 
