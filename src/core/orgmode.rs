@@ -2,11 +2,13 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use chrono::Local;
 use orgize::export::{Container, Event, TraversalContext, Traverser};
 use orgize::rowan::ast::AstNode;
 use orgize::SyntaxElement;
 use regex::Regex;
 use tokio::fs;
+use uuid::Uuid;
 
 use crate::org;
 
@@ -326,4 +328,82 @@ pub async fn update_task(
         .context("Failed to write updated task file")?;
 
     Ok(())
+}
+
+fn slugify(s: &str) -> Result<String> {
+    let slug: String = s
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == ' ' {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join("-")
+        .trim_matches('-')
+        .to_string();
+    if slug.is_empty() {
+        anyhow::bail!("Cannot slugify empty string: input produced no valid characters");
+    }
+    Ok(slug)
+}
+
+/// Build a full org-mode document string for a standalone task.
+pub fn build_document(id: &str, title: &str, body: &str, status: &str) -> String {
+    let headline = org::Headline::builder()
+        .level(1)
+        .status(status)
+        .title(title)
+        .property("ID", id);
+    let headline = if !body.is_empty() {
+        headline.body(body)
+    } else {
+        headline
+    };
+    org::Document::builder()
+        .property("ID", id)
+        .title(title)
+        .filetags("task")
+        .headline(headline.build())
+        .build()
+        .to_string()
+}
+
+/// Find an existing project file by slug, or create a new one.
+pub async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
+    let slug = slugify(project_name)?;
+    let pattern = format!("--project-{slug}.org");
+
+    // Look for existing project file
+    let mut dir = fs::read_dir(notes_path).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        let path = entry.path();
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        if file_name.ends_with(&pattern) {
+            return Ok(path);
+        }
+    }
+
+    // Create new project file
+    let project_id = Uuid::new_v4().to_string();
+    let today = Local::now().format("%Y-%m-%d");
+    let filename = format!("{notes_path}/{today}--project-{slug}.org");
+
+    let content = org::Document::builder()
+        .property("ID", &project_id)
+        .title(project_name)
+        .category(&slug)
+        .date(&today.to_string())
+        .filetags("private project")
+        .build()
+        .to_string();
+    fs::write(&filename, &content)
+        .await
+        .context("Failed to create project file")?;
+    Ok(PathBuf::from(filename))
 }

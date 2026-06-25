@@ -30,60 +30,6 @@ fn slugify(s: &str) -> Result<String> {
     Ok(slug)
 }
 
-fn build_document(id: &str, title: &str, body: &str, status: &str) -> String {
-    let headline = org::Headline::builder()
-        .level(1)
-        .status(status)
-        .title(title)
-        .property("ID", id);
-    let headline = if !body.is_empty() {
-        headline.body(body)
-    } else {
-        headline
-    };
-    org::Document::builder()
-        .property("ID", id)
-        .title(title)
-        .filetags("task")
-        .headline(headline.build())
-        .build()
-        .to_string()
-}
-
-async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
-    let slug = slugify(project_name)?;
-    let pattern = format!("--project-{slug}.org");
-
-    // Look for existing project file
-    let mut dir = fs::read_dir(notes_path).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-        if file_name.ends_with(&pattern) {
-            return Ok(path);
-        }
-    }
-
-    // Create new project file
-    let project_id = Uuid::new_v4().to_string();
-    let today = Local::now().format("%Y-%m-%d");
-    let filename = format!("{notes_path}/{today}--project-{slug}.org");
-
-    let content = org::Document::builder()
-        .property("ID", &project_id)
-        .title(project_name)
-        .category(&slug)
-        .date(&today.to_string())
-        .filetags("private project")
-        .build()
-        .to_string();
-    fs::write(&filename, &content)
-        .await
-        .context("Failed to create project file")?;
-    println!("Created project file: {filename}");
-    Ok(PathBuf::from(filename))
-}
-
 pub async fn run_create(
     notes_path: &str,
     title: &str,
@@ -96,7 +42,8 @@ pub async fn run_create(
     let status_upper = status.to_uppercase();
 
     if let Some(project_name) = project {
-        let project_path = find_or_create_project(notes_path, project_name).await?;
+        let project_path = orgmode::find_or_create_project(notes_path, project_name).await?;
+        println!("Created project file: {}", project_path.display());
         let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
         let mut project_content = fs::read_to_string(&project_path).await?;
         if !project_content.ends_with('\n') {
@@ -112,7 +59,7 @@ pub async fn run_create(
         let slug = slugify(title)?;
         let today = Local::now().format("%Y-%m-%d");
         let filename = format!("{notes_path}/{today}--{slug}.org");
-        let content = build_document(&id, title, body, &status_upper);
+        let content = orgmode::build_document(&id, title, body, &status_upper);
         fs::write(&filename, &content)
             .await
             .context("Failed to write task file")?;
@@ -129,9 +76,8 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
-    file_name: Option<&str>,
 ) -> Result<()> {
-    orgmode::update_task(notes_path, id, file_name, project, title, body, status).await?;
+    orgmode::update_task(notes_path, id, None, project, title, body, status).await?;
     println!("Task {id} updated");
     Ok(())
 }
@@ -432,7 +378,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None, None)
+        run_update(&notes, &id, None, None, Some("DONE"), None)
             .await
             .unwrap();
 
@@ -454,7 +400,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, None)
+        run_update(&notes, &id, Some("New title"), Some("New body"), None, None)
             .await
             .unwrap();
 
@@ -483,7 +429,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None, None)
+        run_update(&notes, &id, None, None, Some("DONE"), None)
             .await
             .unwrap();
 
@@ -503,7 +449,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None, None).await;
+        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
         assert!(result.is_err());
     }
 
@@ -857,7 +803,7 @@ Milk, eggs
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let path = find_or_create_project(&notes, "my-project").await.unwrap();
+        let path = orgmode::find_or_create_project(&notes, "my-project").await.unwrap();
         assert!(path.exists());
         assert!(path.to_str().unwrap().contains("--project-my-project"));
 
@@ -874,8 +820,8 @@ Milk, eggs
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let path1 = find_or_create_project(&notes, "my-project").await.unwrap();
-        let path2 = find_or_create_project(&notes, "my-project").await.unwrap();
+        let path1 = orgmode::find_or_create_project(&notes, "my-project").await.unwrap();
+        let path2 = orgmode::find_or_create_project(&notes, "my-project").await.unwrap();
 
         assert_eq!(path1, path2, "should return the same existing file");
     }
@@ -1049,7 +995,7 @@ Investigate the redirect
 
         // Update using --project with filename
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), None)
+        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))
             .await
             .unwrap();
 
@@ -1082,7 +1028,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), None)
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id))
             .await
             .unwrap();
 
@@ -1125,7 +1071,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Try to update it scoped to the project — should fail
-        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), None).await;
+        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
         assert!(result.is_err(), "should not find standalone task in project file");
     }
 
@@ -1134,7 +1080,7 @@ Investigate the redirect
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), None).await;
+        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 }
