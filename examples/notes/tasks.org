@@ -5,8 +5,14 @@
 #+CATEGORY: tasks
 
 * Tasks
+:PROPERTIES:
+:ID:       example-tasks-h1
+:END:
 
 ** TODO Set up staging environment
+:PROPERTIES:
+:ID:       example-tasks-setup-staging
+:END:
 SCHEDULED: <2025-01-20>
 DEADLINE:  <2025-01-25>
 
@@ -14,12 +20,18 @@ Need to provision a new server and deploy the latest build.
 Coordinate with DevOps for DNS and SSL certificates.
 
 ** TODO Write API documentation
+:PROPERTIES:
+:ID:       example-tasks-api-docs
+:END:
 SCHEDULED: <2025-01-18>
 
 Document all REST endpoints with request/response examples.
 Include authentication requirements and rate limits.
 
 ** DONE Migrate legacy database
+:PROPERTIES:
+:ID:       example-tasks-migrate-db
+:END:
 CLOSED: <2025-01-10>
 SCHEDULED: <2025-01-05>
 DEADLINE:  <2025-01-12>
@@ -28,6 +40,9 @@ Migrated all user data from the old PostgreSQL instance to the new
 schema. Ran validation scripts to verify data integrity.
 
 ** TODO Review pull requests
+:PROPERTIES:
+:ID:       example-tasks-review-prs
+:END:
 SCHEDULED: <2025-01-19>
 
 Outstanding PRs needing review:
@@ -36,6 +51,9 @@ Outstanding PRs needing review:
 - refactor: extract validation logic (#144)
 
 ** DONE Set up monitoring alerts
+:PROPERTIES:
+:ID:       example-tasks-setup-monitoring
+:END:
 CLOSED: <2025-01-08>
 
 Configured PagerDuty integration with Grafana alerts for:

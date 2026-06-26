@@ -840,3 +840,37 @@ pub async fn index_chat_messages(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Verify that all example .org notes parse successfully.
+    ///
+    /// Every note must have a document-level property drawer with an :ID:,
+    /// and every headline must also have its own property drawer with an :ID:.
+    #[test]
+    fn test_example_notes_parse_successfully() {
+        let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/notes");
+        let mut tested = 0;
+
+        for entry in fs::read_dir(&examples_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().map_or(false, |e| e == "org") {
+                let content = fs::read_to_string(&path).unwrap();
+                let result = parse_note(&content);
+                assert!(
+                    result.is_ok(),
+                    "Failed to parse example note {:?}: {}",
+                    path.file_name().unwrap(),
+                    result.unwrap_err()
+                );
+                tested += 1;
+            }
+        }
+
+        assert!(tested > 0, "No .org files found in examples/notes/");
+    }
+}

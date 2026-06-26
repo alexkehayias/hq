@@ -6,25 +6,44 @@
 #+DATE: 2025-01-15
 
 ** Team Standup
+:PROPERTIES:
+:ID:       example-meeting-standup-2025-01-15-team-standup
+:END:
 
 Present: Alice, Bob, Charlie
 
 *** Alice
+:PROPERTIES:
+:ID:       example-meeting-standup-2025-01-15-alice
+:END:
+
 - Finished the API rate limiting feature
 - Starting on the dashboard UI this afternoon
 - Blocked on design review for the new endpoint
 
 *** Bob
+:PROPERTIES:
+:ID:       example-meeting-standup-2025-01-15-bob
+:END:
+
 - Database migration for the new schema is complete
 - Found a bug in the query optimizer, filed a ticket
 - Will pair with Charlie on the caching layer
 
 *** Charlie
+:PROPERTIES:
+:ID:       example-meeting-standup-2025-01-15-charlie
+:END:
+
 - Set up the CI/CD pipeline for staging
 - Need credentials for the new monitoring service
 - Documentation review for the release notes
 
 *** Action Items
+:PROPERTIES:
+:ID:       example-meeting-standup-2025-01-15-action-items
+:END:
+
 - TODO Alice: Schedule design review for Thursday
 - TODO Bob: File ticket for query optimizer bug
 - TODO Charlie: Request monitoring service access
