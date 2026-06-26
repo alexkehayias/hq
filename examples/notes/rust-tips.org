@@ -5,8 +5,14 @@
 #+CATEGORY: reference
 
 * Rust Tips and Patterns
+:PROPERTIES:
+:ID:       example-rust-tips-h1
+:END:
 
 ** Using Result with multiple error types
+:PROPERTIES:
+:ID:       example-rust-tips-result-error
+:END:
 
 When a function can fail for different reasons, use Box<dyn Error> or
 define a custom enum:
@@ -20,6 +26,9 @@ enum MyError {
 #+end_src
 
 ** Builder pattern for complex constructors
+:PROPERTIES:
+:ID:       example-rust-tips-builder-pattern
+:END:
 
 Use the builder pattern when a struct has many optional fields:
 
@@ -33,6 +42,9 @@ struct ConfigBuilder {
 #+end_src
 
 ** Async trait patterns
+:PROPERTIES:
+:ID:       example-rust-tips-async-patterns
+:END:
 
 - Prefer returning impl Future for library code
 - Use #[async_trait] for simplicity in application code
