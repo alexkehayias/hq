@@ -133,12 +133,19 @@ fn parse_note(content: &str) -> Result<Note> {
         };
         let title = i.title_raw().trim().to_string();
 
-        let id = i
+        let id = match i
             .properties()
-            .with_context(|| format!("Missing property drawer for heading: {}", title))?
-            .get("ID")
-            .with_context(|| format!("Missing org-id for heading: {}", title))?
-            .to_string();
+            .and_then(|p| p.get("ID"))
+        {
+            Some(id) => id.to_string(),
+            None => {
+                tracing::warn!(
+                    "Skipping heading with missing ID: '{}'",
+                    title
+                );
+                continue;
+            }
+        };
 
         let mut plain_text = MarkdownExport::default();
         plain_text.render(i.syntax());
