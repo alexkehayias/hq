@@ -37,18 +37,21 @@ pub async fn run(
         .await
         .expect("Failed to connect to async db");
 
+    let cache_dir = env::var("HQ_FASTEMBED_CACHE_DIR")
+        .unwrap_or_else(|_| ".fastembed_cache".to_string());
+
     if full_text {
-        index_all(&db, index_path, notes_path, true, false, None)
+        index_all(&db, index_path, notes_path, true, false, None, &cache_dir)
             .await
             .expect("Indexing failed");
     }
     if vector {
-        index_all(&db, index_path, notes_path, false, true, None)
+        index_all(&db, index_path, notes_path, false, true, None, &cache_dir)
             .await
             .expect("Indexing failed");
     }
     if all {
-        index_all(&db, index_path, notes_path, true, true, None)
+        index_all(&db, index_path, notes_path, true, true, None, &cache_dir)
             .await
             .expect("Indexing failed");
     }

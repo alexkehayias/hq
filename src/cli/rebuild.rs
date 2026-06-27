@@ -33,8 +33,11 @@ pub async fn run(index_path: &str, notes_path: &str, vec_db_path: &str) -> Resul
     recreate_index(index_path);
     println!("Finished recreating search index");
 
+    let cache_dir = std::env::var("HQ_FASTEMBED_CACHE_DIR")
+        .unwrap_or_else(|_| ".fastembed_cache".to_string());
+
     // Index everything
-    index_all(&db, index_path, notes_path, true, true, None)
+    index_all(&db, index_path, notes_path, true, true, None, &cache_dir)
         .await
         .expect("Indexing failed");
 

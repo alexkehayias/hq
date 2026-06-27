@@ -96,6 +96,7 @@ pub async fn search_similar_notes(
     db: &Connection,
     query: &aql::Expr,
     limit: usize,
+    cache_dir: &str,
 ) -> Result<Vec<SearchHit>> {
     // Extract the relevant text to use for similar search from the
     // AQL query. It's possible there is nothing to use for a
@@ -108,7 +109,9 @@ pub async fn search_similar_notes(
     }
 
     let embeddings_model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
+        InitOptions::new(EmbeddingModel::BGESmallENV15)
+            .with_show_download_progress(true)
+            .with_cache_dir(std::path::PathBuf::from(cache_dir)),
     )
     .unwrap();
     let query_vector = embeddings_model
@@ -164,6 +167,7 @@ pub async fn search_notes(
     truncate: bool,
     query: &aql::Expr,
     limit: usize,
+    cache_dir: &str,
 ) -> anyhow::Result<Vec<SearchResult>> {
     // The limit of search hits needs to be high enough here for broad
     // queries like `status:todo deadline:>2025-04-01` otherwise
@@ -174,7 +178,7 @@ pub async fn search_notes(
     // relevance
     let mut search_hits = fulltext_search(index_path, query, 10000).unwrap_or_else(|_| Vec::new());
     if include_similarity {
-        let mut vec_search_result = search_similar_notes(db, query, limit)
+        let mut vec_search_result = search_similar_notes(db, query, limit, cache_dir)
             .await
             .unwrap_or_default();
 

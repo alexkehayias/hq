@@ -29,11 +29,12 @@ async fn note_search(
 ) -> Result<axum::Json<public::SearchResponse>, crate::api::public::ApiError> {
     let raw_query = params.query;
     let query = aql::parse_query(&raw_query).expect("Parsing AQL failed");
-    let (db, index_path) = {
+    let (db, index_path, cache_dir) = {
         let shared_state = state.read().unwrap();
         (
             shared_state.db.clone(),
             shared_state.config.index_path.clone(),
+            shared_state.config.embedding_model_cache_dir.clone(),
         )
     };
 
@@ -44,6 +45,7 @@ async fn note_search(
         params.truncate,
         &query,
         params.limit,
+        &cache_dir,
     )
     .await?;
 
@@ -60,13 +62,14 @@ async fn note_search(
 async fn index_notes(
     State(state): State<SharedState>,
 ) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
-    let (a_db, index_path, notes_path, deploy_key_path) = {
+    let (a_db, index_path, notes_path, deploy_key_path, cache_dir) = {
         let shared_state = state.read().expect("Unable to read share state");
         (
             shared_state.db.clone(),
             shared_state.config.index_path.clone(),
             shared_state.config.notes_path.clone(),
             shared_state.config.deploy_key_path.clone(),
+            shared_state.config.embedding_model_cache_dir.clone(),
         )
     };
     tokio::spawn(async move {
@@ -77,7 +80,7 @@ async fn index_notes(
             .map(|f| std::path::PathBuf::from(format!("{}/{}", &notes_path, f)))
             .collect();
         let filter_paths = if paths.is_empty() { None } else { Some(paths) };
-        index_all(&a_db, &index_path, &notes_path, true, true, filter_paths)
+        index_all(&a_db, &index_path, &notes_path, true, true, filter_paths, &cache_dir)
             .await
             .unwrap();
     });
@@ -103,12 +106,13 @@ async fn update_note(
     Path(id): Path<String>,
     axum::Json(body): axum::Json<public::UpdateNoteRequest>,
 ) -> Result<axum::response::Response, crate::api::public::ApiError> {
-    let (db, notes_path, index_path) = {
+    let (db, notes_path, index_path, cache_dir) = {
         let shared_state = state.read().unwrap();
         (
             shared_state.db.clone(),
             shared_state.config.notes_path.clone(),
             shared_state.config.index_path.clone(),
+            shared_state.config.embedding_model_cache_dir.clone(),
         )
     };
 
@@ -130,7 +134,7 @@ async fn update_note(
     core_org::update_task_in_file(&file_path, &id, None, None, Some(&body.status)).await?;
 
     // Re-index only the file that was modified
-    index_all(&db, &index_path, &notes_path, true, true, Some(vec![file_path])).await?;
+    index_all(&db, &index_path, &notes_path, true, true, Some(vec![file_path]), &cache_dir).await?;
 
     // Re-fetch to return the indexed state
     match notes_db::get_note_by_id(&db, id).await? {

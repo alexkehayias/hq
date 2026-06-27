@@ -530,10 +530,13 @@ pub async fn index_all(
     index_full_text: bool,
     index_vector: bool,
     paths: Option<Vec<PathBuf>>,
+    cache_dir: &str,
 ) -> Result<()> {
     let embeddings_model = Arc::new(
         TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
+            InitOptions::new(EmbeddingModel::BGESmallENV15)
+                .with_show_download_progress(true)
+                .with_cache_dir(std::path::PathBuf::from(cache_dir)),
         )
         .unwrap(),
     );

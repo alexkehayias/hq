@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub openai_api_hostname: String,
     pub openai_api_key: String,
     pub system_message: String,
+    pub embedding_model_cache_dir: String,
 }
 
 impl Default for AppConfig {
@@ -51,6 +52,8 @@ impl Default for AppConfig {
             .expect("Missing env var HQ_GOOGLE_SEARCH_API_KEY");
         let google_search_cx_id = std::env::var("HQ_GOOGLE_SEARCH_CX_ID")
             .expect("Missing env var HQ_GOOGLE_SEARCH_CX_ID");
+        let embedding_model_cache_dir = env::var("HQ_FASTEMBED_CACHE_DIR")
+            .unwrap_or_else(|_| ".fastembed_cache".to_string());
 
         Self {
             notes_path: notes_path.clone(),
@@ -69,6 +72,7 @@ impl Default for AppConfig {
             openai_api_key,
             openai_model,
             system_message,
+            embedding_model_cache_dir,
         }
     }
 }

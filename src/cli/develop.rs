@@ -41,6 +41,10 @@ pub async fn run(
     }
 
     // Step 2: Change to worktree directory
+    let repo_root = std::fs::canonicalize(".")?;
+    let fastembed_cache_dir = repo_root.join(".fastembed_cache");
+    let fastembed_cache_str = fastembed_cache_dir.to_string_lossy().to_string();
+
     env::set_current_dir(&worktree_path)
         .with_context(|| format!("Failed to change to {worktree_path}"))?;
 
@@ -87,7 +91,8 @@ pub async fn run(
          # Override with worktree-specific env vars (set after user config)\n\
          export HQ_STORAGE_PATH=.hq-data\n\
          export HQ_PORT={port}\n\
-         export HQ_HOST={host}\n"
+         export HQ_HOST={host}\n\
+         export HQ_FASTEMBED_CACHE_DIR={fastembed_cache_str}\n"
     );
     fs::write(&zshrc_path, zshrc_content)?;
     println!("  Wrote .hq-data/.zshrc with worktree env vars");
@@ -96,6 +101,7 @@ pub async fn run(
     // SAFETY: setting HQ_STORAGE_PATH before spawning init/example-data.
     // This is called early in the process, no other threads read this env var.
     unsafe { env::set_var("HQ_STORAGE_PATH", ".hq-data") };
+    unsafe { env::set_var("HQ_FASTEMBED_CACHE_DIR", &fastembed_cache_str) };
 
     // Step 6: Run init
     if !no_init {
