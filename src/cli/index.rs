@@ -37,8 +37,7 @@ pub async fn run(
         .await
         .expect("Failed to connect to async db");
 
-    let cache_dir = env::var("HQ_FASTEMBED_CACHE_DIR")
-        .unwrap_or_else(|_| ".fastembed_cache".to_string());
+    let cache_dir = crate::core::fastembed_cache_dir();
 
     if full_text {
         index_all(&db, index_path, notes_path, true, false, None, &cache_dir)

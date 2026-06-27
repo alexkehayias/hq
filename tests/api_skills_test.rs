@@ -213,6 +213,7 @@ This skill has scripts and references.
             openai_api_hostname: String::from("https://api.openai.com"),
             openai_api_key: String::from("test-api-key"),
             system_message: String::from("You are a helpful assistant."),
+            embedding_model_cache_dir: String::from(".fastembed_cache"),
         };
         let skill_registry =
             SkillRegistry::new(skills_path.display().to_string()).unwrap();

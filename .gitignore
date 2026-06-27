@@ -3,6 +3,7 @@
 /web-ui/node_modules
 /notes
 /db
+/.fastembed_cache
 /docs
 marginalia.org
 /storage

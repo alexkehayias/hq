@@ -65,8 +65,7 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
 
     // Index the example notes so they're immediately searchable
     println!("Indexing example notes...");
-    let cache_dir = std::env::var("HQ_FASTEMBED_CACHE_DIR")
-        .unwrap_or_else(|_| ".fastembed_cache".to_string());
+    let cache_dir = crate::core::fastembed_cache_dir();
     index_all(&db, index_path, notes_path, true, true, None, &cache_dir).await?;
     println!("Finished indexing example notes");
 

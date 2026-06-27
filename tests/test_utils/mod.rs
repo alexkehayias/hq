@@ -79,6 +79,7 @@ pub async fn test_app() -> Router {
         openai_api_hostname: String::from("https://api.openai.com"),
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
+            embedding_model_cache_dir: String::from(".fastembed_cache"),
     };
     let skill_registry = SkillRegistry::new(&skills_path).unwrap();
     let app_state = AppState::new(db, app_config, skill_registry);
@@ -108,7 +109,7 @@ async fn index_dummy_notes_async(db: &tokio_rusqlite::Connection, temp_dir: Path
     )
     .unwrap();
 
-    index_all(db, index_dir_path, notes_dir_path, true, true, Some(paths))
+    index_all(db, index_dir_path, notes_dir_path, true, true, Some(paths), ".fastembed_cache")
         .await
         .unwrap();
 }
@@ -165,6 +166,7 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         openai_api_hostname: String::from("https://api.openai.com"),
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
+            embedding_model_cache_dir: String::from(".fastembed_cache"),
     };
     let skill_registry = SkillRegistry::new(&skills_path).unwrap();
     let app_state = AppState::new(db, app_config, skill_registry);
@@ -256,6 +258,7 @@ pub async fn test_app_with_skills() -> Router {
         openai_api_hostname: String::from("https://api.openai.com"),
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
+            embedding_model_cache_dir: String::from(".fastembed_cache"),
     };
     let skill_registry = SkillRegistry::new(skills_path.display().to_string()).unwrap();
     let app_state = AppState::new(db, app_config, skill_registry);

@@ -1,5 +1,13 @@
 use std::env;
 
+const FASTEMBED_CACHE_DIR_ENV: &str = "HQ_FASTEMBED_CACHE_DIR";
+const DEFAULT_FASTEMBED_CACHE_DIR: &str = ".fastembed_cache";
+
+pub fn fastembed_cache_dir() -> String {
+    env::var(FASTEMBED_CACHE_DIR_ENV)
+        .unwrap_or_else(|_| DEFAULT_FASTEMBED_CACHE_DIR.to_string())
+}
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub notes_path: String,
@@ -52,8 +60,7 @@ impl Default for AppConfig {
             .expect("Missing env var HQ_GOOGLE_SEARCH_API_KEY");
         let google_search_cx_id = std::env::var("HQ_GOOGLE_SEARCH_CX_ID")
             .expect("Missing env var HQ_GOOGLE_SEARCH_CX_ID");
-        let embedding_model_cache_dir = env::var("HQ_FASTEMBED_CACHE_DIR")
-            .unwrap_or_else(|_| ".fastembed_cache".to_string());
+        let embedding_model_cache_dir = fastembed_cache_dir();
 
         Self {
             notes_path: notes_path.clone(),
