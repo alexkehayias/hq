@@ -259,7 +259,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             example_data::run(&notes_path, &index_path, &vec_db_path).await?;
         }
         Some(Command::Projects { command }) => {
-            projects::run(command).await?;
+            let db = crate::core::db::async_db(&vec_db_path).await?;
+            projects::run(command, &db).await?;
         }
         Some(Command::Task { command }) => match command {
             TaskCommand::Create {
