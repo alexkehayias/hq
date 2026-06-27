@@ -15,8 +15,7 @@ pub async fn run(conn: &Connection) -> Result<()> {
     println!("{}", "-".repeat(95));
     for p in &projects {
         let status = if p.is_done { "Done" } else { "Active" };
-        let fname = p.file_name.as_deref().unwrap_or("");
-        println!("{:<30} {:<30} {status:<8} {:<8} {:<8} {:<8}", p.title, fname, p.total_tasks, p.todo_tasks, p.done_tasks);
+        println!("{:<30} {:<30} {status:<8} {:<8} {:<8} {:<8}", p.title, p.file_name, p.total_tasks, p.todo_tasks, p.done_tasks);
     }
 
     Ok(())

@@ -3,7 +3,7 @@ use tokio_rusqlite::Connection;
 
 pub struct ProjectRow {
     pub title: String,
-    pub file_name: Option<String>,
+    pub file_name: String,
     pub total_tasks: usize,
     pub done_tasks: usize,
     pub todo_tasks: usize,
@@ -31,7 +31,7 @@ pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
             let rows = stmt
                 .query_map([], |row| {
                     let title: String = row.get(0)?;
-                    let file_name: Option<String> = row.get(1)?;
+                    let file_name: String = row.get(1)?;
                     let total_tasks: usize = row.get(2)?;
                     let done_tasks: usize = row.get(3)?;
                     let todo_tasks: usize = row.get(4)?;
