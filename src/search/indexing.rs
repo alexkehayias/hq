@@ -73,9 +73,9 @@ fn parse_note(content: &str) -> Result<Note> {
     let p = config.parse(content);
     let d = p.document();
 
-    let props = d.properties().expect("Missing property drawer");
-    let note_id = props.get("ID").expect("Missing org-id").to_string();
-    let note_title = p.title().expect("No title found");
+    let props = d.properties().context("Missing property drawer")?;
+    let note_id = props.get("ID").context("Missing org-id")?.to_string();
+    let note_title = p.title().context("No title found")?;
     let note_category = p
         .keywords()
         .filter_map(|k| match k.key().to_string().as_str() {
@@ -557,15 +557,23 @@ pub async fn index_all(
     for p in note_paths.iter() {
         tracing::debug!("Indexing note: {:?}", p);
 
+        let content = match fs::read_to_string(&p).await {
+            Ok(content) => content,
+            Err(e) => {
+                tracing::warn!("Skipping note {:?}: {}", p, e);
+                continue;
+            }
+        };
         // Arc the shared items so that it can be safely passed to the
         // async closure.
         let file_name = Arc::new(p.file_name().unwrap().to_str().unwrap().to_owned());
-        let content = fs::read_to_string(&p)
-            .await
-            .unwrap_or_else(|err| panic!("Error {} file: {:?}", err, p));
-        let note = Arc::new(parse_note(&content).with_context(|| {
-            format!("Failed to parse note: {:?}", p)
-        })?);
+        let note = match parse_note(&content) {
+            Ok(note) => Arc::new(note),
+            Err(e) => {
+                tracing::warn!("Skipping note {:?}: {}", p, e);
+                continue;
+            }
+        };
         let note_id = note.id.clone();
         let note_body = note.body.clone();
         let embeddings_model = Arc::clone(&embeddings_model);
