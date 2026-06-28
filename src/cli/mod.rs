@@ -168,6 +168,12 @@ enum TaskCommand {
         #[arg(long)]
         status: Option<String>,
     },
+    /// Move a task to a project file
+    Refile {
+        id: String,
+        #[arg(long)]
+        project: String,
+    },
 }
 
 #[derive(Parser)]
@@ -294,6 +300,9 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             }
             TaskCommand::List { project, status } => {
                 task::run_list(&notes_path, project.as_deref(), status.as_deref()).await?;
+            }
+            TaskCommand::Refile { id, project } => {
+                task::run_refile(&notes_path, &id, &project).await?;
             }
         },
         None => {}

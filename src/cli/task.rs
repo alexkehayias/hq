@@ -82,6 +82,56 @@ pub async fn run_update(
     Ok(())
 }
 
+/// Move a task from its current file into a project file.
+///
+/// Finds the task by UUID across all org files, removes the headline from its
+/// source, and appends it to the target project file (creating the project
+/// file if it doesn't exist yet).
+pub async fn run_refile(notes_path: &str, id: &str, project: &str) -> Result<()> {
+    let location = orgmode::find_task(notes_path, id).await?;
+    let target_path = orgmode::find_or_create_project(notes_path, project).await?;
+
+    if location.path == target_path {
+        anyhow::bail!("Task is already in project '{project}'");
+    }
+
+    // Remove the headline from the source file
+    let before = &location.content[..location.range.start];
+    let after = &location.content[location.range.end..];
+    let after = after.strip_prefix('\n').unwrap_or(after);
+    let new_source = format!("{before}{after}");
+    fs::write(&location.path, &new_source)
+        .await
+        .context("Failed to write source file after refile")?;
+
+    // Append the headline to the target project file
+    let headline = orgmode::build_headline(
+        id,
+        &location.current_title,
+        &location.current_body,
+        &location.current_status,
+        location.current_level,
+    );
+    let mut target_content = fs::read_to_string(&target_path).await?;
+    if !target_content.ends_with('\n') {
+        target_content.push('\n');
+    }
+    target_content.push_str(&headline);
+    target_content.push('\n');
+    fs::write(&target_path, &target_content)
+        .await
+        .context("Failed to write target project file")?;
+
+    println!(
+        "Refiled task {id} ('{}') from {} to {}",
+        location.current_title,
+        location.path.display(),
+        target_path.display()
+    );
+
+    Ok(())
+}
+
 pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
 
