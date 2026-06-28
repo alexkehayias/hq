@@ -98,32 +98,6 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Find an existing project file by slug, returning `None` if no match exists.
-async fn find_project_file(notes_path: &str, slug: &str) -> Result<Option<PathBuf>> {
-    let patterns = {
-        let mut p = vec![format!("--project-{slug}.org")];
-        // Also try underscore variant for backwards compat with files
-        // created by older slugify logic or external tools
-        let underscore_slug = slug.replace('-', "_");
-        if underscore_slug != slug {
-            p.push(format!("--project-{underscore_slug}.org"));
-        }
-        p
-    };
-
-    let mut dir = fs::read_dir(notes_path).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap_or("");
-        for pattern in &patterns {
-            if file_name.ends_with(pattern) {
-                return Ok(Some(path));
-            }
-        }
-    }
-    Ok(None)
-}
-
 pub async fn run_list(
     notes_path: &str,
     project: Option<&str>,
@@ -131,19 +105,19 @@ pub async fn run_list(
 ) -> Result<()> {
     let config = org::todo_keywords_config();
 
-    // Determine which file to read.
-    let (target_path, project_display) = if let Some(project_name) = project {
-        let slug = slugify(project_name)?;
-        let path = find_project_file(notes_path, &slug)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Project '{project_name}' not found"))?;
-        (path, project_name.to_string())
+    let (target_path, project_display) = if let Some(project_ref) = project {
+        let path = orgmode::find_project_file_by_id_or_name(notes_path, project_ref).await?;
+        let display = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(project_ref)
+            .to_string();
+        (path, display)
     } else {
         let path = PathBuf::from(format!("{notes_path}/refile.org"));
         (path, "refile".to_string())
     };
 
-    // If the file doesn't exist, there are no tasks.
     if !target_path.exists() {
         println!("No tasks found matching the given criteria.");
         return Ok(());
@@ -162,7 +136,6 @@ pub async fn run_list(
             None => continue,
         };
 
-        // Filter by status
         if let Some(ref filter_status) = status {
             if !task_status.eq_ignore_ascii_case(filter_status) {
                 continue;
@@ -183,7 +156,6 @@ pub async fn run_list(
         return Ok(());
     }
 
-    // Sort tasks by status, then title
     tasks.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
 
     println!("{:<40} {:<10} {:<24} {}", "ID", "Status", "Project", "Title");
@@ -775,9 +747,8 @@ Milk, eggs
         let path = dir.path().join("2026-01-01--project-my-project.org");
         fs::write(&path, "").unwrap();
 
-        let result = find_project_file(&notes, "my-project").await.unwrap();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), path);
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project").await.unwrap();
+        assert_eq!(result, path);
     }
 
     #[tokio::test]
@@ -785,8 +756,8 @@ Milk, eggs
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = find_project_file(&notes, "my-project").await.unwrap();
-        assert!(result.is_none());
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project").await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -798,8 +769,8 @@ Milk, eggs
         fs::write(dir.path().join("2026-01-01--standalone.org"), "").unwrap();
         fs::write(dir.path().join("refile.org"), "").unwrap();
 
-        let result = find_project_file(&notes, "my-project").await.unwrap();
-        assert!(result.is_none());
+        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project").await;
+        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------

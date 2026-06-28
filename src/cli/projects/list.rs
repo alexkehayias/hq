@@ -11,11 +11,11 @@ pub async fn run(conn: &Connection) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<30} {:<30} {:<8} {:<8} {:<8} {:<8}", "Project", "File", "Status", "Total", "TODO", "Done");
-    println!("{}", "-".repeat(95));
+    println!("{:<36} {:<26} {:<26} {:<8} {:<8} {:<8} {:<8}", "ID", "Project", "File", "Status", "Total", "TODO", "Done");
+    println!("{}", "-".repeat(120));
     for p in &projects {
         let status = if p.is_done { "Done" } else { "Active" };
-        println!("{:<30} {:<30} {status:<8} {:<8} {:<8} {:<8}", p.title, p.file_name, p.total_tasks, p.todo_tasks, p.done_tasks);
+        println!("{:<36} {:<26} {:<26} {status:<8} {:<8} {:<8} {:<8}", p.id, p.title, p.file_name, p.total_tasks, p.todo_tasks, p.done_tasks);
     }
 
     Ok(())

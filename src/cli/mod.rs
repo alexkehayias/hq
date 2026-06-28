@@ -163,6 +163,7 @@ enum TaskCommand {
     },
     /// List tasks, optionally filtered by project and/or status
     List {
+        /// Project name or ID (looks up by slug or :ID: property)
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
