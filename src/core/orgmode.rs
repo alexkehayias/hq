@@ -178,8 +178,18 @@ pub async fn find_project_file_by_id_or_name(
         }
 
         // Match by filename (exact or project-name suffix)
+        // Check both hyphen and underscore variants for backwards compat
+        let name_patterns = {
+            let hyphen = format!("--project-{project_ref}.org");
+            let underscore = project_ref.replace('-', "_");
+            if underscore != project_ref {
+                vec![hyphen, format!("--project-{underscore}.org")]
+            } else {
+                vec![hyphen]
+            }
+        };
         if file_name == project_ref
-            || file_name.ends_with(&format!("--project-{}.org", project_ref))
+            || name_patterns.iter().any(|p| file_name.ends_with(p))
         {
             return Ok(path);
         }
@@ -377,15 +387,26 @@ pub fn build_document(id: &str, title: &str, body: &str, status: &str) -> String
 /// Find an existing project file by slug, or create a new one.
 pub async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
-    let pattern = format!("--project-{slug}.org");
+    let patterns = {
+        let mut p = vec![format!("--project-{slug}.org")];
+        // Also try underscore variant for backwards compat with files
+        // created by older slugify logic or external tools
+        let underscore_slug = slug.replace('-', "_");
+        if underscore_slug != slug {
+            p.push(format!("--project-{underscore_slug}.org"));
+        }
+        p
+    };
 
     // Look for existing project file
     let mut dir = fs::read_dir(notes_path).await?;
     while let Some(entry) = dir.next_entry().await? {
         let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-        if file_name.ends_with(&pattern) {
-            return Ok(path);
+        let file_name = path.file_name().unwrap().to_str().unwrap_or("");
+        for pattern in &patterns {
+            if file_name.ends_with(pattern) {
+                return Ok(path);
+            }
         }
     }
 
