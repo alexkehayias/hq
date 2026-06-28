@@ -2,6 +2,7 @@ use anyhow::Result;
 use tokio_rusqlite::Connection;
 
 pub struct ProjectRow {
+    pub id: String,
     pub title: String,
     pub file_name: String,
     pub total_tasks: usize,
@@ -15,6 +16,7 @@ pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
         .call(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT
+                   n.id,
                    n.title,
                    n.file_name,
                    COUNT(t.id) as total,
@@ -30,13 +32,15 @@ pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
 
             let rows = stmt
                 .query_map([], |row| {
-                    let title: String = row.get(0)?;
-                    let file_name: String = row.get(1)?;
-                    let total_tasks: usize = row.get(2)?;
-                    let done_tasks: usize = row.get(3)?;
-                    let todo_tasks: usize = row.get(4)?;
-                    let is_done_int: i32 = row.get(5)?;
+                    let id: String = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let file_name: String = row.get(2)?;
+                    let total_tasks: usize = row.get(3)?;
+                    let done_tasks: usize = row.get(4)?;
+                    let todo_tasks: usize = row.get(5)?;
+                    let is_done_int: i32 = row.get(6)?;
                     Ok(ProjectRow {
+                        id,
                         title,
                         file_name,
                         total_tasks,
