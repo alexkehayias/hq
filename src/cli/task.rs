@@ -147,17 +147,25 @@ pub async fn run_delete(notes_path: &str, id: &str, git_client: &GitClient) -> R
 
 /// Find an existing project file by slug, returning `None` if no match exists.
 async fn find_project_file(notes_path: &str, slug: &str) -> Result<Option<PathBuf>> {
-    let pattern = format!("--project-{slug}.org");
+    let patterns = {
+        let mut p = vec![format!("--project-{slug}.org")];
+        // Also try underscore variant for backwards compat with files
+        // created by older slugify logic or external tools
+        let underscore_slug = slug.replace('-', "_");
+        if underscore_slug != slug {
+            p.push(format!("--project-{underscore_slug}.org"));
+        }
+        p
+    };
+
     let mut dir = fs::read_dir(notes_path).await?;
     while let Some(entry) = dir.next_entry().await? {
         let path = entry.path();
-        if path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .map_or(false, |n| n.ends_with(&pattern))
-        {
-            return Ok(Some(path));
+        let file_name = path.file_name().unwrap().to_str().unwrap_or("");
+        for pattern in &patterns {
+            if file_name.ends_with(pattern) {
+                return Ok(Some(path));
+            }
         }
     }
     Ok(None)

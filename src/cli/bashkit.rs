@@ -13,7 +13,7 @@ use std::os::fd::FromRawFd;
 pub struct HqBuiltin;
 
 /// Subcommands that the `hq` builtin is allowed to run inside the sandbox.
-const ALLOWED_SUBCOMMANDS: &[&str] = &["task", "eval"];
+const ALLOWED_SUBCOMMANDS: &[&str] = &["task", "eval", "projects"];
 
 /// Help text shown for the `hq` builtin, listing only allowed subcommands.
 const FILTERED_HELP: &str = "\
@@ -22,8 +22,9 @@ hq - personal AI assistant
 Usage: hq <COMMAND>
 
 Commands:
-  task    Create, update, or delete tasks
-  eval    Run an eval
+  task       Create, update, or delete tasks
+  eval       Run an eval
+  projects   List projects
 
 Options:
   -h, --help       Print help
@@ -229,6 +230,10 @@ mod tests {
             "help output should list allowed subcommand 'eval': {output}"
         );
         assert!(
+            output.contains("projects"),
+            "help output should list allowed subcommand 'projects': {output}"
+        );
+        assert!(
             !output.contains("serve"),
             "help output should not list disallowed subcommand 'serve': {output}"
         );
@@ -268,7 +273,7 @@ mod tests {
             "output should indicate the subcommand is not allowed: {output}"
         );
         assert!(
-            output.contains("task") && output.contains("eval"),
+            output.contains("task") && output.contains("eval") && output.contains("projects"),
             "output should list allowed subcommands: {output}"
         );
     }

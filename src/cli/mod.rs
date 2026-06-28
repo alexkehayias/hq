@@ -12,6 +12,7 @@ pub mod index;
 pub mod init;
 pub mod job;
 pub mod migrate;
+pub mod projects;
 pub mod query;
 pub mod rebuild;
 pub mod serve;
@@ -119,6 +120,11 @@ enum Command {
     },
     /// Load example .org notes for development
     ExampleData {},
+    /// List projects
+    Projects {
+        #[command(subcommand)]
+        command: projects::ProjectsCommand,
+    },
     /// Create, update, or delete tasks
     Task {
         #[command(subcommand)]
@@ -252,6 +258,10 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         }
         Some(Command::ExampleData {}) => {
             example_data::run(&notes_path, &index_path, &vec_db_path).await?;
+        }
+        Some(Command::Projects { command }) => {
+            let db = crate::core::db::async_db(&vec_db_path).await?;
+            projects::run(command, &db).await?;
         }
         Some(Command::Task { command }) => {
             let deploy_key = env::var("HQ_NOTES_DEPLOY_KEY_PATH").unwrap_or_default();
