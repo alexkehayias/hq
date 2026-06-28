@@ -19,6 +19,7 @@ pub mod task;
 pub mod web;
 
 use auth::ServiceKind;
+use crate::core::git::GitClient;
 use job::JobId;
 
 #[derive(Subcommand)]
@@ -252,14 +253,17 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         Some(Command::ExampleData {}) => {
             example_data::run(&notes_path, &index_path, &vec_db_path).await?;
         }
-        Some(Command::Task { command }) => match command {
+        Some(Command::Task { command }) => {
+            let deploy_key = env::var("HQ_NOTES_DEPLOY_KEY_PATH").unwrap_or_default();
+            let git_client = GitClient::new(&notes_path, &deploy_key);
+            match command {
             TaskCommand::Create {
                 title,
                 body,
                 project,
                 status,
             } => {
-                task::run_create(&notes_path, &title, body.as_deref(), project.as_deref(), &status)
+                task::run_create(&notes_path, &title, body.as_deref(), project.as_deref(), &status, &git_client)
                     .await?;
             }
             TaskCommand::Update {
@@ -276,16 +280,18 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     body.as_deref(),
                     status.as_deref(),
                     project.as_deref(),
+                    &git_client,
                 )
                 .await?;
             }
             TaskCommand::Delete { id } => {
-                task::run_delete(&notes_path, &id).await?;
+                task::run_delete(&notes_path, &id, &git_client).await?;
             }
             TaskCommand::List { project, status } => {
                 task::run_list(&notes_path, project.as_deref(), status.as_deref()).await?;
             }
-        },
+            }
+        }
         None => {}
     }
 

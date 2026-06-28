@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use super::public;
 use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
+use crate::core::git::build_commit_message;
 use crate::core::orgmode as core_org;
 use crate::search::aql;
 use crate::search::index_all;
@@ -103,12 +104,13 @@ async fn update_note(
     Path(id): Path<String>,
     axum::Json(body): axum::Json<public::UpdateNoteRequest>,
 ) -> Result<axum::response::Response, crate::api::public::ApiError> {
-    let (db, notes_path, index_path) = {
+    let (db, notes_path, index_path, git_client) = {
         let shared_state = state.read().unwrap();
         (
             shared_state.db.clone(),
             shared_state.config.notes_path.clone(),
             shared_state.config.index_path.clone(),
+            shared_state.git_client.clone(),
         )
     };
 
@@ -128,6 +130,14 @@ async fn update_note(
 
     let file_path = std::path::PathBuf::from(&notes_path).join(&note.file_name);
     core_org::update_task_in_file(&file_path, &id, None, None, Some(&body.status)).await?;
+
+    // Commit the change to the notes git repository
+    let msg = build_commit_message(
+        "update",
+        &note.file_name,
+        &format!("Changed status to {}", body.status),
+    );
+    git_client.commit_file(&file_path, &msg).await;
 
     // Re-index only the file that was modified
     index_all(&db, &index_path, &notes_path, true, true, Some(vec![file_path])).await?;

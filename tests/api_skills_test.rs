@@ -171,6 +171,7 @@ This skill has scripts and references.
 
         use hq::api::{AppState, app};
         use hq::ai::skills::SkillRegistry;
+        use hq::core::git::GitClient;
         use hq::core::AppConfig;
         use hq::core::db::async_db;
 
@@ -216,7 +217,8 @@ This skill has scripts and references.
         };
         let skill_registry =
             SkillRegistry::new(skills_path.display().to_string()).unwrap();
-        let app_state = AppState::new(db, app_config, skill_registry);
+        let git_client = GitClient::new(&app_config.notes_path, &app_config.deploy_key_path);
+        let app_state = AppState::new(db, app_config, skill_registry, git_client);
         let app = app(Arc::new(RwLock::new(app_state)));
 
         let response = app

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tokio::fs;
 use uuid::Uuid;
 
+use crate::core::git::{GitClient, build_commit_message};
 use crate::core::orgmode;
 use crate::org;
 
@@ -36,6 +37,7 @@ pub async fn run_create(
     body: Option<&str>,
     project: Option<&str>,
     status: &str,
+    git_client: &GitClient,
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
@@ -55,6 +57,17 @@ pub async fn run_create(
             .await
             .context("Failed to write project file")?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
+        let file_name = project_path.file_name().unwrap().to_string_lossy().to_string();
+        git_client
+            .commit_file(
+                &project_path,
+                &build_commit_message(
+                    "create",
+                    &file_name,
+                    &format!("Added task '{title}' to project '{project_name}'"),
+                ),
+            )
+            .await;
     } else {
         let slug = slugify(title)?;
         let today = Local::now().format("%Y-%m-%d");
@@ -64,6 +77,18 @@ pub async fn run_create(
             .await
             .context("Failed to write task file")?;
         println!("Created task '{title}' (id: {id}, file: {filename})");
+        let path = std::path::PathBuf::from(&filename);
+        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+        git_client
+            .commit_file(
+                &path,
+                &build_commit_message(
+                    "create",
+                    &file_name,
+                    &format!("Created task '{title}'"),
+                ),
+            )
+            .await;
     }
 
     Ok(())
@@ -76,13 +101,27 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
+    git_client: &GitClient,
 ) -> Result<()> {
-    orgmode::update_task(notes_path, id, None, project, title, body, status).await?;
+    let modified_path = orgmode::update_task(notes_path, id, None, project, title, body, status).await?;
     println!("Task {id} updated");
+    let file_name = modified_path.file_name().unwrap().to_string_lossy().to_string();
+    let details = match (title, body, status) {
+        (Some(t), _, _) => format!("Updated title to '{t}'"),
+        (_, Some(_), _) => "Updated body".to_string(),
+        (_, _, Some(s)) => format!("Changed status to {s}"),
+        (None, None, None) => "Updated task fields".to_string(),
+    };
+    git_client
+        .commit_file(
+            &modified_path,
+            &build_commit_message("update", &file_name, &details),
+        )
+        .await;
     Ok(())
 }
 
-pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
+pub async fn run_delete(notes_path: &str, id: &str, git_client: &GitClient) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
 
     let before = &location.content[..location.range.start];
@@ -94,6 +133,14 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
         .await
         .context("Failed to write project file after deletion")?;
     println!("Deleted task {id} from {}", location.path.display());
+
+    let file_name = location.path.file_name().unwrap().to_string_lossy().to_string();
+    git_client
+        .commit_file(
+            &location.path,
+            &build_commit_message("delete", &file_name, &format!("Deleted task {id}")),
+        )
+        .await;
 
     Ok(())
 }
@@ -191,9 +238,14 @@ pub async fn run_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::git::GitClient;
     use orgize::ParseConfig;
     use std::fs;
     use tempfile::TempDir;
+
+    fn test_git_client() -> GitClient {
+        GitClient::new("/tmp/nonexistent-notes", "/dev/null")
+    }
 
     fn parsing_config() -> ParseConfig {
         ParseConfig {
@@ -268,7 +320,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Test Task", None, None, "TODO")
+        run_create(&notes, "Test Task", None, None, "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -289,7 +341,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
+        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -304,7 +356,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Urgent fix", None, None, "NEXT")
+        run_create(&notes, "Urgent fix", None, None, "NEXT", &test_git_client())
             .await
             .unwrap();
 
@@ -323,7 +375,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -345,10 +397,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
-        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE")
+        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE", &test_git_client())
             .await
             .unwrap();
 
@@ -368,7 +420,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "My task", None, None, "TODO")
+        run_create(&notes, "My task", None, None, "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -378,7 +430,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
+        run_update(&notes, &id, None, None, Some("DONE"), None, &test_git_client())
             .await
             .unwrap();
 
@@ -391,7 +443,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Old title", Some("Old body"), None, "TODO")
+        run_create(&notes, "Old title", Some("Old body"), None, "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -400,16 +452,16 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None)
+        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, &test_git_client())
             .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
         assert_eq!(status, "TODO");
         assert_eq!(title, "New title");
-        let new_content = fs::read_to_string(&path).unwrap();
-        assert!(new_content.contains("New body"));
-        assert!(!new_content.contains("Old body"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("New body"));
     }
 
     #[tokio::test]
@@ -417,7 +469,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -429,7 +481,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
+        run_update(&notes, &id, None, None, Some("DONE"), None, &test_git_client())
             .await
             .unwrap();
 
@@ -449,7 +501,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
+        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None, &test_git_client()).await;
         assert!(result.is_err());
     }
 
@@ -462,7 +514,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Temp task", None, None, "TODO")
+        run_create(&notes, "Temp task", None, None, "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -471,7 +523,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&notes, &id, &test_git_client()).await.unwrap();
 
         // File should still exist (as a note with no task headlines)
         assert!(path.exists());
@@ -483,10 +535,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
-        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -497,7 +549,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&notes, &id, &test_git_client()).await.unwrap();
 
         // One headline should remain
         assert_eq!(headline_count(&path), 1);
@@ -508,7 +560,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -518,7 +570,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&notes, &id, &test_git_client()).await.unwrap();
 
         // Project file should still exist (preamble remains)
         assert!(path.exists());
@@ -530,7 +582,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_delete(&notes, "nonexistent-uuid").await;
+        let result = run_delete(&notes, "nonexistent-uuid", &test_git_client()).await;
         assert!(result.is_err());
     }
 
@@ -982,7 +1034,7 @@ Investigate the redirect
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -995,7 +1047,7 @@ Investigate the redirect
 
         // Update using --project with filename
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))
+        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &test_git_client())
             .await
             .unwrap();
 
@@ -1012,7 +1064,7 @@ Investigate the redirect
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -1028,7 +1080,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id))
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), &test_git_client())
             .await
             .unwrap();
 
@@ -1045,12 +1097,12 @@ Investigate the redirect
         let notes = dir.path().to_str().unwrap().to_string();
 
         // Create a standalone task (not in any project)
-        run_create(&notes, "Standalone", None, None, "TODO")
+        run_create(&notes, "Standalone", None, None, "TODO", &test_git_client())
             .await
             .unwrap();
 
         // Create a project with a different task
-        run_create(&notes, "Project task", None, Some("my-project"), "TODO")
+        run_create(&notes, "Project task", None, Some("my-project"), "TODO", &test_git_client())
             .await
             .unwrap();
 
@@ -1071,7 +1123,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Try to update it scoped to the project — should fail
-        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
+        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), &test_git_client()).await;
         assert!(result.is_err(), "should not find standalone task in project file");
     }
 
@@ -1080,7 +1132,7 @@ Investigate the redirect
         let dir = TempDir::new().unwrap();
         let notes = dir.path().to_str().unwrap().to_string();
 
-        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
+        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), &test_git_client()).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 }

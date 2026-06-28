@@ -10,6 +10,7 @@ use hq::ai::chat::db::{get_or_create_session, insert_chat_message};
 use hq::ai::skills::SkillRegistry;
 use hq::api::AppState;
 use hq::api::app;
+use hq::core::git::GitClient;
 use hq::core::AppConfig;
 use hq::core::db::async_db;
 use hq::core::db::initialize_db;
@@ -81,7 +82,8 @@ pub async fn test_app() -> Router {
         system_message: String::from("You are a helpful assistant."),
     };
     let skill_registry = SkillRegistry::new(&skills_path).unwrap();
-    let app_state = AppState::new(db, app_config, skill_registry);
+    let git_client = GitClient::new(&app_config.notes_path, &app_config.deploy_key_path);
+    let app_state = AppState::new(db, app_config, skill_registry, git_client);
     app(Arc::new(RwLock::new(app_state)))
 }
 
@@ -167,7 +169,8 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         system_message: String::from("You are a helpful assistant."),
     };
     let skill_registry = SkillRegistry::new(&skills_path).unwrap();
-    let app_state = AppState::new(db, app_config, skill_registry);
+    let git_client = GitClient::new(&app_config.notes_path, &app_config.deploy_key_path);
+    let app_state = AppState::new(db, app_config, skill_registry, git_client);
     (app(Arc::new(RwLock::new(app_state.clone()))), app_state)
 }
 
@@ -258,7 +261,8 @@ pub async fn test_app_with_skills() -> Router {
         system_message: String::from("You are a helpful assistant."),
     };
     let skill_registry = SkillRegistry::new(skills_path.display().to_string()).unwrap();
-    let app_state = AppState::new(db, app_config, skill_registry);
+    let git_client = GitClient::new(&app_config.notes_path, &app_config.deploy_key_path);
+    let app_state = AppState::new(db, app_config, skill_registry, git_client);
     app(Arc::new(RwLock::new(app_state)))
 }
 

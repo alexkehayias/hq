@@ -294,7 +294,7 @@ pub async fn update_task(
     title: Option<&str>,
     body: Option<&str>,
     status: Option<&str>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let location = if let Some(project_ref) = project {
         let project_path = find_project_file_by_id_or_name(notes_path, project_ref).await?;
         find_task_in_file(&project_path, id).await?
@@ -327,7 +327,7 @@ pub async fn update_task(
         .await
         .context("Failed to write updated task file")?;
 
-    Ok(())
+    Ok(location.path)
 }
 
 fn slugify(s: &str) -> Result<String> {

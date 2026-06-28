@@ -4,6 +4,7 @@ use serde::Deserialize;
 use tokio_rusqlite::Connection;
 
 use crate::ai::skills::SkillRegistry;
+use crate::core::git::GitClient;
 use crate::core::AppConfig;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -20,6 +21,7 @@ pub struct AppState {
     pub db: Connection,
     pub config: AppConfig,
     pub skill_registry: Arc<RwLock<SkillRegistry>>,
+    pub git_client: GitClient,
 }
 
 impl AppState {
@@ -27,12 +29,14 @@ impl AppState {
         db: Connection,
         config: AppConfig,
         skill_registry: SkillRegistry,
+        git_client: GitClient,
     ) -> Self {
         Self {
             latest_selection: None,
             db,
             config,
             skill_registry: Arc::new(RwLock::new(skill_registry)),
+            git_client,
         }
     }
 }
