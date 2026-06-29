@@ -13,6 +13,8 @@ pub enum SlashCommand {
     Help,
     /// List all skills or show a specific skill's content
     Skill { name: Option<String> },
+    /// Run a command in the bashkit sandbox
+    Bash { command: String },
     /// Parse error for a specific slash command
     Error(String),
     /// Not a slash command - regular chat message
@@ -55,6 +57,12 @@ impl FromStr for SlashCommand {
                         Some(name.join(" "))
                     };
                     Ok(SlashCommand::Skill { name: joined_name })
+                }
+                Command::Bash { command } => {
+                    let joined_command = command.join(" ");
+                    Ok(SlashCommand::Bash {
+                        command: joined_command,
+                    })
                 }
             },
             Err(e) => {
@@ -100,6 +108,14 @@ pub enum Command {
         /// Optional skill name to show (if not provided, lists all skills)
         #[arg(required = false, num_args = 1..)]
         name: Vec<String>,
+    },
+    /// Run a command in the bashkit sandbox
+    #[command(override_usage = "/bash <COMMAND>")]
+    #[command(after_help = "Example: /bash echo hello world")]
+    Bash {
+        /// The shell command to execute
+        #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+        command: Vec<String>,
     },
 }
 
@@ -190,6 +206,36 @@ mod tests {
                 assert_eq!(name, Some("test-repo with args".to_string()))
             }
             other => panic!("Expected Skill command, got {:?}", other),
+        });
+    }
+
+    #[test]
+    fn test_parse_bash_simple() {
+        let result = SlashCommand::from_str("/bash echo hello");
+        assert!(result.is_ok());
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Bash { command } => assert_eq!(command, "echo hello"),
+            other => panic!("Expected Bash command, got {:?}", other),
+        });
+    }
+
+    #[test]
+    fn test_parse_bash_with_multiple_args() {
+        let result = SlashCommand::from_str("/bash ls -la /tmp");
+        assert!(result.is_ok());
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Bash { command } => assert_eq!(command, "ls -la /tmp"),
+            other => panic!("Expected Bash command, got {:?}", other),
+        });
+    }
+
+    #[test]
+    fn test_parse_bash_with_quotes() {
+        let result = SlashCommand::from_str(r#"/bash echo "hello world""#);
+        assert!(result.is_ok());
+        let _ = result.map(|slash_cmd| match slash_cmd {
+            SlashCommand::Bash { command } => assert_eq!(command, r#"echo "hello world""#),
+            other => panic!("Expected Bash command, got {:?}", other),
         });
     }
 }
