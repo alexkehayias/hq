@@ -466,6 +466,7 @@ async fn chat_handler(
             let response = match run_in_sandbox(&command, &workspace_path).await {
                 Ok(output) => {
                     let mut parts = Vec::new();
+                    parts.push("```".to_string());
                     parts.push(format!("$ {}\n", command));
                     if !output.stdout.is_empty() {
                         parts.push(output.stdout);
@@ -477,9 +478,10 @@ async fn chat_handler(
                     if output.truncated {
                         parts.push("*Output was truncated due to size limits.*".to_string());
                     }
+                    parts.push("```".to_string());
                     parts.join("\n")
                 }
-                Err(e) => format!("Error running command: {}", e),
+                Err(e) => format!("```\nError running command: {}\n```", e),
             };
             let _ = tx.send(
                 json!({
