@@ -4,7 +4,7 @@ use anyhow::{Error, Result};
 use async_trait::async_trait;
 use bashkit::{Bash, PosixFs, RealFs, RealFsMode};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 
@@ -53,35 +53,7 @@ pub struct BashTool {
 impl ToolCall for BashTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: BashArgs = parse_tool_args(args)?;
-
-        // Make sure the session workspace exists and create it if it
-        // doesn't. This is idempotent.
-        if !&self.workspace_path.exists() {
-            fs::create_dir(&self.workspace_path).await?;
-        }
-
-        // Mount the workspace directory from the host to the agent at
-        // the root. This avoids issues with the agent trying to look
-        // for files higher in the filesystem and not being able to
-        // access them.
-        let backend = RealFs::new(&self.workspace_path, RealFsMode::ReadWrite)
-            .expect("Failed to create RealFs");
-        let fs = Arc::new(PosixFs::new(backend));
-
-        let mut bash = Bash::builder()
-            .builtin("hq", Box::new(HqBuiltin))
-            .build();
-        bash.mount(SANDBOX_ROOT, fs)?;
-
-        let output = bash.exec(&fn_args.command).await?;
-
-        let result = BashOutput {
-            exit_code: output.exit_code,
-            stdout: output.stdout,
-            stderr: output.stderr,
-            truncated: output.stdout_truncated || output.stderr_truncated,
-        };
-
+        let result = run_in_sandbox(&fn_args.command, &self.workspace_path).await?;
         Ok(serde_json::to_string(&result)?)
     }
 
@@ -128,6 +100,32 @@ impl BashTool {
             workspace_path,
         }
     }
+}
+
+/// Run a command in a bashkit sandbox with workspace filesystem access.
+/// Creates the workspace directory if it doesn't exist, mounts it at the
+/// sandbox root, and returns the command output. This is idempotent.
+pub async fn run_in_sandbox(command: &str, workspace_path: &Path) -> Result<BashOutput> {
+    fs::create_dir_all(workspace_path).await?;
+
+    let backend = RealFs::new(workspace_path, RealFsMode::ReadWrite)?;
+    let fs = Arc::new(PosixFs::new(backend));
+
+    let mut bash = Bash::builder()
+        .builtin("hq", Box::new(HqBuiltin))
+        .build();
+    bash.mount(SANDBOX_ROOT, fs)?;
+
+    let output = bash.exec(command).await?;
+
+    let result = BashOutput {
+        exit_code: output.exit_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        truncated: output.stdout_truncated || output.stderr_truncated,
+    };
+
+    Ok(result)
 }
 
 #[cfg(test)]

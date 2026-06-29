@@ -1,6 +1,7 @@
 //! Router for the chat API
 
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -30,7 +31,7 @@ use crate::ai::chat::{
 use crate::ai::tools::{
     BashTool, CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool,
     NoteSearchTool, NotifyTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool,
-    WebsiteViewTool,
+    WebsiteViewTool, run_in_sandbox,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -383,6 +384,11 @@ async fn chat_handler(
                 "Attempted to activate a skill within coding agent session mode which is not allowed."
             );
         }
+        (SessionMode::Code, SlashCommand::Bash { .. }) => {
+            tracing::warn!(
+                "Attempted to run /bash within coding agent session mode which is not allowed."
+            );
+        }
         (SessionMode::Chat, SlashCommand::Skill { name }) => {
             // List all skills or show a specific skill's content
             let (response, persist_skill_msg) = {
@@ -431,6 +437,50 @@ async fn chat_handler(
                 let user_msg = Message::new(Role::User, &response);
                 insert_chat_message(&db, &session_id, &user_msg).await?;
             }
+            let _ = tx.send(
+                json!({
+                    "choices": [{
+                        "delta": { "content": response }
+                    }]
+                })
+                .to_string(),
+            );
+            // Return early - don't fall through
+            let sse_stream =
+                tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
+                    Ok::<Event, Infallible>(Event::default().data(chunk))
+                });
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
+        }
+        (SessionMode::Chat, SlashCommand::Bash { command }) => {
+            // Run a command in the bashkit sandbox and return the output
+            let workspace_path =
+                PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
+            let response = match run_in_sandbox(&command, &workspace_path).await {
+                Ok(output) => {
+                    let mut parts = Vec::new();
+                    parts.push(format!("$ {}\n", command));
+                    if !output.stdout.is_empty() {
+                        parts.push(output.stdout);
+                    }
+                    if !output.stderr.is_empty() {
+                        parts.push(format!("stderr:\n{}", output.stderr));
+                    }
+                    parts.push(format!("---\nExit code: {}", output.exit_code));
+                    if output.truncated {
+                        parts.push("*Output was truncated due to size limits.*".to_string());
+                    }
+                    parts.join("\n")
+                }
+                Err(e) => format!("Error running command: {}", e),
+            };
             let _ = tx.send(
                 json!({
                     "choices": [{

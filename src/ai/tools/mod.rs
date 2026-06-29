@@ -1,5 +1,5 @@
 pub mod bash;
-pub use bash::BashTool;
+pub use bash::{BashOutput, BashTool, run_in_sandbox};
 
 pub mod datetime;
 pub use datetime::DateTimeTool;
