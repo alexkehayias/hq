@@ -105,50 +105,88 @@ pub async fn run_list(
 ) -> Result<()> {
     let config = org::todo_keywords_config();
 
-    let (target_path, project_display) = if let Some(project_ref) = project {
-        let path = orgmode::find_project_file_by_id_or_name(notes_path, project_ref).await?;
-        let display = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(project_ref)
-            .to_string();
-        (path, display)
-    } else {
-        let path = PathBuf::from(format!("{notes_path}/refile.org"));
-        (path, "refile".to_string())
-    };
+    let mut tasks: Vec<(String, String, String, String)> = Vec::new();
 
-    if !target_path.exists() {
-        println!("No tasks found matching the given criteria.");
-        return Ok(());
-    }
-
-    let content = fs::read_to_string(&target_path).await?;
-    let org = config.parse(&content);
-    let doc = org.document();
-
-    let mut tasks: Vec<(String, String, String)> = Vec::new();
-
-    for headline in doc.headlines() {
-        let kw = headline.todo_keyword().map(|k| k.to_string());
-        let task_status = match kw {
-            Some(ref s) => s.clone(),
-            None => continue,
+    if let Some(project_ref) = project {
+        let (path, display) = match project_ref {
+            "refile" | "capture" => {
+                let filename = format!("{project_ref}.org");
+                (PathBuf::from(format!("{notes_path}/{filename}")), project_ref.to_string())
+            }
+            _ => {
+                let path = orgmode::find_project_file_by_id_or_name(notes_path, project_ref).await?;
+                let display = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(project_ref)
+                    .to_string();
+                (path, display)
+            }
         };
 
-        if let Some(ref filter_status) = status {
-            if !task_status.eq_ignore_ascii_case(filter_status) {
-                continue;
-            }
+        if !path.exists() {
+            println!("No tasks found matching the given criteria.");
+            return Ok(());
         }
 
-        let title = headline.title_raw().trim().to_string();
-        let id = headline
-            .properties()
-            .and_then(|p| p.get("ID").map(|s| s.to_string()))
-            .unwrap_or_default();
+        let content = fs::read_to_string(&path).await?;
+        let org = config.parse(&content);
+        let doc = org.document();
 
-        tasks.push((id, task_status, title));
+        for headline in doc.headlines() {
+            let kw = headline.todo_keyword().map(|k| k.to_string());
+            let task_status = match kw {
+                Some(ref s) => s.clone(),
+                None => continue,
+            };
+
+            if let Some(ref filter_status) = status {
+                if !task_status.eq_ignore_ascii_case(filter_status) {
+                    continue;
+                }
+            }
+
+            let title = headline.title_raw().trim().to_string();
+            let id = headline
+                .properties()
+                .and_then(|p| p.get("ID").map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            tasks.push((id, task_status, display.clone(), title));
+        }
+    } else {
+        for (filename, display) in [("refile.org", "refile"), ("capture.org", "capture")] {
+            let path = PathBuf::from(format!("{notes_path}/{filename}"));
+            if !path.exists() {
+                continue;
+            }
+
+            let content = fs::read_to_string(&path).await?;
+            let org = config.clone().parse(&content);
+            let doc = org.document();
+
+            for headline in doc.headlines() {
+                let kw = headline.todo_keyword().map(|k| k.to_string());
+                let task_status = match kw {
+                    Some(ref s) => s.clone(),
+                    None => continue,
+                };
+
+                if let Some(ref filter_status) = status {
+                    if !task_status.eq_ignore_ascii_case(filter_status) {
+                        continue;
+                    }
+                }
+
+                let title = headline.title_raw().trim().to_string();
+                let id = headline
+                    .properties()
+                    .and_then(|p| p.get("ID").map(|s| s.to_string()))
+                    .unwrap_or_default();
+
+                tasks.push((id, task_status, display.to_string(), title));
+            }
+        }
     }
 
     if tasks.is_empty() {
@@ -156,11 +194,11 @@ pub async fn run_list(
         return Ok(());
     }
 
-    tasks.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
+    tasks.sort_by(|a, b| a.1.cmp(&b.1).then(a.3.cmp(&b.3)));
 
     println!("{:<40} {:<10} {:<24} {}", "ID", "Status", "Project", "Title");
     println!("{}", "-".repeat(100));
-    for (id, task_status, title) in &tasks {
+    for (id, task_status, project_display, title) in &tasks {
         let short_id = if id.len() > 8 { &id[..8] } else { id };
         println!("{short_id:<40} {task_status:<10} {project_display:<24} {title}");
     }
