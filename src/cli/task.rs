@@ -124,7 +124,7 @@ pub async fn run_list(
             }
         };
 
-        if !path.exists() {
+        if !fs::try_exists(&path).await? {
             println!("No tasks found matching the given criteria.");
             return Ok(());
         }
@@ -157,7 +157,7 @@ pub async fn run_list(
     } else {
         for (filename, display) in [("refile.org", "refile"), ("capture.org", "capture")] {
             let path = PathBuf::from(format!("{notes_path}/{filename}"));
-            if !path.exists() {
+            if !fs::try_exists(&path).await? {
                 continue;
             }
 
