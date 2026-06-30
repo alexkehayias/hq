@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Local;
-use std::path::PathBuf;
 use tokio::fs;
+use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::core::orgmode;
-use crate::org;
 
 fn slugify(s: &str) -> Result<String> {
     let slug: String = s
@@ -99,102 +98,36 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
 }
 
 pub async fn run_list(
+    db: &Connection,
     notes_path: &str,
     project: Option<&str>,
     status: Option<&str>,
 ) -> Result<()> {
-    let config = org::todo_keywords_config();
-
-    let mut tasks: Vec<(String, String, String, String)> = Vec::new();
-
-    if let Some(project_ref) = project {
-        let (path, display) = match project_ref {
+    let tasks = if let Some(project_ref) = project {
+        let (filenames, display_prefix) = match project_ref {
             "refile" | "capture" => {
                 let filename = format!("{project_ref}.org");
-                (PathBuf::from(format!("{notes_path}/{filename}")), project_ref.to_string())
+                (vec![filename], None)
             }
             _ => {
                 let path = orgmode::find_project_file_by_id_or_name(notes_path, project_ref).await?;
-                let display = path
-                    .file_stem()
+                let filename = path
+                    .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or(project_ref)
                     .to_string();
-                (path, display)
+                (vec![filename], None)
             }
         };
-
-        if !fs::try_exists(&path).await? {
-            println!("No tasks found matching the given criteria.");
-            return Ok(());
-        }
-
-        let content = fs::read_to_string(&path).await?;
-        let org = config.parse(&content);
-        let doc = org.document();
-
-        for headline in doc.headlines() {
-            let kw = headline.todo_keyword().map(|k| k.to_string());
-            let task_status = match kw {
-                Some(ref s) => s.clone(),
-                None => continue,
-            };
-
-            if let Some(ref filter_status) = status {
-                if !task_status.eq_ignore_ascii_case(filter_status) {
-                    continue;
-                }
-            }
-
-            let title = headline.title_raw().trim().to_string();
-            let id = headline
-                .properties()
-                .and_then(|p| p.get("ID").map(|s| s.to_string()))
-                .unwrap_or_default();
-
-            tasks.push((id, task_status, display.clone(), title));
-        }
+        list_tasks_from_files(db, &filenames, status, display_prefix).await?
     } else {
-        for (filename, display) in [("refile.org", "refile"), ("capture.org", "capture")] {
-            let path = PathBuf::from(format!("{notes_path}/{filename}"));
-            if !fs::try_exists(&path).await? {
-                continue;
-            }
-
-            let content = fs::read_to_string(&path).await?;
-            let org = config.clone().parse(&content);
-            let doc = org.document();
-
-            for headline in doc.headlines() {
-                let kw = headline.todo_keyword().map(|k| k.to_string());
-                let task_status = match kw {
-                    Some(ref s) => s.clone(),
-                    None => continue,
-                };
-
-                if let Some(ref filter_status) = status {
-                    if !task_status.eq_ignore_ascii_case(filter_status) {
-                        continue;
-                    }
-                }
-
-                let title = headline.title_raw().trim().to_string();
-                let id = headline
-                    .properties()
-                    .and_then(|p| p.get("ID").map(|s| s.to_string()))
-                    .unwrap_or_default();
-
-                tasks.push((id, task_status, display.to_string(), title));
-            }
-        }
-    }
+        list_tasks_from_files(db, &["refile.org".into(), "capture.org".into()], status, None).await?
+    };
 
     if tasks.is_empty() {
         println!("No tasks found matching the given criteria.");
         return Ok(());
     }
-
-    tasks.sort_by(|a, b| a.1.cmp(&b.1).then(a.3.cmp(&b.3)));
 
     println!("{:<40} {:<10} {:<24} {}", "ID", "Status", "Project", "Title");
     println!("{}", "-".repeat(100));
@@ -206,10 +139,91 @@ pub async fn run_list(
     Ok(())
 }
 
+async fn list_tasks_from_files(
+    db: &Connection,
+    filenames: &[String],
+    status_filter: Option<&str>,
+    display_prefix: Option<&str>,
+) -> Result<Vec<(String, String, String, String)>> {
+    let status_lower = status_filter.map(|s| s.to_lowercase());
+    let filenames_owned: Vec<String> = filenames.iter().cloned().collect();
+
+    let tasks = db
+        .call(move |conn| {
+            let placeholders = filenames_owned
+                .iter()
+                .map(|_| "?".to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let sql = if status_lower.is_some() {
+                format!(
+                    "SELECT id, title, status, file_name
+                     FROM note_meta
+                     WHERE type = 'task'
+                       AND file_name IN ({placeholders})
+                       AND status = ?
+                     ORDER BY status, title"
+                )
+            } else {
+                format!(
+                    "SELECT id, title, status, file_name
+                     FROM note_meta
+                     WHERE type = 'task'
+                       AND file_name IN ({placeholders})
+                     ORDER BY status, title"
+                )
+            };
+
+            let mut stmt = conn.prepare(&sql)?;
+
+            let params: Vec<&dyn rusqlite::types::ToSql> = if let Some(ref s) = status_lower {
+                let mut p: Vec<&dyn rusqlite::types::ToSql> =
+                    filenames_owned.iter().map(|f| f as &dyn rusqlite::types::ToSql).collect();
+                p.push(s as &dyn rusqlite::types::ToSql);
+                p
+            } else {
+                filenames_owned.iter().map(|f| f as &dyn rusqlite::types::ToSql).collect()
+            };
+
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(params), |row| {
+                    let id: String = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let status: String = row.get(2)?;
+                    let file_name: String = row.get(3)?;
+                    Ok((id, title, status, file_name))
+                })?
+                .filter_map(|r| r.ok())
+                .collect::<Vec<_>>();
+
+            Ok(rows)
+        })
+        .await?;
+
+    // Map file_name to display name, optionally prefixing
+    let display_prefix = display_prefix.map(|s| s.to_string());
+    let result: Vec<(String, String, String, String)> = tasks
+        .into_iter()
+        .map(|(id, title, status, file_name)| {
+            let display = display_prefix.clone().unwrap_or_else(|| {
+                file_name
+                    .strip_suffix(".org")
+                    .unwrap_or(&file_name)
+                    .to_string()
+            });
+            (id, status.to_uppercase(), display, title)
+        })
+        .collect();
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use orgize::ParseConfig;
+    use rusqlite;
     use std::fs;
     use tempfile::TempDir;
 
@@ -556,147 +570,139 @@ mod tests {
     // run_list
     // -----------------------------------------------------------------------
 
-    /// Helper: parse an org file and return (id, status, title) for each headline
-    /// that has a TODO keyword.
-    fn tasks_in_file(path: &std::path::Path) -> Vec<(String, String, String)> {
-        let content = fs::read_to_string(path).unwrap();
-        let config = parsing_config();
-        let org = config.parse(&content);
-        org.document()
-            .headlines()
-            .filter_map(|h| {
-                let status = h.todo_keyword().map(|k| k.to_string())?;
-                let title = h.title_raw().trim().to_string();
-                let id = h
-                    .properties()
-                    .and_then(|p| p.get("ID").map(|s| s.to_string()))
-                    .unwrap_or_default();
-                Some((id, status, title))
-            })
-            .collect()
+    /// Create an in-memory SQLite database with the note_meta table.
+    async fn test_db() -> (Connection, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db = Connection::open(":memory:").await.unwrap();
+        db.call(|conn| {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS note_meta (
+                    id TEXT PRIMARY KEY,
+                    file_name TEXT,
+                    title TEXT,
+                    category TEXT,
+                    tags TEXT,
+                    body TEXT,
+                    type TEXT,
+                    status TEXT,
+                    scheduled TEXT,
+                    deadline TEXT,
+                    closed TEXT,
+                    date TEXT
+                )",
+            )
+            .unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (db, dir)
     }
 
-    #[tokio::test]
-    async fn test_list_refile_missing() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        // No refile.org exists
-        let result = run_list(&notes, None, None).await;
-        assert!(result.is_ok(), "missing refile.org should not error");
-    }
-
-    #[tokio::test]
-    async fn test_list_refile_empty() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        // refile.org exists but has no headlines with TODO keywords
-        let refile_path = dir.path().join("refile.org");
-        fs::write(
-            &refile_path,
-            ":PROPERTIES:\n:ID:       inbox\n:END:\n#+TITLE: Refile\n",
+    /// Insert a task row into note_meta for testing.
+    fn insert_task(
+        conn: &rusqlite::Connection,
+        id: &str,
+        file_name: &str,
+        title: &str,
+        status: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO note_meta (id, file_name, title, type, status)
+             VALUES (?1, ?2, ?3, 'task', ?4)",
+            rusqlite::params![id, file_name, title, status],
         )
         .unwrap();
+    }
 
-        let result = run_list(&notes, None, None).await;
+    #[tokio::test]
+    async fn test_list_refile_and_capture_both_empty() {
+        let (db, _dir) = test_db().await;
+
+        // No tasks in the DB
+        let result = run_list(&db, "", None, None).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_list_refile_with_tasks() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let refile_path = dir.path().join("refile.org");
-        fs::write(
-            &refile_path,
-            "\
-* TODO Buy groceries
-:PROPERTIES:
-:ID:       task-1
-:END:
-Milk, eggs
-
-* DONE Fix login
-:PROPERTIES:
-:ID:       task-2
-:END:
-
-* NEXT Research API
-:PROPERTIES:
-:ID:       task-3
-:END:
-",
-        )
+    async fn test_list_refile_and_capture_with_tasks() {
+        let (db, _dir) = test_db().await;
+        db.call(|conn| {
+            insert_task(conn, "task-1", "refile.org", "Buy groceries", "todo");
+            insert_task(conn, "task-2", "refile.org", "Fix login", "done");
+            insert_task(conn, "task-3", "capture.org", "Quick idea", "todo");
+            Ok(())
+        })
+        .await
         .unwrap();
 
-        let result = run_list(&notes, None, None).await;
+        let result = run_list(&db, "", None, None).await;
         assert!(result.is_ok());
+    }
 
-        let tasks = tasks_in_file(&refile_path);
-        assert_eq!(tasks.len(), 3);
-        assert_eq!(tasks[0].1, "TODO");
-        assert_eq!(tasks[0].2, "Buy groceries");
-        assert_eq!(tasks[1].1, "DONE");
-        assert_eq!(tasks[1].2, "Fix login");
-        assert_eq!(tasks[2].1, "NEXT");
-        assert_eq!(tasks[2].2, "Research API");
+    #[tokio::test]
+    async fn test_list_refile_only() {
+        let (db, _dir) = test_db().await;
+        db.call(|conn| {
+            insert_task(conn, "t1", "refile.org", "Task one", "todo");
+            insert_task(conn, "t2", "refile.org", "Task two", "done");
+            insert_task(conn, "t3", "capture.org", "Capture task", "todo");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let result = run_list(&db, "", Some("refile"), None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_capture_only() {
+        let (db, _dir) = test_db().await;
+        db.call(|conn| {
+            insert_task(conn, "t1", "refile.org", "Refile task", "todo");
+            insert_task(conn, "t2", "capture.org", "Capture task", "todo");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let result = run_list(&db, "", Some("capture"), None).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_list_refile_filter_by_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let refile_path = dir.path().join("refile.org");
-        fs::write(
-            &refile_path,
-            "\
-* TODO Task one
-:PROPERTIES:
-:ID:       t1
-:END:
-
-* DONE Task two
-:PROPERTIES:
-:ID:       t2
-:END:
-
-* TODO Task three
-:PROPERTIES:
-:ID:       t3
-:END:
-",
-        )
+        let (db, _dir) = test_db().await;
+        db.call(|conn| {
+            insert_task(conn, "t1", "refile.org", "Task one", "todo");
+            insert_task(conn, "t2", "refile.org", "Task two", "done");
+            insert_task(conn, "t3", "refile.org", "Task three", "todo");
+            Ok(())
+        })
+        .await
         .unwrap();
 
-        let result = run_list(&notes, None, Some("TODO")).await;
+        let result = run_list(&db, "", None, Some("TODO")).await;
         assert!(result.is_ok());
-
-        // Verify: only TODO tasks are in the file (run_list reads refile.org)
-        let tasks = tasks_in_file(&refile_path);
-        let todo_tasks: Vec<_> = tasks.iter().filter(|t| t.1 == "TODO").collect();
-        assert_eq!(todo_tasks.len(), 2);
     }
 
     #[tokio::test]
     async fn test_list_project_not_found() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir) = test_db().await;
 
-        let result = run_list(&notes, Some("nonexistent"), None).await;
+        let result = run_list(&db, "", Some("nonexistent"), None).await;
         assert!(result.is_err(), "missing project should error");
     }
 
     #[tokio::test]
     async fn test_list_project_file() {
-        let dir = TempDir::new().unwrap();
+        let (db, dir) = test_db().await;
         let notes = dir.path().to_str().unwrap().to_string();
 
-        // Create a project file
+        // Create a project file on disk (find_project_file_by_id_or_name needs it)
         let project_path = dir.path().join("2026-05-31--project-my-project.org");
-        fs::write(
+        std::fs::write(
             &project_path,
             "\
 :PROPERTIES:
@@ -720,22 +726,26 @@ Milk, eggs
         )
         .unwrap();
 
-        let result = run_list(&notes, Some("my-project"), None).await;
-        assert!(result.is_ok());
+        // Insert corresponding tasks into the DB
+        db.call(|conn| {
+            insert_task(conn, "pt-1", "2026-05-31--project-my-project.org", "First task", "todo");
+            insert_task(conn, "pt-2", "2026-05-31--project-my-project.org", "Second task", "done");
+            Ok(())
+        })
+        .await
+        .unwrap();
 
-        let tasks = tasks_in_file(&project_path);
-        assert_eq!(tasks.len(), 2);
-        assert_eq!(tasks[0].2, "First task");
-        assert_eq!(tasks[1].2, "Second task");
+        let result = run_list(&db, &notes, Some("my-project"), None).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_list_project_filter_by_status() {
-        let dir = TempDir::new().unwrap();
+        let (db, dir) = test_db().await;
         let notes = dir.path().to_str().unwrap().to_string();
 
         let project_path = dir.path().join("2026-05-31--project-sprint-12.org");
-        fs::write(
+        std::fs::write(
             &project_path,
             "\
 :PROPERTIES:
@@ -764,13 +774,17 @@ Milk, eggs
         )
         .unwrap();
 
-        let result = run_list(&notes, Some("sprint-12"), Some("DONE")).await;
-        assert!(result.is_ok());
+        db.call(|conn| {
+            insert_task(conn, "a", "2026-05-31--project-sprint-12.org", "Task A", "todo");
+            insert_task(conn, "b", "2026-05-31--project-sprint-12.org", "Task B", "done");
+            insert_task(conn, "c", "2026-05-31--project-sprint-12.org", "Task C", "todo");
+            Ok(())
+        })
+        .await
+        .unwrap();
 
-        let tasks = tasks_in_file(&project_path);
-        let done_tasks: Vec<_> = tasks.iter().filter(|t| t.1 == "DONE").collect();
-        assert_eq!(done_tasks.len(), 1);
-        assert_eq!(done_tasks[0].2, "Task B");
+        let result = run_list(&db, &notes, Some("sprint-12"), Some("DONE")).await;
+        assert!(result.is_ok());
     }
 
     // -----------------------------------------------------------------------
