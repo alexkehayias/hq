@@ -146,52 +146,35 @@ async fn list_tasks_from_files(
     display_prefix: Option<&str>,
 ) -> Result<Vec<(String, String, String, String)>> {
     let status_lower = status_filter.map(|s| s.to_lowercase());
-    let filenames_owned: Vec<String> = filenames.iter().cloned().collect();
+    let filenames_json = serde_json::to_string(filenames).unwrap();
 
     let tasks = db
         .call(move |conn| {
-            let placeholders = filenames_owned
-                .iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let sql = format!(
+            let mut stmt = conn.prepare(
                 "SELECT id, title, status, file_name
                  FROM note_meta
                  WHERE type = 'task'
-                   AND file_name IN ({placeholders})
+                   AND file_name IN (SELECT value FROM json_each(?))
                    AND (? IS NULL OR status = ?)
-                 ORDER BY status, title"
-            );
+                 ORDER BY status, title",
+            )?;
 
-            let mut stmt = conn.prepare(&sql)?;
-
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            for f in &filenames_owned {
-                params.push(Box::new(f.clone()));
-            }
-            match &status_lower {
-                Some(s) => {
-                    params.push(Box::new(s.clone()));
-                    params.push(Box::new(s.clone()));
-                }
-                None => {
-                    params.push(Box::new(rusqlite::types::Null));
-                    params.push(Box::new(rusqlite::types::Null));
-                }
-            }
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
+            let status_val: &dyn rusqlite::types::ToSql = match &status_lower {
+                Some(s) => s,
+                None => &rusqlite::types::Null,
+            };
 
             let rows = stmt
-                .query_map(rusqlite::params_from_iter(param_refs), |row| {
-                    let id: String = row.get(0)?;
-                    let title: String = row.get(1)?;
-                    let status: String = row.get(2)?;
-                    let file_name: String = row.get(3)?;
-                    Ok((id, title, status, file_name))
-                })?
+                .query_map(
+                    rusqlite::params![filenames_json.as_bytes(), status_val, status_val],
+                    |row| {
+                        let id: String = row.get(0)?;
+                        let title: String = row.get(1)?;
+                        let status: String = row.get(2)?;
+                        let file_name: String = row.get(3)?;
+                        Ok((id, title, status, file_name))
+                    },
+                )?
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
 
