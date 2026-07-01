@@ -95,6 +95,9 @@ pub async fn run_refile(notes_path: &str, id: &str, project: &str) -> Result<()>
         anyhow::bail!("Task is already in project '{project}'");
     }
 
+    // Extract the raw headline text (preserves all org-mode structure)
+    let headline_text = &location.content[location.range.start..location.range.end];
+
     // Remove the headline from the source file
     let before = &location.content[..location.range.start];
     let after = &location.content[location.range.end..];
@@ -104,19 +107,12 @@ pub async fn run_refile(notes_path: &str, id: &str, project: &str) -> Result<()>
         .await
         .context("Failed to write source file after refile")?;
 
-    // Append the headline to the target project file
-    let headline = orgmode::build_headline(
-        id,
-        &location.current_title,
-        &location.current_body,
-        &location.current_status,
-        location.current_level,
-    );
+    // Append the raw headline verbatim to the target project file
     let mut target_content = fs::read_to_string(&target_path).await?;
     if !target_content.ends_with('\n') {
         target_content.push('\n');
     }
-    target_content.push_str(&headline);
+    target_content.push_str(headline_text);
     target_content.push('\n');
     fs::write(&target_path, &target_content)
         .await
