@@ -81,6 +81,52 @@ pub async fn run_update(
     Ok(())
 }
 
+/// Move a task from its current file into a project file.
+///
+/// Finds the task by UUID across all org files, removes the headline from its
+/// source, and appends it to the target project file (creating the project
+/// file if it doesn't exist yet).
+pub async fn run_refile(notes_path: &str, id: &str, project: &str) -> Result<()> {
+    let location = orgmode::find_task(notes_path, id).await?;
+    let target_path = orgmode::find_or_create_project(notes_path, project).await?;
+
+    if location.path == target_path {
+        anyhow::bail!("Task is already in project '{project}'");
+    }
+
+    // Extract the raw headline text (preserves all org-mode structure)
+    let headline_text = &location.content[location.range.start..location.range.end];
+
+    // Remove the headline from the source file
+    let before = &location.content[..location.range.start];
+    let after = &location.content[location.range.end..];
+    let after = after.strip_prefix('\n').unwrap_or(after);
+    let new_source = format!("{before}{after}");
+    fs::write(&location.path, &new_source)
+        .await
+        .context("Failed to write source file after refile")?;
+
+    // Append the raw headline verbatim to the target project file
+    let mut target_content = fs::read_to_string(&target_path).await?;
+    if !target_content.ends_with('\n') {
+        target_content.push('\n');
+    }
+    target_content.push_str(headline_text);
+    target_content.push('\n');
+    fs::write(&target_path, &target_content)
+        .await
+        .context("Failed to write target project file")?;
+
+    println!(
+        "Refiled task {id} ('{}') from {} to {}",
+        location.current_title,
+        location.path.display(),
+        target_path.display()
+    );
+
+    Ok(())
+}
+
 pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
 
@@ -1078,5 +1124,267 @@ Investigate the redirect
 
         let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
         assert!(result.is_err(), "should error for nonexistent project");
+    }
+
+    // -----------------------------------------------------------------------
+    // run_refile
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_refile_standalone_to_project() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
+            .await
+            .unwrap();
+
+        // Find the standalone task's ID
+        let standalone_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-") { None } else { Some(p) }
+                })
+                .next()
+                .unwrap(),
+        );
+        let content = fs::read_to_string(&standalone_path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
+
+        // Refile to a project
+        run_refile(&notes, &task_id, "errands").await.unwrap();
+
+        // Task headline should be removed from the standalone file
+        // (document-level preamble with #+TITLE: may retain the title)
+        let standalone_content = fs::read_to_string(&standalone_path).unwrap();
+        assert!(!standalone_content.contains("Milk, eggs, bread"),
+            "headline body should not remain in source");
+        assert_eq!(headline_count(&standalone_path), 0);
+
+        // Task should now be in the project file
+        let project_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-errands") { Some(p) } else { None }
+                })
+                .next()
+                .unwrap(),
+        );
+        let project_content = fs::read_to_string(&project_path).unwrap();
+        assert!(project_content.contains(&task_id));
+        assert!(project_content.contains("Buy groceries"));
+        assert!(project_content.contains("Milk, eggs, bread"));
+        assert_eq!(headline_count(&project_path), 1);
+    }
+
+    #[tokio::test]
+    async fn test_refile_from_one_project_to_another() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Fix login bug", None, Some("sprint-12"), "TODO")
+            .await
+            .unwrap();
+
+        // Find the task ID from the project file
+        let project_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-sprint-12") { Some(p) } else { None }
+                })
+                .next()
+                .unwrap(),
+        );
+        let content = fs::read_to_string(&project_path).unwrap();
+        let id_marker = ":ID:       ";
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        // Refile to a different project
+        run_refile(&notes, &task_id, "security").await.unwrap();
+
+        // Task should no longer be in the original project
+        let sprint_content = fs::read_to_string(&project_path).unwrap();
+        assert!(!sprint_content.contains(&task_id));
+        assert_eq!(headline_count(&project_path), 0);
+
+        // Task should now be in the new project
+        let security_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-security") { Some(p) } else { None }
+                })
+                .next()
+                .unwrap(),
+        );
+        let security_content = fs::read_to_string(&security_path).unwrap();
+        assert!(security_content.contains(&task_id));
+        assert!(security_content.contains("Fix login bug"));
+        assert_eq!(headline_count(&security_path), 1);
+    }
+
+    #[tokio::test]
+    async fn test_refile_preserves_org_structure() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // Create a task with body text via refile.org
+        let refile_path = dir.path().join("refile.org");
+        fs::write(
+            &refile_path,
+            "\
+* TODO Research API design
+:PROPERTIES:
+:ID:       task-with-body
+:END:
+Look into REST vs GraphQL options.
+Consider authentication requirements.
+",
+        )
+        .unwrap();
+
+        // Refile to a project
+        run_refile(&notes, "task-with-body", "research").await.unwrap();
+
+        // Read the project file
+        let project_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-research") { Some(p) } else { None }
+                })
+                .next()
+                .unwrap(),
+        );
+        let project_content = fs::read_to_string(&project_path).unwrap();
+
+        // All org structure should be preserved verbatim
+        assert!(project_content.contains("TODO Research API design"));
+        assert!(project_content.contains(":ID:       task-with-body"));
+        assert!(project_content.contains("Look into REST vs GraphQL options."));
+        assert!(project_content.contains("Consider authentication requirements."));
+
+        // Source file should no longer have the task
+        let refile_content = fs::read_to_string(&refile_path).unwrap();
+        assert!(!refile_content.contains("task-with-body"));
+    }
+
+    #[tokio::test]
+    async fn test_refile_to_same_project_errors() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        run_create(&notes, "Task in project", None, Some("my-project"), "TODO")
+            .await
+            .unwrap();
+
+        // Find the task ID
+        let project_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-my-project") { Some(p) } else { None }
+                })
+                .next()
+                .unwrap(),
+        );
+        let content = fs::read_to_string(&project_path).unwrap();
+        let id_marker = ":ID:       ";
+        let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+
+        // Refiling to the same project should fail
+        let result = run_refile(&notes, &task_id, "my-project").await;
+        assert!(result.is_err(), "should error when refiling to same project");
+        assert!(
+            result.unwrap_err().to_string().contains("already in project"),
+            "error should mention already-in-project"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_refile_nonexistent_task() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        let result = run_refile(&notes, "nonexistent-uuid", "some-project").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_refile_from_refile_org_to_project() {
+        let dir = TempDir::new().unwrap();
+        let notes = dir.path().to_str().unwrap().to_string();
+
+        // Simulate a task sitting in refile.org
+        let refile_path = dir.path().join("refile.org");
+        fs::write(
+            &refile_path,
+            "\
+:PROPERTIES:
+:ID:       inbox
+:END:
+#+TITLE: Refile
+
+* TODO Review PR
+:PROPERTIES:
+:ID:       review-pr-42
+:END:
+Need to check the middleware changes.
+
+* DONE Setup CI
+:PROPERTIES:
+:ID:       setup-ci
+:END:
+",
+        )
+        .unwrap();
+
+        // Refile one task to a project
+        run_refile(&notes, "review-pr-42", "ops").await.unwrap();
+
+        // The refiled task should be gone from refile.org
+        let refile_content = fs::read_to_string(&refile_path).unwrap();
+        assert!(!refile_content.contains("review-pr-42"));
+        assert!(!refile_content.contains("Review PR"));
+
+        // The other task should remain in refile.org
+        assert!(refile_content.contains("setup-ci"));
+        assert!(refile_content.contains("Setup CI"));
+
+        // The refiled task should be in the project file
+        let project_path = dir.path().join(
+            fs::read_dir(&notes)
+                .unwrap()
+                .filter_map(|e| {
+                    let p = e.unwrap().path();
+                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                    if n.contains("--project-ops") { Some(p) } else { None }
+                })
+                .next()
+                .unwrap(),
+        );
+        let project_content = fs::read_to_string(&project_path).unwrap();
+        assert!(project_content.contains("review-pr-42"));
+        assert!(project_content.contains("Review PR"));
+        assert!(project_content.contains("middleware changes"));
+        assert_eq!(headline_count(&project_path), 1);
     }
 }
