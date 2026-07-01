@@ -152,42 +152,40 @@ async fn list_tasks_from_files(
         .call(move |conn| {
             let placeholders = filenames_owned
                 .iter()
-                .map(|_| "?".to_string())
+                .map(|_| "?")
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            let sql = if status_lower.is_some() {
-                format!(
-                    "SELECT id, title, status, file_name
-                     FROM note_meta
-                     WHERE type = 'task'
-                       AND file_name IN ({placeholders})
-                       AND status = ?
-                     ORDER BY status, title"
-                )
-            } else {
-                format!(
-                    "SELECT id, title, status, file_name
-                     FROM note_meta
-                     WHERE type = 'task'
-                       AND file_name IN ({placeholders})
-                     ORDER BY status, title"
-                )
-            };
+            let sql = format!(
+                "SELECT id, title, status, file_name
+                 FROM note_meta
+                 WHERE type = 'task'
+                   AND file_name IN ({placeholders})
+                   AND (? IS NULL OR status = ?)
+                 ORDER BY status, title"
+            );
 
             let mut stmt = conn.prepare(&sql)?;
 
-            let params: Vec<&dyn rusqlite::types::ToSql> = if let Some(ref s) = status_lower {
-                let mut p: Vec<&dyn rusqlite::types::ToSql> =
-                    filenames_owned.iter().map(|f| f as &dyn rusqlite::types::ToSql).collect();
-                p.push(s as &dyn rusqlite::types::ToSql);
-                p
-            } else {
-                filenames_owned.iter().map(|f| f as &dyn rusqlite::types::ToSql).collect()
-            };
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            for f in &filenames_owned {
+                params.push(Box::new(f.clone()));
+            }
+            match &status_lower {
+                Some(s) => {
+                    params.push(Box::new(s.clone()));
+                    params.push(Box::new(s.clone()));
+                }
+                None => {
+                    params.push(Box::new(rusqlite::types::Null));
+                    params.push(Box::new(rusqlite::types::Null));
+                }
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
 
             let rows = stmt
-                .query_map(rusqlite::params_from_iter(params), |row| {
+                .query_map(rusqlite::params_from_iter(param_refs), |row| {
                     let id: String = row.get(0)?;
                     let title: String = row.get(1)?;
                     let status: String = row.get(2)?;
@@ -201,7 +199,6 @@ async fn list_tasks_from_files(
         })
         .await?;
 
-    // Map file_name to display name, optionally prefixing
     let display_prefix = display_prefix.map(|s| s.to_string());
     let result: Vec<(String, String, String, String)> = tasks
         .into_iter()
@@ -570,28 +567,13 @@ mod tests {
     // run_list
     // -----------------------------------------------------------------------
 
-    /// Create an in-memory SQLite database with the note_meta table.
+    /// Create a test database using the existing DB initialization functions.
     async fn test_db() -> (Connection, TempDir) {
         let dir = TempDir::new().unwrap();
-        let db = Connection::open(":memory:").await.unwrap();
+        let vec_db_path = dir.path().to_str().unwrap().to_string();
+        let db = crate::core::db::async_db(&vec_db_path).await.unwrap();
         db.call(|conn| {
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS note_meta (
-                    id TEXT PRIMARY KEY,
-                    file_name TEXT,
-                    title TEXT,
-                    category TEXT,
-                    tags TEXT,
-                    body TEXT,
-                    type TEXT,
-                    status TEXT,
-                    scheduled TEXT,
-                    deadline TEXT,
-                    closed TEXT,
-                    date TEXT
-                )",
-            )
-            .unwrap();
+            crate::core::db::initialize_db(conn).unwrap();
             Ok(())
         })
         .await
