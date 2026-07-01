@@ -294,7 +294,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 task::run_delete(&notes_path, &id).await?;
             }
             TaskCommand::List { project, status } => {
-                task::run_list(&notes_path, project.as_deref(), status.as_deref()).await?;
+                let db = crate::core::db::async_db(&vec_db_path).await?;
+                task::run_list(&db, &notes_path, project.as_deref(), status.as_deref()).await?;
             }
         },
         None => {}
