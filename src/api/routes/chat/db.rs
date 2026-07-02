@@ -15,7 +15,7 @@ pub async fn chat_session_count(
             .call(|conn| {
                 let mut stmt = conn.prepare("SELECT COUNT(*) FROM session")?;
                 let count: i64 = stmt.query_row([], |row| row.get(0))?;
-                Ok(count)
+                Ok::<_, rusqlite::Error>(count)
             })
             .await
             .map_err(anyhow::Error::from);
@@ -49,7 +49,7 @@ pub async fn chat_session_count(
                 ],
                 |row| row.get(0),
             )?;
-            Ok(count)
+            Ok::<_, rusqlite::Error>(count)
         })
         .await?;
     Ok(count)
@@ -86,7 +86,7 @@ pub async fn chat_session_list(
                     })?
                     .filter_map(Result::ok)
                     .collect::<Vec<_>>();
-                Ok(session_list)
+                Ok::<_, rusqlite::Error>(session_list)
             })
             .await?);
     }
@@ -150,7 +150,7 @@ pub async fn chat_session_list(
                 )?
                 .filter_map(Result::ok)
                 .collect::<Vec<_>>();
-            Ok(session_list)
+            Ok::<_, rusqlite::Error>(session_list)
         })
         .await
         .map_err(anyhow::Error::from)?;

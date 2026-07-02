@@ -7,7 +7,7 @@ pub async fn insert_run(db: &Connection, id: &str, name: &str, model: &str) -> a
     let model = model.to_string();
 
     db.call(move |conn| {
-        Ok(conn.execute(
+        Ok::<_, rusqlite::Error>(conn.execute(
             "INSERT INTO eval_run (id, name, model, status) VALUES (?1, ?2, ?3, 'pending')",
             rusqlite::params![id, name, model],
         )?)
@@ -27,7 +27,7 @@ pub async fn update_run_status(
     let status = status.to_string();
 
     db.call(move |conn| {
-        Ok(conn.execute(
+        Ok::<_, rusqlite::Error>(conn.execute(
             "UPDATE eval_run SET status = ?1, started_at = CASE WHEN ?1 = 'running' THEN ?2 ELSE started_at END, completed_at = CASE WHEN ?1 IN ('completed', 'failed') THEN ?2 ELSE completed_at END WHERE id = ?3",
             rusqlite::params![status, now, run_id],
         )?)
@@ -55,7 +55,7 @@ pub async fn insert_result(
     let error = error.map(|s| s.to_string());
 
     db.call(move |conn| {
-        Ok(conn.execute(
+        Ok::<_, rusqlite::Error>(conn.execute(
             "INSERT INTO eval_result (id, run_id, case_id, input, output, passed, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![id, run_id, case_id, input, output, passed as i32, error],
         )?)
@@ -87,7 +87,7 @@ pub async fn get_run_results(db: &Connection, run_id: &str) -> anyhow::Result<Ve
         for row in rows {
             results.push(row?);
         }
-        Ok(results)
+        Ok::<_, rusqlite::Error>(results)
     })
     .await?)
 }
@@ -110,9 +110,9 @@ pub async fn get_run(db: &Connection, run_id: &str) -> anyhow::Result<Option<Eva
                 })
             },
         ) {
-            Ok(run) => Ok(Some(run)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(tokio_rusqlite::Error::Other(Box::new(e))),
+            Ok(run) => Ok::<_, rusqlite::Error>(Some(run)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok::<_, rusqlite::Error>(None),
+            Err(e) => Err(e),
         }
     })
     .await?)

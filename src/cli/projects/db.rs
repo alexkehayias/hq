@@ -52,7 +52,7 @@ pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
 
-            Ok(rows)
+            Ok::<_, rusqlite::Error>(rows)
         })
         .await?;
 

@@ -25,7 +25,7 @@ async fn email_unread_handler(
             let result = conn
                 .prepare("SELECT refresh_token FROM auth WHERE id = ?1")
                 .and_then(|mut stmt| stmt.query_row([&params.email], |row| row.get(0)))?;
-            Ok(result)
+            Ok::<_, rusqlite::Error>(result)
         })
         .await?
     };

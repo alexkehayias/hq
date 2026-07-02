@@ -43,7 +43,7 @@ impl ToolCall for CalendarTool {
                 for email in rows {
                     emails.push(email?);
                 }
-                Ok(emails)
+                Ok::<_, rusqlite::Error>(emails)
             })
             .await?;
 

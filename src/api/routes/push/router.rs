@@ -43,7 +43,7 @@ async fn push_subscription(
                 auth,
             ])?;
             conn.execute("DELETE FROM vec_items", [])?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await?;
     }

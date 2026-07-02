@@ -22,7 +22,7 @@ pub async fn run(index_path: &str, notes_path: &str, vec_db_path: &str) -> Resul
     db.call(|conn| {
         conn.execute("DELETE FROM vec_items", [])?;
         conn.execute("DELETE FROM note_meta", [])?;
-        Ok(())
+        Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("Failed to delete note_meta or vec_items data");

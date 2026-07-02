@@ -31,7 +31,7 @@ pub async fn insert_chat_message(
                 [],
                 |row| row.get(0),
             )?;
-            Ok(id)
+            Ok::<_, rusqlite::Error>(id)
         })
         .await?;
 
@@ -98,7 +98,7 @@ RETURNING id, mode",
             }
 
             tx.commit()?;
-            Ok((id, mode))
+            Ok::<_, rusqlite::Error>((id, mode))
         })
         .await?;
 
@@ -126,7 +126,7 @@ pub async fn find_chat_session_by_id(
             })?
             .filter_map(Result::ok)
             .collect::<Vec<(String, Message)>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(history.await?)
 }
@@ -159,7 +159,7 @@ pub async fn get_chat_message_by_index(
             .filter_map(Result::ok)
             .next();
 
-        Ok(msg.map(|m| (m, title)))
+        Ok::<_, rusqlite::Error>(msg.map(|m| (m, title)))
     });
     Ok(result.await?)
 }
@@ -185,7 +185,7 @@ pub async fn get_chat_message_by_id(
         match row {
             Ok((msg, title)) => Ok(Some((msg, title))),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(rusqlite::Error::from(e)),
         }
     });
     Ok(result.await?)
@@ -212,7 +212,7 @@ pub async fn get_non_background_sessions(db: &Connection) -> Result<Vec<SessionW
             })?
             .filter_map(Result::ok)
             .collect::<Vec<SessionWithTitle>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(sessions.await?)
 }
@@ -243,7 +243,7 @@ pub async fn get_chat_messages_by_ids(
             })?
             .filter_map(Result::ok)
             .collect::<Vec<(String, Message, Option<String>)>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(result.await?)
 }
@@ -261,7 +261,7 @@ pub async fn session_has_background_tag(db: &Connection, session_id: &str) -> Re
             [s_id],
             |row| row.get(0),
         );
-        Ok(result.unwrap_or(0) > 0)
+        Ok::<_, rusqlite::Error>(result.unwrap_or(0) > 0)
     });
     Ok(has_tag.await?)
 }
@@ -275,7 +275,7 @@ pub async fn get_session_mode(db: &Connection, session_id: &str) -> Result<Sessi
                 .prepare("SELECT mode FROM session WHERE id = ?")
                 .expect("Invalid sql");
             let val: String = stmt.query_row([s_id], |row| row.get::<_, String>(0))?;
-            Ok(val.parse().expect("Parsing session mode failed"))
+            Ok::<_, rusqlite::Error>(val.parse().expect("Parsing session mode failed"))
         })
         .await
         .map_err(anyhow::Error::from)?;
@@ -296,7 +296,7 @@ pub async fn set_session_mode(
             "UPDATE session SET mode = ? WHERE id = ?",
             rusqlite::params![mode_str, s_id],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::from)

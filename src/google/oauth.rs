@@ -91,7 +91,7 @@ pub async fn find_all_gmail_auth_emails(db: &Connection) -> Result<Vec<String>, 
             .query_map([], |row| row.get(0))?
             .filter_map(Result::ok)
             .collect();
-        Ok(result)
+        Ok::<_, rusqlite::Error>(result)
     });
     Ok(auths.await?)
 }

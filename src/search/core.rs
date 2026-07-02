@@ -107,7 +107,7 @@ pub async fn search_similar_notes(
         return Ok(Vec::new());
     }
 
-    let embeddings_model = TextEmbedding::try_new(
+    let mut embeddings_model = TextEmbedding::try_new(
         InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
     )
     .unwrap();
@@ -147,7 +147,7 @@ pub async fn search_similar_notes(
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchHit>, _>>()?;
-            Ok(found)
+            Ok::<_, rusqlite::Error>(found)
         })
         .await?;
     Ok(result)
@@ -279,7 +279,7 @@ pub async fn search_notes(
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchResult>, _>>()?;
-            Ok(found)
+            Ok::<_, rusqlite::Error>(found)
         })
         .await?
     } else {

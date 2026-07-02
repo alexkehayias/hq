@@ -160,7 +160,7 @@ mod tests {
             .expect("Failed to connect to async db");
         db.call(|conn| {
             initialize_db(conn).expect("Failed to migrate db");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

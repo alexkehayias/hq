@@ -25,7 +25,7 @@ pub async fn run(
             .expect("Failed to connect to db");
         connection.call(|conn| {
             initialize_db(conn).expect("DB initialization failed");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         }).await?;
         println!("Finished initializing db");
     }

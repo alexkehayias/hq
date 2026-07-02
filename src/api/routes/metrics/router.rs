@@ -50,7 +50,7 @@ async fn record_metric(
             "INSERT INTO metric_event (name, value) VALUES (?, ?)",
             tokio_rusqlite::params![&name, &value],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await?;
 
@@ -93,7 +93,7 @@ async fn get_metrics(
                 .filter_map(Result::ok)
                 .collect::<Vec<public::MetricEvent>>();
 
-            Ok(events)
+            Ok::<_, rusqlite::Error>(events)
         })
         .await?;
 
