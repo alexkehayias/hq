@@ -35,22 +35,33 @@ pub fn build_headline(id: &str, title: &str, body: &str, status: &str, level: us
 }
 
 /// Recursively collect all .org files in a directory tree.
-pub fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return files;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            files.extend(collect_org_files(&p));
-        } else if p.extension().map_or(false, |e| e == "org")
-            && p.file_name().unwrap_or_default() != "config.org"
-        {
-            files.push(p);
-        }
+pub async fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
+    /// Recursive helper boxed to avoid infinitely-sized async fn future.
+    fn collect_inner(
+        path: &std::path::Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PathBuf>> + Send + '_>> {
+        Box::pin(async move {
+            let mut files = Vec::new();
+            let Ok(mut entries) = tokio::fs::read_dir(path).await else {
+                return files;
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let p = entry.path();
+                if let Ok(ft) = entry.file_type().await {
+                    if ft.is_dir() {
+                        files.extend(collect_inner(&p).await);
+                    } else if ft.is_file()
+                        && p.extension().map_or(false, |e| e == "org")
+                        && p.file_name().unwrap_or_default() != "config.org"
+                    {
+                        files.push(p);
+                    }
+                }
+            }
+            files
+        })
     }
-    files
+    collect_inner(path).await
 }
 
 /// Build a regex pattern that matches `:ID:` followed by the given value,
@@ -107,7 +118,7 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
 /// Find a task by UUID across all org files in the notes directory.
 pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     let pattern = id_pattern(id);
-    let files = collect_org_files(std::path::Path::new(notes_path));
+    let files = collect_org_files(std::path::Path::new(notes_path)).await;
 
     for path in files {
         if path.file_name().unwrap_or_default() == "config.org" {
