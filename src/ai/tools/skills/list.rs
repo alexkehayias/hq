@@ -87,7 +87,7 @@ This is the body of {}.
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
         create_test_skill(temp.path(), "code-review", "Review code for bugs");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = ListSkillsTool::new(registry);
 
         let result = tool.call("{}").await.unwrap();
@@ -103,7 +103,7 @@ This is the body of {}.
     async fn test_list_skills_empty() {
         let temp = TempDir::new().unwrap();
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = ListSkillsTool::new(registry);
 
         let result = tool.call("{}").await.unwrap();

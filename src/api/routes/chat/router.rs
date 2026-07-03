@@ -391,45 +391,44 @@ async fn chat_handler(
         }
         (SessionMode::Chat, SlashCommand::Skill { name }) => {
             // List all skills or show a specific skill's content
-            let (response, persist_skill_msg) = {
+            let (response, persist_skill_msg) = if let Some(skill_name) = name {
+                let registry = skill_registry
+                    .read()
+                    .expect("Unable to read skill registry")
+                    .clone();
+
+                match registry.load_skill(&skill_name).await {
+                    Ok(skill) => {
+                        let skill_msg = format!(
+                            "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
+                            name = skill_name,
+                            path = skill.path.display(),
+                            content = skill.full_content(),
+                        );
+
+                        (skill_msg, true)
+                    }
+                    Err(e) => (e.to_string(), false),
+                }
+            } else {
                 let registry = skill_registry
                     .read()
                     .expect("Unable to read skill registry");
-                if let Some(skill_name) = name {
-                    // Show specific skill content
-                    let skill_result = registry.load_skill(skill_name);
-
-                    match skill_result {
-                        Ok(skill) => {
-                            let skill_msg = format!(
-                                "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
-                                name = skill_name,
-                                path = skill.path.display(),
-                                content = skill.full_content(),
-                            );
-
-                            (skill_msg, true)
-                        }
-                        Err(e) => (e.to_string(), false),
-                    }
+                let skills = registry.list_skills();
+                if skills.is_empty() {
+                    ("No skills available.".to_string(), false)
                 } else {
-                    // List all skills
-                    let skills = registry.list_skills();
-                    if skills.is_empty() {
-                        ("No skills available.".to_string(), false)
-                    } else {
-                        let skill_list: Vec<String> = skills
-                            .iter()
-                            .map(|s| format!("- **{}**: {}", s.name, s.description))
-                            .collect();
-                        (
-                            format!(
-                                "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
-                                skill_list.join("\n")
-                            ),
-                            false,
-                        )
-                    }
+                    let skill_list: Vec<String> = skills
+                        .iter()
+                        .map(|s| format!("- **{}**: {}", s.name, s.description))
+                        .collect();
+                    (
+                        format!(
+                            "Available skills:\n\n{}\n\nUse `/skills <name>` to view a specific skill.",
+                            skill_list.join("\n")
+                        ),
+                        false,
+                    )
                 }
             };
 

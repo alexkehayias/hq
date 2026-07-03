@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 static FRONTMATTER_RE: once_cell::sync::Lazy<Regex> =
     once_cell::sync::Lazy::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$").unwrap());
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
+use tokio::fs;
 
 /// The frontmatter section of a SKILL.md file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,12 +55,12 @@ impl Skill {
     ///
     /// The directory must contain a `SKILL.md` file with YAML frontmatter
     /// followed by markdown content.
-    pub fn load_from_directory(path: &Path) -> Result<Self> {
+    pub async fn load_from_directory(path: &Path) -> Result<Self> {
         // Validate the directory exists and contains SKILL.md
-        validate_skill_directory(path)?;
+        validate_skill_directory(path).await?;
 
         let skill_file = path.join("SKILL.md");
-        let content = fs::read_to_string(&skill_file)?;
+        let content = fs::read_to_string(&skill_file).await?;
 
         Self::parse_from_content(path.to_path_buf(), &content)
     }
@@ -116,21 +116,20 @@ impl Skill {
     /// Get the path to a file in the skill's optional directories.
     ///
     /// Supports: `scripts/`, `references/`, and `assets/`
-    pub fn get_file_path(&self, relative_path: &str) -> Option<PathBuf> {
+    pub async fn get_file_path(&self, relative_path: &str) -> Option<PathBuf> {
         let full_path = self.path.join(relative_path);
-        if full_path.exists() && full_path.is_file() {
-            Some(full_path)
-        } else {
-            None
+        match fs::metadata(&full_path).await {
+            Ok(meta) if meta.is_file() => Some(full_path),
+            _ => None,
         }
     }
 
     /// Read a file from the skill's optional directories.
     ///
     /// Returns `None` if the file doesn't exist or cannot be read.
-    pub fn read_file(&self, relative_path: &str) -> Option<String> {
-        self.get_file_path(relative_path)
-            .and_then(|path| fs::read_to_string(path).ok())
+    pub async fn read_file(&self, relative_path: &str) -> Option<String> {
+        let path = self.get_file_path(relative_path).await?;
+        fs::read_to_string(&path).await.ok()
     }
 
     /// Check if the skill has a specific optional directory.

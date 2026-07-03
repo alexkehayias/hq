@@ -30,7 +30,7 @@ pub async fn run(index_path: &str, notes_path: &str, vec_db_path: &str) -> Resul
 
     // Remove the full text search index
     println!("Recreating search index...");
-    recreate_index(index_path);
+    recreate_index(index_path).await;
     println!("Finished recreating search index");
 
     // Index everything

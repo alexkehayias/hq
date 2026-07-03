@@ -1,5 +1,6 @@
 use regex::Regex;
 use std::path::Path;
+use tokio::fs;
 
 /// Error types for skill validation
 #[derive(Debug, thiserror::Error)]
@@ -58,15 +59,23 @@ pub fn validate_skill_name(name: &str) -> Result<(), SkillValidationError> {
 }
 
 /// Validates that a skill directory contains the required SKILL.md file.
-pub fn validate_skill_directory(path: &Path) -> Result<(), SkillValidationError> {
-    if !path.exists() || !path.is_dir() {
+pub async fn validate_skill_directory(path: &Path) -> Result<(), SkillValidationError> {
+    let meta = fs::metadata(path)
+        .await
+        .map_err(|_| SkillValidationError::DirectoryNotFound(path.display().to_string()))?;
+
+    if !meta.is_dir() {
         return Err(SkillValidationError::DirectoryNotFound(
             path.display().to_string(),
         ));
     }
 
     let skill_file = path.join("SKILL.md");
-    if !skill_file.exists() || !skill_file.is_file() {
+    let file_meta = fs::metadata(&skill_file)
+        .await
+        .map_err(|_| SkillValidationError::SkillFileNotFound(path.display().to_string()))?;
+
+    if !file_meta.is_file() {
         return Err(SkillValidationError::SkillFileNotFound(
             path.display().to_string(),
         ));

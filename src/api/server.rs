@@ -69,6 +69,7 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
         .expect("Failed to connect to async db");
 
     let skill_registry = SkillRegistry::new(&config.skills_path)
+        .await
         .expect("Failed to create skill registry");
     let app_state = AppState::new(db.clone(), config.clone(), skill_registry);
     let shared_state = Arc::new(RwLock::new(app_state));

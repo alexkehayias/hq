@@ -35,15 +35,15 @@ pub fn build_headline(id: &str, title: &str, body: &str, status: &str, level: us
 }
 
 /// Recursively collect all .org files in a directory tree.
-pub fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
+pub async fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(path) else {
+    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
         return files;
     };
-    for entry in entries.flatten() {
+    while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
         let p = entry.path();
         if p.is_dir() {
-            files.extend(collect_org_files(&p));
+            files.extend(Box::pin(collect_org_files(&p)).await);
         } else if p.extension().map_or(false, |e| e == "org")
             && p.file_name().unwrap_or_default() != "config.org"
         {
@@ -107,7 +107,7 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
 /// Find a task by UUID across all org files in the notes directory.
 pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     let pattern = id_pattern(id);
-    let files = collect_org_files(std::path::Path::new(notes_path));
+    let files = collect_org_files(std::path::Path::new(notes_path)).await;
 
     for path in files {
         if path.file_name().unwrap_or_default() == "config.org" {

@@ -85,7 +85,7 @@ impl ToolCall for SaveSkillTool {
         }
 
         // Validate the SKILL.md is well-formed by parsing it
-        if let Err(e) = Skill::load_from_directory(&workspace_skill) {
+        if let Err(e) = Skill::load_from_directory(&workspace_skill).await {
             tracing::error!("Skill is invalid: {:?}", &workspace_skill);
             return Ok(serde_json::to_string(&SaveSkillResult {
                 name: name.clone(),
@@ -113,21 +113,36 @@ impl ToolCall for SaveSkillTool {
         copy_dir(&workspace_skill, &global_dest).await?;
 
         // Reload the registry to pick up changes
-        let reload_error = if let Ok(mut guard) = self.registry.write() {
-            guard.reload().err().map(|e| {
-                tracing::error!("Failed to reload skill registry after save: {}", e);
-                format!(
-                    "Skill saved to disk but registry reload failed ({}). \
-                     The skill may not be available until the server is restarted.",
-                    e
-                )
-            })
-        } else {
-            Some(
-                "Skill saved to disk but registry is not available. \
-                  The skill may not be usable until the server is restarted."
-                    .to_string(),
-            )
+        let reload_error = 'block: {
+            // Clone the registry while holding the lock, then drop
+            // the lock before doing async I/O
+            let mut reg = match self.registry.write() {
+                Ok(guard) => guard.clone(),
+                Err(_) => {
+                    break 'block Some(
+                        "Skill saved to disk but registry is not available. \
+                         The skill may not be usable until the server is restarted."
+                            .to_string(),
+                    );
+                }
+            };
+
+            match reg.reload().await {
+                Ok(()) => {
+                    if let Ok(mut guard) = self.registry.write() {
+                        *guard = reg;
+                    }
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Failed to reload skill registry after save: {}", e);
+                    Some(format!(
+                        "Skill saved to disk but registry reload failed ({}). \
+                         The skill may not be available until the server is restarted.",
+                        e
+                    ))
+                }
+            }
         };
 
         let result = SaveSkillResult {
@@ -225,7 +240,7 @@ Test body.
         // Create skill in workspace (simulating agent having created it)
         create_test_skill(&workspace, "new-skill");
 
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -273,7 +288,7 @@ Updated body.
         )
         .unwrap();
 
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -300,7 +315,7 @@ Updated body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -319,7 +334,7 @@ Updated body.
         std::fs::create_dir_all(&skills_dir).unwrap();
 
         let storage_path = temp.path().to_string_lossy().to_string();
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -343,7 +358,7 @@ Updated body.
 
         create_test_skill(&workspace, "brand-new");
 
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
 
         // Registry should not have the skill yet
         {
@@ -386,7 +401,7 @@ Updated body.
         )
         .unwrap();
 
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,
@@ -418,7 +433,7 @@ Updated body.
         // Directory exists but no SKILL.md
         std::fs::create_dir_all(workspace.join("no-md-skill")).unwrap();
 
-        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).unwrap()));
+        let registry = Arc::new(RwLock::new(SkillRegistry::new(&skills_dir).await.unwrap()));
         let tool = SaveSkillTool::new(
             &skills_dir.to_string_lossy(),
             &storage_path,

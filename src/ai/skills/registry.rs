@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
+use tokio::fs;
 
 use crate::ai::skills::{
     skill::{Skill, SkillSummary},
@@ -22,7 +22,7 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     /// Create a new registry with the given skills directory path.
-    pub fn new<P: AsRef<Path>>(dir_path: P) -> Result<Self> {
+    pub async fn new<P: AsRef<Path>>(dir_path: P) -> Result<Self> {
         let dir_path = PathBuf::from(dir_path.as_ref());
         let mut registry = Self {
             dir_path,
@@ -30,7 +30,7 @@ impl SkillRegistry {
         };
 
         // Load all skill summaries
-        registry.load_summaries()?;
+        registry.load_summaries().await?;
 
         Ok(registry)
     }
@@ -39,10 +39,14 @@ impl SkillRegistry {
     ///
     /// This only loads metadata (name + description) for efficient discovery.
     /// Full skill content is loaded on demand when a skill is activated.
-    fn load_summaries(&mut self) -> Result<()> {
-        let dir_path = &self.dir_path;
+    async fn load_summaries(&mut self) -> Result<()> {
+        let dir_path = self.dir_path.clone();
 
-        if !dir_path.is_dir() {
+        let meta = fs::metadata(&dir_path).await.map_err(|_| {
+            anyhow!("Skills path '{}' is not a directory", dir_path.display())
+        })?;
+
+        if !meta.is_dir() {
             return Err(anyhow!(
                 "Skills path '{}' is not a directory",
                 dir_path.display()
@@ -50,20 +54,21 @@ impl SkillRegistry {
         }
 
         // Iterate through subdirectories
-        for entry in fs::read_dir(dir_path)? {
-            let entry = entry?;
+        let mut entries = fs::read_dir(&dir_path).await?;
+        while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
 
             // Skip non-directories
-            if !path.is_dir() {
+            let entry_meta = fs::metadata(&path).await?;
+            if !entry_meta.is_dir() {
                 continue;
             }
 
             // Validate and load the skill
-            match validate_skill_directory(&path) {
+            match validate_skill_directory(&path).await {
                 Ok(()) => {
                     // Load just the summary (name + description)
-                    if let Ok(skill) = Skill::load_from_directory(&path) {
+                    if let Ok(skill) = Skill::load_from_directory(&path).await {
                         let summary = skill.summary();
                         self.summaries.insert(summary.name.clone(), summary);
                     }
@@ -90,9 +95,9 @@ impl SkillRegistry {
     /// Reload all skill summaries from the configured directory.
     ///
     /// This is useful for picking up new skills without restarting the application.
-    pub fn reload(&mut self) -> Result<()> {
+    pub async fn reload(&mut self) -> Result<()> {
         self.summaries.clear();
-        self.load_summaries()
+        self.load_summaries().await
     }
 
     /// Get a summary for all available skills.
@@ -117,14 +122,18 @@ impl SkillRegistry {
     /// Load the full content of a skill by name.
     ///
     /// This loads the complete SKILL.md including frontmatter and body content.
-    pub fn load_skill(&self, name: &str) -> Result<Skill> {
+    pub async fn load_skill(&self, name: &str) -> Result<Skill> {
         let skill_path = self.dir_path.join(name);
 
-        if !skill_path.exists() || !skill_path.is_dir() {
+        let meta = fs::metadata(&skill_path).await.map_err(|_| {
+            anyhow!("Skill '{}' not found", name)
+        })?;
+
+        if !meta.is_dir() {
             return Err(anyhow!("Skill '{}' not found", name));
         }
 
-        Skill::load_from_directory(&skill_path)
+        Skill::load_from_directory(&skill_path).await
     }
 
     /// Search for skills by keyword in their name or description.
@@ -203,25 +212,25 @@ This is the body of {}.
         skill_dir
     }
 
-    #[test]
-    fn test_registry_loads_skills() {
+    #[tokio::test]
+    async fn test_registry_loads_skills() {
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
         create_test_skill(temp.path(), "code-review", "Review code");
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
 
         assert_eq!(registry.count(), 2);
         assert!(registry.has_skill("pdf-processing"));
         assert!(registry.has_skill("code-review"));
     }
 
-    #[test]
-    fn test_registry_search() {
+    #[tokio::test]
+    async fn test_registry_search() {
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
         create_test_skill(temp.path(), "code-review", "Review code for bugs");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
 
         // Exact name match
         let results = registry.search("pdf-processing");
@@ -243,23 +252,23 @@ This is the body of {}.
         assert_eq!(results.len(), 0);
     }
 
-    #[test]
-    fn test_registry_load_full_skill() {
+    #[tokio::test]
+    async fn test_registry_load_full_skill() {
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "test-skill", "A test skill");
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
 
-        let skill = registry.load_skill("test-skill").unwrap();
+        let skill = registry.load_skill("test-skill").await.unwrap();
         assert_eq!(skill.frontmatter.name, "test-skill");
         assert_eq!(skill.frontmatter.description, "A test skill");
         assert!(skill.body.contains("This is the body of test-skill"));
     }
 
-    #[test]
-    fn test_registry_reload() {
+    #[tokio::test]
+    async fn test_registry_reload() {
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "skill-one", "First skill");
-        let mut registry = SkillRegistry::new(temp.path()).unwrap();
+        let mut registry = SkillRegistry::new(temp.path()).await.unwrap();
 
         assert_eq!(registry.count(), 1);
 
@@ -267,22 +276,22 @@ This is the body of {}.
         create_test_skill(temp.path(), "skill-two", "Second skill");
 
         // Reload should pick up the new skill
-        registry.reload().unwrap();
+        registry.reload().await.unwrap();
         assert_eq!(registry.count(), 2);
     }
 
-    #[test]
-    fn test_registry_empty_directory() {
+    #[tokio::test]
+    async fn test_registry_empty_directory() {
         let temp = TempDir::new().unwrap();
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         assert_eq!(registry.count(), 0);
     }
 
-    #[test]
-    fn test_registry_nonexistent_directory() {
+    #[tokio::test]
+    async fn test_registry_nonexistent_directory() {
         let temp = TempDir::new().unwrap();
         let non_existent = temp.path().join("nonexistent");
-        let result = SkillRegistry::new(&non_existent);
+        let result = SkillRegistry::new(&non_existent).await;
 
         assert!(result.is_err());
     }

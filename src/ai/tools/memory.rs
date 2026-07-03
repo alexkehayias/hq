@@ -2,7 +2,7 @@ use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_to
 use anyhow::{Error, Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use tokio::fs;
 use std::path::PathBuf;
 
 const MAX_WORDS: usize = 2000;
@@ -94,7 +94,7 @@ impl ToolCall for MemoryTool {
         match fn_args.operation {
             MemoryOperation::Read => {
                 if memory_path.exists() {
-                    let content = fs::read_to_string(&memory_path)?;
+                    let content = fs::read_to_string(&memory_path).await?;
                     Ok(content)
                 } else {
                     Ok("No memory yet".to_string())
@@ -117,10 +117,10 @@ impl ToolCall for MemoryTool {
 
                 // Ensure parent directory exists
                 if let Some(parent) = memory_path.parent() {
-                    fs::create_dir_all(parent)?;
+                    fs::create_dir_all(parent).await?;
                 }
 
-                fs::write(&memory_path, &content)?;
+                fs::write(&memory_path, &content).await?;
                 Ok(format!(
                     "Memory saved ({} words). Current memory:\n\n{}",
                     word_count, content

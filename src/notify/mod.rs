@@ -3,6 +3,8 @@ pub mod models;
 pub use db::*;
 pub use models::*;
 
+use std::io::Cursor;
+
 use anyhow::Error;
 use web_push::{
     ContentEncoding, HyperWebPushClient, SubscriptionInfo, VapidSignatureBuilder, WebPushClient,
@@ -29,12 +31,13 @@ pub async fn send_push_notification(
     let subscription_info = SubscriptionInfo::new(endpoint.clone(), p256dh, auth);
 
     // Read the VAPID signing material from the PEM file
-    let file = match std::fs::File::open(vapid_private_pem_path) {
-        Ok(f) => f,
+    let pem_bytes = match tokio::fs::read(&vapid_private_pem_path).await {
+        Ok(b) => b,
         Err(e) => return PushSendResult::RetryableError(Error::new(e)),
     };
+    let cursor = Cursor::new(pem_bytes);
 
-    let sig_builder = match VapidSignatureBuilder::from_pem(file, &subscription_info) {
+    let sig_builder = match VapidSignatureBuilder::from_pem(cursor, &subscription_info) {
         Ok(builder) => builder,
         Err(e) => return PushSendResult::RetryableError(Error::new(e)),
     };

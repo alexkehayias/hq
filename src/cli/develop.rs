@@ -3,7 +3,7 @@ use std::env;
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::Command;
-use std::fs;
+use tokio::fs;
 
 use crate::cli::{example_data, init};
 
@@ -45,7 +45,7 @@ pub async fn run(
         .with_context(|| format!("Failed to change to {worktree_path}"))?;
 
     // Step 3: Create storage directories
-    fs::create_dir_all(".hq-data/storage")?;
+    fs::create_dir_all(".hq-data/storage").await?;
     println!("  Created base directories under .hq-data/");
 
     // Step 4: Pick port and write custom zsh config
@@ -68,7 +68,7 @@ pub async fn run(
         .unwrap_or_else(|| "localhost".to_string());
 
     let zsh_config_dir = ".hq-data";
-    fs::create_dir_all(zsh_config_dir)?;
+    fs::create_dir_all(zsh_config_dir).await?;
     let zshrc_path = format!("{zsh_config_dir}/.zshrc");
     let zshrc_content = format!(
         "# hq worktree zsh configuration\n\
@@ -89,7 +89,7 @@ pub async fn run(
          export HQ_PORT={port}\n\
          export HQ_HOST={host}\n"
     );
-    fs::write(&zshrc_path, zshrc_content)?;
+    fs::write(&zshrc_path, zshrc_content).await?;
     println!("  Wrote .hq-data/.zshrc with worktree env vars");
 
     // Step 5: Set env vars for child processes
@@ -111,7 +111,7 @@ pub async fn run(
 
     // Step 8: Create tmux session with ZDOTDIR pointing to custom zsh config
     println!("\n--- Creating tmux session ---");
-    let abs_path = fs::canonicalize(".")?;
+    let abs_path = fs::canonicalize(".").await?;
     let tmux_path = abs_path.to_string_lossy().to_string();
 
     let status = Command::new("tmux")
