@@ -55,7 +55,7 @@ pub async fn test_app() -> Router {
         .expect("Failed to connect to async db");
     db.call(|conn| {
         initialize_db(conn).expect("Failed to migrate db");
-        Ok::<_, rusqlite::Error>(())
+        Ok(())
     })
     .await
     .unwrap();
@@ -141,7 +141,7 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         .expect("Failed to connect to async db");
     db.call(|conn| {
         initialize_db(conn).expect("Failed to migrate db");
-        Ok::<_, rusqlite::Error>(())
+        Ok(())
     })
     .await
     .unwrap();
@@ -232,7 +232,7 @@ pub async fn test_app_with_skills() -> Router {
         .expect("Failed to connect to async db");
     db.call(|conn| {
         initialize_db(conn).expect("Failed to migrate db");
-        Ok::<_, rusqlite::Error>(())
+        Ok(())
     })
     .await
     .unwrap();

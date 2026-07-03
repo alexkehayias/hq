@@ -74,7 +74,7 @@ pub async fn run(service: ServiceKind, vec_db_path: &str) -> Result<()> {
                 )
                     .expect("Failed to insert/update refresh token in DB");
                 println!("Refresh token for {} saved to DB.", user_email);
-                Ok::<_, rusqlite::Error>(())
+                Ok(())
             }).await?;
         }
     }

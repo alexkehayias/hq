@@ -17,7 +17,7 @@ pub async fn find_all_notification_subscriptions(db: &Connection) -> Result<Vec<
             })?
             .filter_map(Result::ok)
             .collect::<Vec<PushSubscription>>();
-        Ok::<_, rusqlite::Error>(rows)
+        Ok(rows)
     });
     Ok(subscriptions.await?)
 }
@@ -29,7 +29,7 @@ pub async fn mark_push_subscription_invalid(db: &Connection, endpoint: &str) -> 
             "UPDATE push_subscription SET is_valid = 0 WHERE endpoint = ?1",
             [&endpoint],
         )?;
-        Ok::<_, rusqlite::Error>(())
+        Ok(())
     })
     .await
     .map_err(anyhow::Error::new)

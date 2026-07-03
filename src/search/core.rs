@@ -147,7 +147,7 @@ pub async fn search_similar_notes(
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchHit>, _>>()?;
-            Ok::<_, rusqlite::Error>(found)
+            Ok(found)
         })
         .await?;
     Ok(result)
@@ -279,7 +279,7 @@ pub async fn search_notes(
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchResult>, _>>()?;
-            Ok::<_, rusqlite::Error>(found)
+            Ok(found)
         })
         .await?
     } else {

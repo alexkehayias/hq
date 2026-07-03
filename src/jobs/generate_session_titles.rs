@@ -39,7 +39,7 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
                     .filter_map(Result::ok)
                     .collect::<Vec<String>>();
 
-                Ok::<_, rusqlite::Error>(rows)
+                Ok(rows)
             })
             .await
             .expect("Session query failed");
@@ -117,7 +117,7 @@ async fn generate_and_update_session_info(
                         let mut stmt =
                             conn.prepare("UPDATE session SET title = ?, summary = ? WHERE id = ?")?;
                         stmt.execute([title_owned, summary_owned, session_id_owned])?;
-                        Ok::<_, rusqlite::Error>(())
+                        Ok(())
                     })
                     .await?;
             } else {

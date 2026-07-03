@@ -178,7 +178,7 @@ async fn list_tasks_from_files(
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
 
-            Ok::<_, rusqlite::Error>(rows)
+            Ok(rows)
         })
         .await?;
 
@@ -557,7 +557,7 @@ mod tests {
         let db = crate::core::db::async_db(&vec_db_path).await.unwrap();
         db.call(|conn| {
             crate::core::db::initialize_db(conn).unwrap();
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();
@@ -596,7 +596,7 @@ mod tests {
             insert_task(conn, "task-1", "refile.org", "Buy groceries", "todo");
             insert_task(conn, "task-2", "refile.org", "Fix login", "done");
             insert_task(conn, "task-3", "capture.org", "Quick idea", "todo");
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();
@@ -612,7 +612,7 @@ mod tests {
             insert_task(conn, "t1", "refile.org", "Task one", "todo");
             insert_task(conn, "t2", "refile.org", "Task two", "done");
             insert_task(conn, "t3", "capture.org", "Capture task", "todo");
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();
@@ -627,7 +627,7 @@ mod tests {
         db.call(|conn| {
             insert_task(conn, "t1", "refile.org", "Refile task", "todo");
             insert_task(conn, "t2", "capture.org", "Capture task", "todo");
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();
@@ -643,7 +643,7 @@ mod tests {
             insert_task(conn, "t1", "refile.org", "Task one", "todo");
             insert_task(conn, "t2", "refile.org", "Task two", "done");
             insert_task(conn, "t3", "refile.org", "Task three", "todo");
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();
@@ -695,7 +695,7 @@ mod tests {
         db.call(|conn| {
             insert_task(conn, "pt-1", "2026-05-31--project-my-project.org", "First task", "todo");
             insert_task(conn, "pt-2", "2026-05-31--project-my-project.org", "Second task", "done");
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();
@@ -743,7 +743,7 @@ mod tests {
             insert_task(conn, "a", "2026-05-31--project-sprint-12.org", "Task A", "todo");
             insert_task(conn, "b", "2026-05-31--project-sprint-12.org", "Task B", "done");
             insert_task(conn, "c", "2026-05-31--project-sprint-12.org", "Task C", "todo");
-            Ok::<_, rusqlite::Error>(())
+            Ok(())
         })
         .await
         .unwrap();

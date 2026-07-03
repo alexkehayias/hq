@@ -592,7 +592,7 @@ pub async fn index_all(
         db.call(move |conn| {
             index_note_meta(conn, &file_name_inner, &note_inner)
                 .expect("Upserting note meta failed");
-            Ok::<_, anyhow::Error>(())
+            Ok(())
         })
         .await
         .expect("DB work failed");
@@ -611,7 +611,7 @@ pub async fn index_all(
             db.call(move |conn| {
                 store_embeddings_in_db(conn, &note_id, embeddings)
                     .expect("Storing embeddings in DB failed");
-                Ok::<_, rusqlite::Error>(())
+                Ok(())
             })
             .await
             .expect("DB work failed for embeddings");
@@ -800,7 +800,7 @@ pub async fn index_chat_messages(
                 .filter_map(|r| r.ok())
                 .collect();
 
-            Ok::<_, rusqlite::Error>((title, message_ids))
+            Ok((title, message_ids))
         })
         .await?;
 
