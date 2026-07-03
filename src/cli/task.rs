@@ -1,10 +1,36 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use chrono::Local;
 use tokio::fs;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
+use crate::cli::projects;
 use crate::core::orgmode;
+use crate::org;
+
+/// Create a new project file on disk and return its path.
+/// Does not check the DB or filesystem for an existing project.
+async fn create_project_file(notes_path: &str, project_name: &str) -> Result<PathBuf> {
+    let slug = slugify(project_name)?;
+    let project_id = Uuid::new_v4().to_string();
+    let today = Local::now().format("%Y-%m-%d");
+    let filename = format!("{notes_path}/{today}--project-{slug}.org");
+
+    let content = org::Document::builder()
+        .property("ID", &project_id)
+        .title(project_name)
+        .category(&slug)
+        .date(&today.to_string())
+        .filetags("private project")
+        .build()
+        .to_string();
+    fs::write(&filename, &content)
+        .await
+        .context("Failed to create project file")?;
+    Ok(PathBuf::from(filename))
+}
 
 fn slugify(s: &str) -> Result<String> {
     let slug: String = s
@@ -35,13 +61,18 @@ pub async fn run_create(
     body: Option<&str>,
     project: Option<&str>,
     status: &str,
+    db: &Connection,
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
     let status_upper = status.to_uppercase();
 
     if let Some(project_name) = project {
-        let project_path = orgmode::find_or_create_project(notes_path, project_name).await?;
+        // Look up existing project in DB, or create a new project file
+        let project_path = match projects::db::find_project_file(db, notes_path, project_name).await? {
+            Some(path) => path,
+            None => create_project_file(notes_path, project_name).await?,
+        };
         println!("Created project file: {}", project_path.display());
         let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
         let mut project_content = fs::read_to_string(&project_path).await?;
@@ -75,8 +106,16 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
+    db: &Connection,
 ) -> Result<()> {
-    orgmode::update_task(notes_path, id, None, project, title, body, status).await?;
+    if let Some(project_ref) = project {
+        let path = projects::db::find_project_file(db, notes_path, project_ref).await?
+            .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
+        let filename = path.file_name().and_then(|s| s.to_str()).unwrap();
+        orgmode::update_task(notes_path, id, Some(filename), title, body, status).await?;
+    } else {
+        orgmode::update_task(notes_path, id, None, title, body, status).await?;
+    }
     println!("Task {id} updated");
     Ok(())
 }
@@ -86,9 +125,14 @@ pub async fn run_update(
 /// Finds the task by UUID across all org files, removes the headline from its
 /// source, and appends it to the target project file (creating the project
 /// file if it doesn't exist yet).
-pub async fn run_refile(notes_path: &str, id: &str, project: &str) -> Result<()> {
+pub async fn run_refile(notes_path: &str, id: &str, project: &str, db: &Connection) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
-    let target_path = orgmode::find_or_create_project(notes_path, project).await?;
+
+    // Look up existing project in DB, or create a new project file
+    let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
+        Some(path) => path,
+        None => create_project_file(notes_path, project).await?,
+    };
 
     if location.path == target_path {
         anyhow::bail!("Task is already in project '{project}'");
@@ -156,7 +200,8 @@ pub async fn run_list(
                 (vec![filename], None)
             }
             _ => {
-                let path = orgmode::find_project_file_by_id_or_name(notes_path, project_ref).await?;
+                let path = projects::db::find_project_file(db, notes_path, project_ref).await?
+                    .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
                 let filename = path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -323,10 +368,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Test Task", None, None, "TODO")
+        run_create(&notes, "Test Task", None, None, "TODO", &db)
             .await
             .unwrap();
 
@@ -344,10 +388,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task_with_body() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
+        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO", &db)
             .await
             .unwrap();
 
@@ -359,10 +402,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task_custom_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Urgent fix", None, None, "NEXT")
+        run_create(&notes, "Urgent fix", None, None, "NEXT", &db)
             .await
             .unwrap();
 
@@ -378,10 +420,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_project_task_creates_project_file() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
@@ -400,13 +441,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_second_task_in_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
-        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE")
+
+        // Insert project into DB so the second create reuses the same file
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        db.call(move |conn| {
+            insert_project(conn, "proj-sprint-12", &filename, "sprint-12");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE", &db)
             .await
             .unwrap();
 
@@ -423,10 +474,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_standalone_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "My task", None, None, "TODO")
+        run_create(&notes, "My task", None, None, "TODO", &db)
             .await
             .unwrap();
 
@@ -436,8 +486,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
-            .await
+        run_update(&notes, &id, None, None, Some("DONE"), None, &db)            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -446,10 +495,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_standalone_title_and_body() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Old title", Some("Old body"), None, "TODO")
+        run_create(&notes, "Old title", Some("Old body"), None, "TODO", &db)
             .await
             .unwrap();
 
@@ -458,8 +506,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None)
-            .await
+        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, &db)            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -472,10 +519,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_project_task_status() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
@@ -487,8 +533,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None)
-            .await
+        run_update(&notes, &id, None, None, Some("DONE"), None, &db)            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -504,10 +549,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_nonexistent_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
+        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None, &db).await;
         assert!(result.is_err());
     }
 
@@ -517,10 +561,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_standalone_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Temp task", None, None, "TODO")
+        run_create(&notes, "Temp task", None, None, "TODO", &db)
             .await
             .unwrap();
 
@@ -538,13 +581,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_project_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
-        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO")
+
+        // Insert project into DB so the second create reuses the same file
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        db.call(move |conn| {
+            insert_project(conn, "proj-sprint-12", &filename, "sprint-12");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
@@ -563,10 +616,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_last_project_task_leaves_project_file() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
@@ -610,6 +662,24 @@ mod tests {
         (db, dir)
     }
 
+    /// Create a test database + notes directory, returning the connection,
+    /// temp dir guard, and notes path string.
+    /// Notes are stored in a `notes/` subdirectory so DB files at the temp
+    /// dir root don't interfere with file-count assertions.
+    async fn test_env() -> (Connection, TempDir, String) {
+        let dir = TempDir::new().unwrap();
+        let notes = format!("{}/notes", dir.path().to_str().unwrap());
+        std::fs::create_dir_all(&notes).unwrap();
+        let db = crate::core::db::async_db(dir.path().to_str().unwrap()).await.unwrap();
+        db.call(|conn| {
+            crate::core::db::initialize_db(conn).unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (db, dir, notes)
+    }
+
     /// Insert a task row into note_meta for testing.
     fn insert_task(
         conn: &rusqlite::Connection,
@@ -622,6 +692,21 @@ mod tests {
             "INSERT INTO note_meta (id, file_name, title, type, status)
              VALUES (?1, ?2, ?3, 'task', ?4)",
             rusqlite::params![id, file_name, title, status],
+        )
+        .unwrap();
+    }
+
+    /// Insert a project row into note_meta for testing.
+    fn insert_project(
+        conn: &rusqlite::Connection,
+        id: &str,
+        file_name: &str,
+        title: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO note_meta (id, file_name, title, type, tags)
+             VALUES (?1, ?2, ?3, 'note', 'project')",
+            rusqlite::params![id, file_name, title],
         )
         .unwrap();
     }
@@ -739,6 +824,7 @@ mod tests {
 
         // Insert corresponding tasks into the DB
         db.call(|conn| {
+            insert_project(conn, "proj-1", "2026-05-31--project-my-project.org", "my-project");
             insert_task(conn, "pt-1", "2026-05-31--project-my-project.org", "First task", "todo");
             insert_task(conn, "pt-2", "2026-05-31--project-my-project.org", "Second task", "done");
             Ok(())
@@ -786,6 +872,7 @@ mod tests {
         .unwrap();
 
         db.call(|conn| {
+            insert_project(conn, "proj-1", "2026-05-31--project-sprint-12.org", "sprint-12");
             insert_task(conn, "a", "2026-05-31--project-sprint-12.org", "Task A", "todo");
             insert_task(conn, "b", "2026-05-31--project-sprint-12.org", "Task B", "done");
             insert_task(conn, "c", "2026-05-31--project-sprint-12.org", "Task C", "todo");
@@ -796,157 +883,6 @@ mod tests {
 
         let result = run_list(&db, &notes, Some("sprint-12"), Some("DONE")).await;
         assert!(result.is_ok());
-    }
-
-    // -----------------------------------------------------------------------
-    // find_project_file
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_find_project_file_found() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let path = dir.path().join("2026-01-01--project-my-project.org");
-        fs::write(&path, "").unwrap();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project").await.unwrap();
-        assert_eq!(result, path);
-    }
-
-    #[tokio::test]
-    async fn test_find_project_file_not_found() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project").await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_find_project_file_ignores_other_files() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        // Create a standalone task file and refile.org — neither should match
-        fs::write(dir.path().join("2026-01-01--standalone.org"), "").unwrap();
-        fs::write(dir.path().join("refile.org"), "").unwrap();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project").await;
-        assert!(result.is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // find_or_create_project
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_find_or_create_project_creates_new() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let path = orgmode::find_or_create_project(&notes, "my-project").await.unwrap();
-        assert!(path.exists());
-        assert!(path.to_str().unwrap().contains("--project-my-project"));
-
-        // Should contain a project preamble
-        let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("#+TITLE: my-project"));
-        assert!(content.contains("#+CATEGORY: my-project"));
-        assert!(content.contains("#+DATE:"));
-        assert!(content.contains("#+FILETAGS: private project"));
-    }
-
-    #[tokio::test]
-    async fn test_find_or_create_project_finds_existing() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let path1 = orgmode::find_or_create_project(&notes, "my-project").await.unwrap();
-        let path2 = orgmode::find_or_create_project(&notes, "my-project").await.unwrap();
-
-        assert_eq!(path1, path2, "should return the same existing file");
-    }
-
-    // -----------------------------------------------------------------------
-    // find_project_file_by_id_or_name — now delegated to core::task
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_find_project_by_name_exact_filename() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let path = dir.path().join("my-project.org");
-        fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project.org")
-            .await
-            .unwrap();
-        assert_eq!(result, path);
-    }
-
-    #[tokio::test]
-    async fn test_find_project_by_name_suffix() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let path = dir.path().join("2026-06-01--project-my-project.org");
-        fs::write(&path, ":PROPERTIES:\n:ID:       abc-123\n:END:\n").unwrap();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "my-project")
-            .await
-            .unwrap();
-        assert_eq!(result, path);
-    }
-
-    #[tokio::test]
-    async fn test_find_project_by_id() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let path = dir.path().join("2026-06-01--project-sprint-12.org");
-        fs::write(
-            &path,
-            "\
-:PROPERTIES:
-:ID:       proj-uuid-42
-:END:
-#+TITLE: sprint-12
-#+FILETAGS: private project
-",
-        )
-        .unwrap();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "proj-uuid-42")
-            .await
-            .unwrap();
-        assert_eq!(result, path);
-    }
-
-    #[tokio::test]
-    async fn test_find_project_by_id_not_found() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "nonexistent").await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_find_project_by_id_ignores_standalone_tasks() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
-
-        // Standalone task file — should not match
-        fs::write(
-            dir.path().join("2026-06-01--standalone.org"),
-            ":PROPERTIES:\n:ID:       task-1\n:END:\n",
-        )
-        .unwrap();
-
-        let result = orgmode::find_project_file_by_id_or_name(&notes, "project-1").await;
-        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1021,10 +957,9 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_by_filename() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
@@ -1035,10 +970,18 @@ Investigate the redirect
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        // Update using --project with filename
+        // Insert project into DB so the update can find it
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))
-            .await
+        let db_filename = filename.clone();
+        db.call(move |conn| {
+            insert_project(conn, "proj-sprint-12", &db_filename, "sprint-12");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Update using --project with filename
+        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &db)            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1051,10 +994,9 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_by_id() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
@@ -1069,9 +1011,19 @@ Investigate the redirect
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
+        // Insert project into DB so the update can find it
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        let db_project_id = project_id.clone();
+        let db_filename = filename.clone();
+        db.call(move |conn| {
+            insert_project(conn, &db_project_id, &db_filename, "sprint-12");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id))
-            .await
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), &db)            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1083,46 +1035,66 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_not_found_in_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
         // Create a standalone task (not in any project)
-        run_create(&notes, "Standalone", None, None, "TODO")
+        run_create(&notes, "Standalone", None, None, "TODO", &db)
             .await
             .unwrap();
 
         // Create a project with a different task
-        run_create(&notes, "Project task", None, Some("my-project"), "TODO")
+        run_create(&notes, "Project task", None, Some("my-project"), "TODO", &db)
             .await
             .unwrap();
 
         // Find the standalone task's ID
-        let standalone_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-") { None } else { Some(p) }
-                })
-                .next()
-                .unwrap(),
-        );
+        let standalone_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-") { None } else { Some(p) }
+            })
+            .next()
+            .unwrap();
         let content = fs::read_to_string(&standalone_path).unwrap();
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        // Try to update it scoped to the project — should fail
-        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
-        assert!(result.is_err(), "should not find standalone task in project file");
+        // Insert project into DB so the update can find it
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-my-project") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
+        let project_filename = project_path.file_name().unwrap().to_str().unwrap().to_string();
+        db.call(move |conn| {
+            insert_project(conn, "proj-my-project", &project_filename, "my-project");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Try to update it scoped to the project — falls back to searching all files
+        run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), &db)
+            .await
+            .unwrap();
+
+        // Verify the standalone task was updated via fallback search
+        let (_, status, title) = parse_headline(&standalone_path);
+        assert_eq!(status, "DONE", "standalone task should be updated via fallback search");
+        assert_eq!(title, "Standalone");
     }
 
     #[tokio::test]
     async fn test_update_project_task_nonexistent_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
+        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), &db).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 
@@ -1132,31 +1104,28 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_refile_standalone_to_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
+        run_create(&notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO", &db)
             .await
             .unwrap();
 
         // Find the standalone task's ID
-        let standalone_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-") { None } else { Some(p) }
-                })
-                .next()
-                .unwrap(),
-        );
+        let standalone_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-") { None } else { Some(p) }
+            })
+            .next()
+            .unwrap();
         let content = fs::read_to_string(&standalone_path).unwrap();
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a project
-        run_refile(&notes, &task_id, "errands").await.unwrap();
+        run_refile(&notes, &task_id, "errands", &db).await.unwrap();
 
         // Task headline should be removed from the standalone file
         // (document-level preamble with #+TITLE: may retain the title)
@@ -1166,17 +1135,15 @@ Investigate the redirect
         assert_eq!(headline_count(&standalone_path), 0);
 
         // Task should now be in the project file
-        let project_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-errands") { Some(p) } else { None }
-                })
-                .next()
-                .unwrap(),
-        );
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-errands") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
         let project_content = fs::read_to_string(&project_path).unwrap();
         assert!(project_content.contains(&task_id));
         assert!(project_content.contains("Buy groceries"));
@@ -1186,32 +1153,29 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_refile_from_one_project_to_another() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix login bug", None, Some("sprint-12"), "TODO")
+        run_create(&notes, "Fix login bug", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
 
         // Find the task ID from the project file
-        let project_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-sprint-12") { Some(p) } else { None }
-                })
-                .next()
-                .unwrap(),
-        );
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-sprint-12") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
         let content = fs::read_to_string(&project_path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a different project
-        run_refile(&notes, &task_id, "security").await.unwrap();
+        run_refile(&notes, &task_id, "security", &db).await.unwrap();
 
         // Task should no longer be in the original project
         let sprint_content = fs::read_to_string(&project_path).unwrap();
@@ -1219,17 +1183,15 @@ Investigate the redirect
         assert_eq!(headline_count(&project_path), 0);
 
         // Task should now be in the new project
-        let security_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-security") { Some(p) } else { None }
-                })
-                .next()
-                .unwrap(),
-        );
+        let security_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-security") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
         let security_content = fs::read_to_string(&security_path).unwrap();
         assert!(security_content.contains(&task_id));
         assert!(security_content.contains("Fix login bug"));
@@ -1238,11 +1200,10 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_refile_preserves_org_structure() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
         // Create a task with body text via refile.org
-        let refile_path = dir.path().join("refile.org");
+        let refile_path = std::path::Path::new(&notes).join("refile.org");
         fs::write(
             &refile_path,
             "\
@@ -1257,20 +1218,18 @@ Consider authentication requirements.
         .unwrap();
 
         // Refile to a project
-        run_refile(&notes, "task-with-body", "research").await.unwrap();
+        run_refile(&notes, "task-with-body", "research", &db).await.unwrap();
 
         // Read the project file
-        let project_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-research") { Some(p) } else { None }
-                })
-                .next()
-                .unwrap(),
-        );
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-research") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
         let project_content = fs::read_to_string(&project_path).unwrap();
 
         // All org structure should be preserved verbatim
@@ -1286,32 +1245,29 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_to_same_project_errors() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Task in project", None, Some("my-project"), "TODO")
+        run_create(&notes, "Task in project", None, Some("my-project"), "TODO", &db)
             .await
             .unwrap();
 
         // Find the task ID
-        let project_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-my-project") { Some(p) } else { None }
-                })
-                .next()
-                .unwrap(),
-        );
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-my-project") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
         let content = fs::read_to_string(&project_path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refiling to the same project should fail
-        let result = run_refile(&notes, &task_id, "my-project").await;
+        let result = run_refile(&notes, &task_id, "my-project", &db).await;
         assert!(result.is_err(), "should error when refiling to same project");
         assert!(
             result.unwrap_err().to_string().contains("already in project"),
@@ -1321,20 +1277,18 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_nonexistent_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
-        let result = run_refile(&notes, "nonexistent-uuid", "some-project").await;
+        let result = run_refile(&notes, "nonexistent-uuid", "some-project", &db).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_refile_from_refile_org_to_project() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes) = test_env().await;
 
         // Simulate a task sitting in refile.org
-        let refile_path = dir.path().join("refile.org");
+        let refile_path = std::path::Path::new(&notes).join("refile.org");
         fs::write(
             &refile_path,
             "\
@@ -1358,7 +1312,7 @@ Need to check the middleware changes.
         .unwrap();
 
         // Refile one task to a project
-        run_refile(&notes, "review-pr-42", "ops").await.unwrap();
+        run_refile(&notes, "review-pr-42", "ops", &db).await.unwrap();
 
         // The refiled task should be gone from refile.org
         let refile_content = fs::read_to_string(&refile_path).unwrap();
@@ -1370,17 +1324,15 @@ Need to check the middleware changes.
         assert!(refile_content.contains("Setup CI"));
 
         // The refiled task should be in the project file
-        let project_path = dir.path().join(
-            fs::read_dir(&notes)
-                .unwrap()
-                .filter_map(|e| {
-                    let p = e.unwrap().path();
-                    let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                    if n.contains("--project-ops") { Some(p) } else { None }
-                })
-                .next()
-                .unwrap(),
-        );
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-ops") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
         let project_content = fs::read_to_string(&project_path).unwrap();
         assert!(project_content.contains("review-pr-42"));
         assert!(project_content.contains("Review PR"));

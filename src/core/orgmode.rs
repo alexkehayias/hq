@@ -2,13 +2,11 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use chrono::Local;
 use orgize::export::{Container, Event, TraversalContext, Traverser};
 use orgize::rowan::ast::AstNode;
 use orgize::SyntaxElement;
 use regex::Regex;
 use tokio::fs;
-use uuid::Uuid;
 
 use crate::org;
 
@@ -169,52 +167,6 @@ pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
     anyhow::bail!("Task with ID {id} not found in {notes_path}");
 }
 
-/// Find a project file by ID (UUID property) or by exact filename match.
-pub async fn find_project_file_by_id_or_name(
-    notes_path: &str,
-    project_ref: &str,
-) -> Result<PathBuf> {
-    let pattern = id_pattern(project_ref);
-    let mut dir = fs::read_dir(notes_path)
-        .await
-        .with_context(|| format!("Cannot read notes directory: {notes_path}"))?;
-
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-
-        // Skip non-org files
-        if path.extension().map_or(true, |e| e != "org") {
-            continue;
-        }
-
-        // Match by filename (exact or project-name suffix)
-        // Check both hyphen and underscore variants for backwards compat
-        let name_patterns = {
-            let hyphen = format!("--project-{project_ref}.org");
-            let underscore = project_ref.replace('-', "_");
-            if underscore != project_ref {
-                vec![hyphen, format!("--project-{underscore}.org")]
-            } else {
-                vec![hyphen]
-            }
-        };
-        if file_name == project_ref
-            || name_patterns.iter().any(|p| file_name.ends_with(p))
-        {
-            return Ok(path);
-        }
-
-        // Match by ID (UUID property in the org file)
-        let content = fs::read_to_string(&path).await?;
-        if pattern.is_match(&content) {
-            return Ok(path);
-        }
-    }
-
-    anyhow::bail!("Project '{project_ref}' not found by ID or filename");
-}
-
 /// Traverses a headline's syntax subtree and extracts body text,
 /// skipping the headline title and property drawer.
 #[derive(Default)]
@@ -311,15 +263,11 @@ pub async fn update_task(
     notes_path: &str,
     id: &str,
     file_name: Option<&str>,
-    project: Option<&str>,
     title: Option<&str>,
     body: Option<&str>,
     status: Option<&str>,
 ) -> Result<()> {
-    let location = if let Some(project_ref) = project {
-        let project_path = find_project_file_by_id_or_name(notes_path, project_ref).await?;
-        find_task_in_file(&project_path, id).await?
-    } else if let Some(fname) = file_name {
+    let location = if let Some(fname) = file_name {
         let path = std::path::Path::new(notes_path).join(fname);
         match find_task_in_file(&path, id).await {
             Ok(loc) => loc,
@@ -351,29 +299,6 @@ pub async fn update_task(
     Ok(())
 }
 
-fn slugify(s: &str) -> Result<String> {
-    let slug: String = s
-        .to_lowercase()
-        .chars()
-        .filter_map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == ' ' {
-                Some(c)
-            } else {
-                None
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join("-")
-        .trim_matches('-')
-        .to_string();
-    if slug.is_empty() {
-        anyhow::bail!("Cannot slugify empty string: input produced no valid characters");
-    }
-    Ok(slug)
-}
-
 /// Build a full org-mode document string for a standalone task.
 pub fn build_document(id: &str, title: &str, body: &str, status: &str) -> String {
     let headline = org::Headline::builder()
@@ -395,47 +320,3 @@ pub fn build_document(id: &str, title: &str, body: &str, status: &str) -> String
         .to_string()
 }
 
-/// Find an existing project file by slug, or create a new one.
-pub async fn find_or_create_project(notes_path: &str, project_name: &str) -> Result<PathBuf> {
-    let slug = slugify(project_name)?;
-    let patterns = {
-        let mut p = vec![format!("--project-{slug}.org")];
-        // Also try underscore variant for backwards compat with files
-        // created by older slugify logic or external tools
-        let underscore_slug = slug.replace('-', "_");
-        if underscore_slug != slug {
-            p.push(format!("--project-{underscore_slug}.org"));
-        }
-        p
-    };
-
-    // Look for existing project file
-    let mut dir = fs::read_dir(notes_path).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap_or("");
-        for pattern in &patterns {
-            if file_name.ends_with(pattern) {
-                return Ok(path);
-            }
-        }
-    }
-
-    // Create new project file
-    let project_id = Uuid::new_v4().to_string();
-    let today = Local::now().format("%Y-%m-%d");
-    let filename = format!("{notes_path}/{today}--project-{slug}.org");
-
-    let content = org::Document::builder()
-        .property("ID", &project_id)
-        .title(project_name)
-        .category(&slug)
-        .date(&today.to_string())
-        .filetags("private project")
-        .build()
-        .to_string();
-    fs::write(&filename, &content)
-        .await
-        .context("Failed to create project file")?;
-    Ok(PathBuf::from(filename))
-}

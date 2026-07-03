@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use tokio_rusqlite::Connection;
 
@@ -9,6 +11,79 @@ pub struct ProjectRow {
     pub done_tasks: usize,
     pub todo_tasks: usize,
     pub is_done: bool,
+}
+
+fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == ' ' {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join("-")
+        .trim_matches('-')
+        .to_string()
+}
+
+/// Find a project file by ID, title, or name slug using the database.
+///
+/// Queries `note_meta` for project-type entries and matches the given reference
+/// against the project's UUID, title, or filename (via slug). Returns the full
+/// path to the project file, or `None` if no match is found.
+pub async fn find_project_file(db: &Connection, notes_path: &str, project_ref: &str) -> Result<Option<PathBuf>> {
+    let projects = db
+        .call(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT file_name, id, title FROM note_meta WHERE type = 'note' AND tags LIKE '%project%'",
+            )?;
+
+            let rows = stmt
+                .query_map([], |row| {
+                    let file_name: String = row.get(0)?;
+                    let id: String = row.get(1)?;
+                    let title: String = row.get(2)?;
+                    Ok((file_name, id, title))
+                })?
+                .filter_map(|r| r.ok())
+                .collect::<Vec<_>>();
+
+            Ok(rows)
+        })
+        .await?;
+
+    let slug = slugify(project_ref);
+
+    for (file_name, id, title) in &projects {
+        // Match by UUID
+        if id == project_ref {
+            return Ok(Some(PathBuf::from(format!("{notes_path}/{file_name}"))));
+        }
+        // Match by exact title
+        if title == project_ref {
+            return Ok(Some(PathBuf::from(format!("{notes_path}/{file_name}"))));
+        }
+        // Match by exact filename
+        if file_name == project_ref {
+            return Ok(Some(PathBuf::from(format!("{notes_path}/{file_name}"))));
+        }
+        // Match by slug against the --project-{slug}.org suffix
+        if file_name.ends_with(&format!("--project-{slug}.org")) {
+            return Ok(Some(PathBuf::from(format!("{notes_path}/{file_name}"))));
+        }
+        // Also try underscore variant for backwards compat
+        let underscore_slug = slug.replace('-', "_");
+        if underscore_slug != slug && file_name.ends_with(&format!("--project-{underscore_slug}.org")) {
+            return Ok(Some(PathBuf::from(format!("{notes_path}/{file_name}"))));
+        }
+    }
+
+    Ok(None)
 }
 
 pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
