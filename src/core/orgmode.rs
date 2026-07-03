@@ -254,11 +254,11 @@ pub async fn update_task_in_file(
     Ok(())
 }
 
-/// Update a task across the notes directory, with optional file/project scope.
+/// Update a task by UUID, optionally scoped to a specific file.
 ///
-/// If `file_name` is provided, looks in that file first (falling back to a
-/// full search). If `project` is provided, scopes the search to that project
-/// file. Otherwise searches all files.
+/// If `file_name` is provided, looks only in that file. If not found there,
+/// returns an error (no filesystem fallback). If `file_name` is `None`,
+/// searches all org files in the notes directory.
 pub async fn update_task(
     notes_path: &str,
     id: &str,
@@ -269,15 +269,9 @@ pub async fn update_task(
 ) -> Result<()> {
     let location = if let Some(fname) = file_name {
         let path = std::path::Path::new(notes_path).join(fname);
-        match find_task_in_file(&path, id).await {
-            Ok(loc) => loc,
-            Err(_) => {
-                tracing::warn!(
-                    "Task {id} not found in expected file {fname}, searching all files"
-                );
-                find_task(notes_path, id).await?
-            }
-        }
+        find_task_in_file(&path, id).await.with_context(|| {
+            format!("Task {id} not found in scoped file {fname}")
+        })?
     } else {
         find_task(notes_path, id).await?
     };

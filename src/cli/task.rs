@@ -1079,15 +1079,9 @@ Investigate the redirect
         .await
         .unwrap();
 
-        // Try to update it scoped to the project — falls back to searching all files
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), &db)
-            .await
-            .unwrap();
-
-        // Verify the standalone task was updated via fallback search
-        let (_, status, title) = parse_headline(&standalone_path);
-        assert_eq!(status, "DONE", "standalone task should be updated via fallback search");
-        assert_eq!(title, "Standalone");
+        // Updating scoped to a project where the task doesn't exist should error
+        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), &db).await;
+        assert!(result.is_err(), "should error when task not found in scoped project file");
     }
 
     #[tokio::test]
