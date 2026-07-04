@@ -258,7 +258,7 @@ function openFile(path) {
     value: content,
     mode: mode,
     theme: isDark ? 'dracula' : 'default',
-    lineNumbers: true,
+    lineNumbers: false,
     indentUnit: 2,
     tabSize: 2,
     lineWrapping: true,
@@ -268,15 +268,22 @@ function openFile(path) {
     },
   });
 
+  function resizeEditor() {
+    const rect = container.getBoundingClientRect();
+    const height = window.innerHeight - rect.top - 16;
+    container.style.height = `${height}px`;
+    editor.setSize(null, height);
+  }
+
+  resizeEditor();
+  window.addEventListener('resize', resizeEditor);
+
   editor.on('change', () => {
     if (!hasChanges) {
       hasChanges = true;
       updateSaveButton();
     }
   });
-
-  // Refresh after a tick to ensure proper sizing
-  setTimeout(() => editor.refresh(), 100);
 }
 
 /* ===== Save ===== */
