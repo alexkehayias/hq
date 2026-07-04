@@ -126,9 +126,9 @@ pub async fn run(
     }
     println!("  Created tmux session with worktree environment");
 
-    // Step 9: Start Claude Code with worktree flag
+    // Step 9: Start Claude Code (worktree created in step 1, cwd set via tmux -c)
     let status = Command::new("tmux")
-        .args(["send-keys", "-t", &name, "claude", "Space", "--worktree", "Space", &name, "Enter"])
+        .args(["send-keys", "-t", &name, "claude", "Enter"])
         .status()
         .context("Failed to start Claude Code in tmux")?;
     if !status.success() {
