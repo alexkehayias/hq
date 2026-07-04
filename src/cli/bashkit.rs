@@ -2,6 +2,7 @@ use crate::cli;
 use bashkit::{async_trait, Builtin, BuiltinContext, ExecResult, Result};
 use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
+use std::time::Duration;
 
 /// A bashkit custom builtin that wraps the `hq` CLI.
 ///
@@ -152,19 +153,22 @@ where
 
         // Read from pipes on background threads to avoid deadlock when
         // output exceeds the OS pipe buffer size (~64 KB on macOS/Linux).
-        let stdout_handle = std::thread::spawn(move || {
+        let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+        let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
             let mut buf = String::new();
             std::fs::File::from_raw_fd(stdout_fds[0])
                 .read_to_string(&mut buf)
                 .ok();
-            buf
+            let _ = stdout_tx.send(buf);
         });
-        let stderr_handle = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             let mut buf = String::new();
             std::fs::File::from_raw_fd(stderr_fds[0])
                 .read_to_string(&mut buf)
                 .ok();
-            buf
+            let _ = stderr_tx.send(buf);
         });
 
         // Run the async function
@@ -176,12 +180,20 @@ where
         libc::close(saved_stdout);
         libc::close(saved_stderr);
 
-        // Flush any remaining data into the pipes before joining readers
+        // Flush any remaining data into the pipes before reading from readers
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
 
-        let captured_stdout = stdout_handle.join().unwrap_or_default();
-        let captured_stderr = stderr_handle.join().unwrap_or_default();
+        // Wait for pipe readers with a timeout to prevent hangs if a pipe
+        // write end reference is not properly closed (e.g. inherited by a
+        // background thread). Fall back to empty string on timeout.
+        let capture_timeout = Duration::from_secs(5);
+        let captured_stdout = stdout_rx
+            .recv_timeout(capture_timeout)
+            .unwrap_or_default();
+        let captured_stderr = stderr_rx
+            .recv_timeout(capture_timeout)
+            .unwrap_or_default();
 
         let output = CapturedOutput {
             stdout: captured_stdout,

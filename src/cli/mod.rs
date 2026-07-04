@@ -269,14 +269,16 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let db = crate::core::db::async_db(&vec_db_path).await?;
             projects::run(command, &db).await?;
         }
-        Some(Command::Task { command }) => match command {
+        Some(Command::Task { command }) => {
+            let task_db = crate::core::db::async_db(&vec_db_path).await?;
+            match command {
             TaskCommand::Create {
                 title,
                 body,
                 project,
                 status,
             } => {
-                task::run_create(&notes_path, &title, body.as_deref(), project.as_deref(), &status)
+                task::run_create(&task_db, &notes_path, &title, body.as_deref(), project.as_deref(), &status)
                     .await?;
             }
             TaskCommand::Update {
@@ -287,6 +289,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 project,
             } => {
                 task::run_update(
+                    &task_db,
                     &notes_path,
                     &id,
                     title.as_deref(),
@@ -300,13 +303,13 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 task::run_delete(&notes_path, &id).await?;
             }
             TaskCommand::List { project, status } => {
-                let db = crate::core::db::async_db(&vec_db_path).await?;
-                task::run_list(&db, &notes_path, project.as_deref(), status.as_deref()).await?;
+                task::run_list(&task_db, &notes_path, project.as_deref(), status.as_deref()).await?;
             }
             TaskCommand::Refile { id, project } => {
-                task::run_refile(&notes_path, &id, &project).await?;
+                task::run_refile(&task_db, &notes_path, &id, &project).await?;
             }
-        },
+        }
+        }
         None => {}
     }
 
