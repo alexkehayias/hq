@@ -10,13 +10,13 @@ use crate::cli::projects;
 use crate::core::orgmode;
 use crate::org;
 
-/// Create a new project file on disk and return its path.
-/// Does not check the DB or filesystem for an existing project.
-async fn create_project_file(notes_path: &str, project_name: &str) -> Result<PathBuf> {
+/// Create a new project file on disk and register it in the database.
+async fn create_project_file(notes_path: &str, project_name: &str, db: &Connection) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
     let project_id = Uuid::new_v4().to_string();
     let today = Local::now().format("%Y-%m-%d");
-    let filename = format!("{notes_path}/{today}--project-{slug}.org");
+    let filename = format!("{today}--project-{slug}.org");
+    let full_path = format!("{notes_path}/{filename}");
 
     let content = org::Document::builder()
         .property("ID", &project_id)
@@ -26,10 +26,26 @@ async fn create_project_file(notes_path: &str, project_name: &str) -> Result<Pat
         .filetags("private project")
         .build()
         .to_string();
-    fs::write(&filename, &content)
+    fs::write(&full_path, &content)
         .await
         .context("Failed to create project file")?;
-    Ok(PathBuf::from(filename))
+
+    // Register in DB so subsequent lookups find the project without
+    // requiring a full re-index.
+    let db_id = project_id;
+    let db_filename = filename;
+    let db_title = project_name.to_string();
+    db.call(move |conn| {
+        conn.execute(
+            "INSERT INTO note_meta (id, file_name, title, type, tags)
+             VALUES (?1, ?2, ?3, 'note', 'project')",
+            rusqlite::params![db_id, db_filename, db_title],
+        )?;
+        Ok(())
+    })
+    .await?;
+
+    Ok(PathBuf::from(full_path))
 }
 
 fn slugify(s: &str) -> Result<String> {
@@ -71,7 +87,7 @@ pub async fn run_create(
         // Look up existing project in DB, or create a new project file
         let project_path = match projects::db::find_project_file(db, notes_path, project_name).await? {
             Some(path) => path,
-            None => create_project_file(notes_path, project_name).await?,
+            None => create_project_file(notes_path, project_name, db).await?,
         };
         println!("Created project file: {}", project_path.display());
         let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
@@ -131,7 +147,7 @@ pub async fn run_refile(notes_path: &str, id: &str, project: &str, db: &Connecti
     // Look up existing project in DB, or create a new project file
     let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
         Some(path) => path,
-        None => create_project_file(notes_path, project).await?,
+        None => create_project_file(notes_path, project, db).await?,
     };
 
     if location.path == target_path {
@@ -447,16 +463,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert project into DB so the second create reuses the same file
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
-        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        db.call(move |conn| {
-            insert_project(conn, "proj-sprint-12", &filename, "sprint-12");
-            Ok(())
-        })
-        .await
-        .unwrap();
-
+        // Second create reuses the same project file
         run_create(&notes, "Task two", None, Some("sprint-12"), "DONE", &db)
             .await
             .unwrap();
@@ -587,16 +594,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert project into DB so the second create reuses the same file
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
-        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        db.call(move |conn| {
-            insert_project(conn, "proj-sprint-12", &filename, "sprint-12");
-            Ok(())
-        })
-        .await
-        .unwrap();
-
+        // Second create reuses the same project file
         run_create(&notes, "Task two", None, Some("sprint-12"), "TODO", &db)
             .await
             .unwrap();
@@ -822,7 +820,7 @@ mod tests {
         )
         .unwrap();
 
-        // Insert corresponding tasks into the DB
+        // Insert project and tasks into the DB
         db.call(|conn| {
             insert_project(conn, "proj-1", "2026-05-31--project-my-project.org", "my-project");
             insert_task(conn, "pt-1", "2026-05-31--project-my-project.org", "First task", "todo");
@@ -970,15 +968,7 @@ Investigate the redirect
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        // Insert project into DB so the update can find it
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        let db_filename = filename.clone();
-        db.call(move |conn| {
-            insert_project(conn, "proj-sprint-12", &db_filename, "sprint-12");
-            Ok(())
-        })
-        .await
-        .unwrap();
 
         // Update using --project with filename
         run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &db)            .await
@@ -1010,17 +1000,6 @@ Investigate the redirect
         // Find the task ID (second :ID:)
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
-
-        // Insert project into DB so the update can find it
-        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
-        let db_project_id = project_id.clone();
-        let db_filename = filename.clone();
-        db.call(move |conn| {
-            insert_project(conn, &db_project_id, &db_filename, "sprint-12");
-            Ok(())
-        })
-        .await
-        .unwrap();
 
         // Update using --project with project ID
         run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), &db)            .await
@@ -1060,24 +1039,6 @@ Investigate the redirect
         let content = fs::read_to_string(&standalone_path).unwrap();
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
-
-        // Insert project into DB so the update can find it
-        let project_path = fs::read_dir(&notes)
-            .unwrap()
-            .filter_map(|e| {
-                let p = e.unwrap().path();
-                let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-my-project") { Some(p) } else { None }
-            })
-            .next()
-            .unwrap();
-        let project_filename = project_path.file_name().unwrap().to_str().unwrap().to_string();
-        db.call(move |conn| {
-            insert_project(conn, "proj-my-project", &project_filename, "my-project");
-            Ok(())
-        })
-        .await
-        .unwrap();
 
         // Updating scoped to a project where the task doesn't exist should error
         let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), &db).await;
