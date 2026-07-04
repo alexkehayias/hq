@@ -3,6 +3,18 @@ FROM rust:bookworm AS builder
 
 WORKDIR /
 
+## Install native dependencies needed for linking
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl-dev \
+    pkg-config \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+## Use lld for faster, more memory-efficient linking (critical on small VMs)
+RUN rustup component add llvm-tools-preview 2>/dev/null; \
+    mkdir -p ~/.cargo && \
+    printf '[target.x86_64-unknown-linux-gnu]\nrustflags = ["-C", "link-arg=-fuse-ld=lld"]\n' > ~/.cargo/config.toml
+
 ## Cache rust dependencies
 ## https://stackoverflow.com/questions/58473606/cache-rust-dependencies-with-docker-build
 RUN mkdir ./src && echo 'fn main() { println!("Dummy!"); }' > ./src/main.rs
