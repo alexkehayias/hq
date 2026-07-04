@@ -1,5 +1,9 @@
 # Build stage
-FROM rust:bookworm AS builder
+# Debian trixie (glibc 2.40) is required because ort-sys downloads a
+# prebuilt ONNX Runtime 1.24 binary that references C23 symbols
+# (__isoc23_strtoll) absent from glibc < 2.38. Bookworm (glibc 2.36)
+# fails at link time with "undefined symbol: __isoc23_strtoll".
+FROM rust:trixie AS builder
 
 WORKDIR /
 
@@ -30,7 +34,8 @@ RUN touch -a -m ./src/main.rs
 RUN cargo build --release --locked
 
 # Run stage
-FROM debian:bookworm-slim AS runner
+# Match builder's glibc (see note above re: __isoc23_strtoll).
+FROM debian:trixie-slim AS runner
 
 RUN apt update
 RUN apt install -y git
