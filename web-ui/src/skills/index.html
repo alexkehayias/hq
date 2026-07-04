@@ -12,8 +12,8 @@
   </head>
   <body class="bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);">
     <!-- ===== List View (no ?name=) ===== -->
-    <div id="list-view" class="px-4 sm:px-6 lg:px-8">
-      <div class="max-w-4xl mx-auto my-6">
+    <div id="list-view" class="px-4 sm:px-6 lg:px-8 flex flex-col min-h-screen">
+      <div class="max-w-4xl mr-auto my-6 px-6">
         <a href="/" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors">
           <svg class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -57,8 +57,8 @@
     </div>
 
     <!-- ===== Detail View (?name=xxx) ===== -->
-    <div id="detail-view" class="px-4 sm:px-6 lg:px-8 hidden">
-      <div class="max-w-6xl mx-auto my-6">
+    <div id="detail-view" class="px-4 sm:px-6 lg:px-8 hidden flex flex-col min-h-screen">
+      <div class="max-w-6xl mr-auto my-6 px-6">
         <a href="/skills/" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors">
           <svg class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -67,7 +67,7 @@
         </a>
       </div>
 
-      <div class="max-w-6xl mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
+      <div class="max-w-6xl mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden flex flex-col flex-1">
         <!-- Header -->
         <div id="detail-header" class="px-6 py-6 border-b border-gray-100 dark:border-gray-700">
           <div id="detail-loading" class="text-center py-4">
@@ -90,10 +90,10 @@
         </div>
 
         <!-- Main Content: sidebar + editor -->
-        <div id="detail-body" class="hidden">
-          <div class="flex flex-col lg:flex-row">
+        <div id="detail-body" class="hidden flex-1 flex flex-col">
+          <div class="flex-1 flex flex-col lg:flex-row">
             <!-- File Tree Sidebar -->
-            <div class="w-full lg:w-64 bg-gray-50 dark:bg-gray-700 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-600 overflow-y-auto" style="max-height: 70vh;">
+            <div class="w-full lg:w-64 bg-gray-50 dark:bg-gray-700 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-600 overflow-y-auto">
               <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-600">
                 <h2 class="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Files</h2>
               </div>
