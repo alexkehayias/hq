@@ -2,7 +2,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -405,7 +405,7 @@ fn index_note_full_text(
 /// 2. Otherwise, split the text into N tokens
 /// 3. Calculate the embeddings for each chunk
 fn generate_embeddings(
-    embeddings_model: &TextEmbedding,
+    embeddings_model: &mut TextEmbedding,
     splitter: &TextSplitter<CoreBPE>,
     note_body: &str,
 ) -> Vec<Vec<f32>> {
@@ -531,12 +531,12 @@ pub async fn index_all(
     index_vector: bool,
     paths: Option<Vec<PathBuf>>,
 ) -> Result<()> {
-    let embeddings_model = Arc::new(
+    let embeddings_model = Arc::new(Mutex::new(
         TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
         )
         .unwrap(),
-    );
+    ));
     let tokenizer = cl100k_base().unwrap();
     let max_tokens = 1280;
     let splitter = Arc::new(TextSplitter::new(
@@ -602,7 +602,7 @@ pub async fn index_all(
         if index_vector {
             // Spawn a blocking task for the CPU-intensive embedding generation
             let embeddings = tokio::task::spawn_blocking(move || {
-                generate_embeddings(&embeddings_model, &splitter, &note_body)
+                generate_embeddings(&mut embeddings_model.lock().unwrap(), &splitter, &note_body)
             })
             .await
             .expect("Embedding generation task failed");

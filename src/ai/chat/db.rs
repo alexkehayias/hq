@@ -185,7 +185,7 @@ pub async fn get_chat_message_by_id(
         match row {
             Ok((msg, title)) => Ok(Some((msg, title))),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(tokio_rusqlite::Error::Rusqlite(e)),
         }
     });
     Ok(result.await?)

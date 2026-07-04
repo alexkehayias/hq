@@ -112,7 +112,7 @@ pub async fn get_run(db: &Connection, run_id: &str) -> anyhow::Result<Option<Eva
         ) {
             Ok(run) => Ok(Some(run)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(tokio_rusqlite::Error::Other(Box::new(e))),
+            Err(e) => Err(tokio_rusqlite::Error::Rusqlite(e)),
         }
     })
     .await?)
