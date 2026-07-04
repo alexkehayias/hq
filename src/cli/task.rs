@@ -11,7 +11,7 @@ use crate::core::orgmode;
 use crate::org;
 
 /// Create a new project file on disk and register it in the database.
-async fn create_project_file(notes_path: &str, project_name: &str, db: &Connection) -> Result<PathBuf> {
+async fn create_project_file(db: &Connection, notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
     let project_id = Uuid::new_v4().to_string();
     let today = Local::now().format("%Y-%m-%d");
@@ -72,12 +72,12 @@ fn slugify(s: &str) -> Result<String> {
 }
 
 pub async fn run_create(
+    db: &Connection,
     notes_path: &str,
     title: &str,
     body: Option<&str>,
     project: Option<&str>,
     status: &str,
-    db: &Connection,
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
@@ -87,7 +87,7 @@ pub async fn run_create(
         // Look up existing project in DB, or create a new project file
         let project_path = match projects::db::find_project_file(db, notes_path, project_name).await? {
             Some(path) => path,
-            None => create_project_file(notes_path, project_name, db).await?,
+            None => create_project_file(db, notes_path, project_name).await?,
         };
         println!("Created project file: {}", project_path.display());
         let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
@@ -116,13 +116,13 @@ pub async fn run_create(
 }
 
 pub async fn run_update(
+    db: &Connection,
     notes_path: &str,
     id: &str,
     title: Option<&str>,
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
-    db: &Connection,
 ) -> Result<()> {
     if let Some(project_ref) = project {
         let path = projects::db::find_project_file(db, notes_path, project_ref).await?
@@ -141,13 +141,13 @@ pub async fn run_update(
 /// Finds the task by UUID across all org files, removes the headline from its
 /// source, and appends it to the target project file (creating the project
 /// file if it doesn't exist yet).
-pub async fn run_refile(notes_path: &str, id: &str, project: &str, db: &Connection) -> Result<()> {
+pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &str) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
 
     // Look up existing project in DB, or create a new project file
     let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
         Some(path) => path,
-        None => create_project_file(notes_path, project, db).await?,
+        None => create_project_file(db, notes_path, project).await?,
     };
 
     if location.path == target_path {
@@ -386,7 +386,7 @@ mod tests {
     async fn test_create_standalone_task() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Test Task", None, None, "TODO", &db)
+        run_create(&db, &notes, "Test Task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -406,7 +406,7 @@ mod tests {
     async fn test_create_standalone_task_with_body() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO", &db)
+        run_create(&db, &notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
             .await
             .unwrap();
 
@@ -420,7 +420,7 @@ mod tests {
     async fn test_create_standalone_task_custom_status() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Urgent fix", None, None, "NEXT", &db)
+        run_create(&db, &notes, "Urgent fix", None, None, "NEXT")
             .await
             .unwrap();
 
@@ -438,7 +438,7 @@ mod tests {
     async fn test_create_project_task_creates_project_file() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix login", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Fix login", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -459,12 +459,12 @@ mod tests {
     async fn test_create_second_task_in_project() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Task one", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
         // Second create reuses the same project file
-        run_create(&notes, "Task two", None, Some("sprint-12"), "DONE", &db)
+        run_create(&db, &notes, "Task two", None, Some("sprint-12"), "DONE")
             .await
             .unwrap();
 
@@ -483,7 +483,7 @@ mod tests {
     async fn test_update_standalone_status() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "My task", None, None, "TODO", &db)
+        run_create(&db, &notes, "My task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -493,7 +493,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None, &db)            .await
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -504,7 +504,7 @@ mod tests {
     async fn test_update_standalone_title_and_body() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Old title", Some("Old body"), None, "TODO", &db)
+        run_create(&db, &notes, "Old title", Some("Old body"), None, "TODO")
             .await
             .unwrap();
 
@@ -513,7 +513,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, Some("New title"), Some("New body"), None, None, &db)            .await
+        run_update(&db, &notes, &id, Some("New title"), Some("New body"), None, None)            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -528,7 +528,7 @@ mod tests {
     async fn test_update_project_task_status() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Fix bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -540,7 +540,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&notes, &id, None, None, Some("DONE"), None, &db)            .await
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -558,7 +558,7 @@ mod tests {
     async fn test_update_nonexistent_task() {
         let (db, _dir, notes) = test_env().await;
 
-        let result = run_update(&notes, "nonexistent-uuid", None, None, Some("DONE"), None, &db).await;
+        let result = run_update(&db, &notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
         assert!(result.is_err());
     }
 
@@ -570,7 +570,7 @@ mod tests {
     async fn test_delete_standalone_task() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Temp task", None, None, "TODO", &db)
+        run_create(&db, &notes, "Temp task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -590,12 +590,12 @@ mod tests {
     async fn test_delete_project_task() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Task one", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Task one", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
         // Second create reuses the same project file
-        run_create(&notes, "Task two", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Task two", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -616,7 +616,7 @@ mod tests {
     async fn test_delete_last_project_task_leaves_project_file() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Only task", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Only task", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -957,7 +957,7 @@ Investigate the redirect
     async fn test_update_project_task_by_filename() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix bug", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Fix bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -971,7 +971,7 @@ Investigate the redirect
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
 
         // Update using --project with filename
-        run_update(&notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &db)            .await
+        run_update(&db, &notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))            .await
             .unwrap();
 
         let config = parsing_config();
@@ -986,7 +986,7 @@ Investigate the redirect
     async fn test_update_project_task_by_id() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Add tests", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Add tests", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1002,7 +1002,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&notes, &task_id, None, None, Some("DONE"), Some(&project_id), &db)            .await
+        run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some(&project_id))            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1017,12 +1017,12 @@ Investigate the redirect
         let (db, _dir, notes) = test_env().await;
 
         // Create a standalone task (not in any project)
-        run_create(&notes, "Standalone", None, None, "TODO", &db)
+        run_create(&db, &notes, "Standalone", None, None, "TODO")
             .await
             .unwrap();
 
         // Create a project with a different task
-        run_create(&notes, "Project task", None, Some("my-project"), "TODO", &db)
+        run_create(&db, &notes, "Project task", None, Some("my-project"), "TODO")
             .await
             .unwrap();
 
@@ -1041,7 +1041,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Updating scoped to a project where the task doesn't exist should error
-        let result = run_update(&notes, &task_id, None, None, Some("DONE"), Some("my-project"), &db).await;
+        let result = run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
         assert!(result.is_err(), "should error when task not found in scoped project file");
     }
 
@@ -1049,7 +1049,7 @@ Investigate the redirect
     async fn test_update_project_task_nonexistent_project() {
         let (db, _dir, notes) = test_env().await;
 
-        let result = run_update(&notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), &db).await;
+        let result = run_update(&db, &notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 
@@ -1061,7 +1061,7 @@ Investigate the redirect
     async fn test_refile_standalone_to_project() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO", &db)
+        run_create(&db, &notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
             .await
             .unwrap();
 
@@ -1080,7 +1080,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a project
-        run_refile(&notes, &task_id, "errands", &db).await.unwrap();
+        run_refile(&db, &notes, &task_id, "errands").await.unwrap();
 
         // Task headline should be removed from the standalone file
         // (document-level preamble with #+TITLE: may retain the title)
@@ -1110,7 +1110,7 @@ Investigate the redirect
     async fn test_refile_from_one_project_to_another() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Fix login bug", None, Some("sprint-12"), "TODO", &db)
+        run_create(&db, &notes, "Fix login bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1130,7 +1130,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a different project
-        run_refile(&notes, &task_id, "security", &db).await.unwrap();
+        run_refile(&db, &notes, &task_id, "security").await.unwrap();
 
         // Task should no longer be in the original project
         let sprint_content = fs::read_to_string(&project_path).unwrap();
@@ -1173,7 +1173,7 @@ Consider authentication requirements.
         .unwrap();
 
         // Refile to a project
-        run_refile(&notes, "task-with-body", "research", &db).await.unwrap();
+        run_refile(&db, &notes, "task-with-body", "research").await.unwrap();
 
         // Read the project file
         let project_path = fs::read_dir(&notes)
@@ -1202,7 +1202,7 @@ Consider authentication requirements.
     async fn test_refile_to_same_project_errors() {
         let (db, _dir, notes) = test_env().await;
 
-        run_create(&notes, "Task in project", None, Some("my-project"), "TODO", &db)
+        run_create(&db, &notes, "Task in project", None, Some("my-project"), "TODO")
             .await
             .unwrap();
 
@@ -1222,7 +1222,7 @@ Consider authentication requirements.
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refiling to the same project should fail
-        let result = run_refile(&notes, &task_id, "my-project", &db).await;
+        let result = run_refile(&db, &notes, &task_id, "my-project").await;
         assert!(result.is_err(), "should error when refiling to same project");
         assert!(
             result.unwrap_err().to_string().contains("already in project"),
@@ -1234,7 +1234,7 @@ Consider authentication requirements.
     async fn test_refile_nonexistent_task() {
         let (db, _dir, notes) = test_env().await;
 
-        let result = run_refile(&notes, "nonexistent-uuid", "some-project", &db).await;
+        let result = run_refile(&db, &notes, "nonexistent-uuid", "some-project").await;
         assert!(result.is_err());
     }
 
@@ -1267,7 +1267,7 @@ Need to check the middleware changes.
         .unwrap();
 
         // Refile one task to a project
-        run_refile(&notes, "review-pr-42", "ops", &db).await.unwrap();
+        run_refile(&db, &notes, "review-pr-42", "ops").await.unwrap();
 
         // The refiled task should be gone from refile.org
         let refile_content = fs::read_to_string(&refile_path).unwrap();
