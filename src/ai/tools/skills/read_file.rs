@@ -50,7 +50,7 @@ impl ToolCall for ReadSkillFileTool {
         let fn_args: ReadSkillFileArgs = parse_tool_args(args)?;
 
         // Try to load the skill first
-        let skill = match self.registry.load_skill(&fn_args.skill_name) {
+        let skill = match self.registry.load_skill(&fn_args.skill_name).await {
             Ok(s) => s,
             Err(e) => {
                 let response = SkillFileContent {
@@ -65,7 +65,7 @@ impl ToolCall for ReadSkillFileTool {
         };
 
         // Try to read the file
-        let content = skill.read_file(&fn_args.file_path);
+        let content = skill.read_file(&fn_args.file_path).await;
 
         // Determine error message if file not found
         let (found, content, error) = match content {
@@ -183,7 +183,7 @@ This is the body of {}.
             "print('hello')",
         );
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = ReadSkillFileTool::new(registry);
 
         let result = tool
@@ -209,7 +209,7 @@ This is the body of {}.
             "print('hello')",
         );
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = ReadSkillFileTool::new(registry);
 
         let result = tool
@@ -226,7 +226,7 @@ This is the body of {}.
     async fn test_read_skill_file_skill_not_found() {
         let temp = TempDir::new().unwrap();
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = ReadSkillFileTool::new(registry);
 
         let result = tool

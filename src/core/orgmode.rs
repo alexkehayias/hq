@@ -34,32 +34,21 @@ pub fn build_headline(id: &str, title: &str, body: &str, status: &str, level: us
 
 /// Recursively collect all .org files in a directory tree.
 pub async fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
-    /// Recursive helper boxed to avoid infinitely-sized async fn future.
-    fn collect_inner(
-        path: &std::path::Path,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PathBuf>> + Send + '_>> {
-        Box::pin(async move {
-            let mut files = Vec::new();
-            let Ok(mut entries) = tokio::fs::read_dir(path).await else {
-                return files;
-            };
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let p = entry.path();
-                if let Ok(ft) = entry.file_type().await {
-                    if ft.is_dir() {
-                        files.extend(collect_inner(&p).await);
-                    } else if ft.is_file()
-                        && p.extension().map_or(false, |e| e == "org")
-                        && p.file_name().unwrap_or_default() != "config.org"
-                    {
-                        files.push(p);
-                    }
-                }
-            }
-            files
-        })
+    let mut files = Vec::new();
+    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
+        return files;
+    };
+    while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+        let p = entry.path();
+        if p.is_dir() {
+            files.extend(Box::pin(collect_org_files(&p)).await);
+        } else if p.extension().map_or(false, |e| e == "org")
+            && p.file_name().unwrap_or_default() != "config.org"
+        {
+            files.push(p);
+        }
     }
-    collect_inner(path).await
+    files
 }
 
 /// Build a regex pattern that matches `:ID:` followed by the given value,

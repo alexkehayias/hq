@@ -59,7 +59,7 @@ impl ToolCall for LoadSkillTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: LoadSkillArgs = parse_tool_args(args)?;
 
-        let skill = self.registry.load_skill(&fn_args.name)?;
+        let skill = self.registry.load_skill(&fn_args.name).await?;
         let result = SkillContent::from(&skill);
         Ok(serde_json::to_string(&result)?)
     }
@@ -135,7 +135,7 @@ This is the body of {}.
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = LoadSkillTool::new(registry);
 
         let result = tool.call(r#"{"name": "pdf-processing"}"#).await.unwrap();
@@ -152,7 +152,7 @@ This is the body of {}.
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = LoadSkillTool::new(registry);
 
         let result = tool.call(r#"{"name": "nonexistent"}"#).await;

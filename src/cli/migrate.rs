@@ -20,7 +20,7 @@ pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> 
     // Delete and recreate the index
     if index {
         println!("Migrating search index...");
-        recreate_index(index_path);
+        recreate_index(index_path).await;
         println!("Finished migrating search index");
         println!(
             "NOTE: You will need to re-populate the index by running `index --full-text` and `index --chat"

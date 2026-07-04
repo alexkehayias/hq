@@ -107,7 +107,7 @@ pub async fn search_similar_notes(
         return Ok(Vec::new());
     }
 
-    let embeddings_model = TextEmbedding::try_new(
+    let mut embeddings_model = TextEmbedding::try_new(
         InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
     )
     .unwrap();

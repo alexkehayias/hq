@@ -158,17 +158,17 @@ mod tests {
     use std::env;
     use uuid::Uuid;
 
-    fn temp_bash_tool() -> BashTool {
+    async fn temp_bash_tool() -> BashTool {
         let binding = env::temp_dir();
         let temp_dir = binding.to_string_lossy();
-        std::fs::create_dir(format!("{}/workspace", temp_dir)).ok();
+        tokio::fs::create_dir(format!("{}/workspace", temp_dir)).await.ok();
         let session_id = Uuid::new_v4().to_string();
         BashTool::new(&temp_dir, &session_id)
     }
 
     #[tokio::test]
     async fn test_bash_echo() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool.call(r#"{"command": "echo hello"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -178,7 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_stderr() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool.call(r#"{"command": "echo error >&2"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -188,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_exit_code() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool.call(r#"{"command": "exit 42"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -197,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_no_env_vars() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool.call(r#"{"command": "echo $PATH"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -208,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_variables() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool
             .call(r#"{"command": "NAME=World; echo \"Hello, $NAME\""}"#)
             .await
@@ -221,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_pipeline() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool
             .call(r#"{"command": "echo -e 'apple\nbanana\ncherry' | grep a"}"#)
             .await
@@ -234,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_arithmetic() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool
             .call(r#"{"command": "echo $((2 + 2 * 3))"}"#)
             .await
@@ -248,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_function() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool
             .call(r#"{"command": "greet() { echo \"Hello, $1!\"; }; greet World"}"#)
             .await
@@ -261,7 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_truncated_field() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         let result = tool.call(r#"{"command": "echo hello"}"#).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
 
@@ -271,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_function_name() {
-        let tool = temp_bash_tool();
+        let tool = temp_bash_tool().await;
         assert_eq!(tool.function_name(), "bash");
     }
 

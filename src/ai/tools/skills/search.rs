@@ -103,7 +103,7 @@ This is the body of {}.
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
         create_test_skill(temp.path(), "code-review", "Review code for bugs");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = SearchSkillsTool::new(registry);
 
         let result = tool.call(r#"{"query": "pdf-processing"}"#).await.unwrap();
@@ -119,7 +119,7 @@ This is the body of {}.
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
         create_test_skill(temp.path(), "code-review", "Review code for bugs");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = SearchSkillsTool::new(registry);
 
         let result = tool.call(r#"{"query": "pdf"}"#).await.unwrap();
@@ -135,7 +135,7 @@ This is the body of {}.
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
         create_test_skill(temp.path(), "code-review", "Review code for bugs");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = SearchSkillsTool::new(registry);
 
         let result = tool.call(r#"{"query": "bugs"}"#).await.unwrap();
@@ -150,7 +150,7 @@ This is the body of {}.
         let temp = TempDir::new().unwrap();
         create_test_skill(temp.path(), "pdf-processing", "Process PDF files");
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let tool = SearchSkillsTool::new(registry);
 
         let result = tool.call(r#"{"query": "nonexistent"}"#).await.unwrap();
