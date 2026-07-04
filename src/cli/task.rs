@@ -713,7 +713,7 @@ mod tests {
 
         // Create a project file on disk (find_project_file_by_id_or_name needs it)
         let project_path = dir.path().join("2026-05-31--project-my-project.org");
-        std::fs::write(
+        tokio::fs::write(
             &project_path,
             "\
 :PROPERTIES:
@@ -735,6 +735,7 @@ mod tests {
 :END:
 ",
         )
+        .await
         .unwrap();
 
         // Insert corresponding tasks into the DB
@@ -756,7 +757,7 @@ mod tests {
         let notes = dir.path().to_str().unwrap().to_string();
 
         let project_path = dir.path().join("2026-05-31--project-sprint-12.org");
-        std::fs::write(
+        tokio::fs::write(
             &project_path,
             "\
 :PROPERTIES:
@@ -783,6 +784,7 @@ mod tests {
 :END:
 ",
         )
+        .await
         .unwrap();
 
         db.call(|conn| {

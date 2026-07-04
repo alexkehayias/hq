@@ -215,7 +215,7 @@ This skill has scripts and references.
             system_message: String::from("You are a helpful assistant."),
         };
         let skill_registry =
-            SkillRegistry::new(skills_path.display().to_string()).unwrap();
+            SkillRegistry::new(skills_path.display().to_string()).await.unwrap();
         let app_state = AppState::new(db, app_config, skill_registry);
         let app = app(Arc::new(RwLock::new(app_state)));
 
@@ -466,7 +466,10 @@ This skill has scripts and references.
         );
 
         // Reload the shared registry
-        state.skill_registry.write().unwrap().reload().unwrap();
+        let mut reg = state.skill_registry.write().unwrap().clone();
+        // Write lock guard is dropped here, safe to do async work
+        reg.reload().await.unwrap();
+        *state.skill_registry.write().unwrap() = reg;
 
         // Verify the new skill is now visible via the API
         let response = app

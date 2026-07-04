@@ -53,7 +53,7 @@ impl ToolCall for WorkOnSkillTool {
             // avoid discarding uncommitted edits from an interrupted
             // workflow.
         } else if !created {
-            validate_skill_directory(&skill_source)?;
+            validate_skill_directory(&skill_source).await?;
             copy_dir(&skill_source, &dest).await?;
         } else {
             fs::create_dir_all(&dest).await?;

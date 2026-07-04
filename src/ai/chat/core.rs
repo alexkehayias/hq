@@ -608,8 +608,8 @@ mod tests {
         assert_eq!(builder.tools.as_ref().unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_builder_skills() {
+    #[tokio::test]
+    async fn test_builder_skills() {
         use crate::ai::skills::SkillRegistry;
         use std::fs;
         use tempfile::TempDir;
@@ -626,7 +626,7 @@ description: A test skill for unit testing.
 Test skill body content."#;
         fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         assert_eq!(registry.count(), 1);
 
         // Test with empty tools
@@ -643,8 +643,8 @@ Test skill body content."#;
         assert_eq!(tools.len(), 6);
     }
 
-    #[test]
-    fn test_builder_skills_merges_with_existing_tools() {
+    #[tokio::test]
+    async fn test_builder_skills_merges_with_existing_tools() {
         use crate::ai::skills::SkillRegistry;
         use std::fs;
         use tempfile::TempDir;
@@ -661,7 +661,7 @@ description: A test skill for unit testing.
 Test skill body content."#;
         fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         assert_eq!(registry.count(), 1);
 
         // Create a mock tool
@@ -689,14 +689,14 @@ Test skill body content."#;
         assert_eq!(tools.len(), 7);
     }
 
-    #[test]
-    fn test_builder_skills_empty_registry() {
+    #[tokio::test]
+    async fn test_builder_skills_empty_registry() {
         use tempfile::TempDir;
 
         // Create an empty temp directory
         let temp = TempDir::new().unwrap();
 
-        let registry = SkillRegistry::new(temp.path()).unwrap();
+        let registry = SkillRegistry::new(temp.path()).await.unwrap();
         let storage_path = temp.path().to_string_lossy().to_string();
         let handle = Arc::new(RwLock::new(registry));
         let builder = ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").skills(

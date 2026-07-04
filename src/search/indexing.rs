@@ -544,9 +544,9 @@ pub async fn index_all(
     ));
 
     let note_paths: Vec<PathBuf> = if let Some(path_bufs) = paths {
-        note_filter(notes_dir_path, path_bufs)
+        note_filter(notes_dir_path, path_bufs).await
     } else {
-        notes(notes_dir_path)
+        notes(notes_dir_path).await
     };
 
     let index_path =

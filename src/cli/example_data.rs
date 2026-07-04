@@ -1,7 +1,7 @@
 use crate::core::db::{async_db, initialize_db};
 use crate::search::index_all;
 use anyhow::Result;
-use std::fs;
+use tokio::fs;
 use std::path::Path;
 
 /// Copy example .org notes from the repo into the storage notes directory,
@@ -17,22 +17,22 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
     }
 
     // Ensure the target notes, db, and index directories exist
-    fs::create_dir_all(notes_path)
+    fs::create_dir_all(notes_path).await
         .unwrap_or_else(|err| println!("Ignoring notes directory create failed: {}", err));
-    fs::create_dir_all(vec_db_path)
+    fs::create_dir_all(vec_db_path).await
         .unwrap_or_else(|err| println!("Ignoring vector DB create failed: {}", err));
-    fs::create_dir_all(index_path)
+    fs::create_dir_all(index_path).await
         .unwrap_or_else(|err| println!("Ignoring index directory create failed: {}", err));
 
     // Copy each .org file from examples to the notes directory
     let mut count = 0;
-    if let Ok(entries) = fs::read_dir(examples_path) {
-        for entry in entries.flatten() {
+    if let Ok(mut entries) = fs::read_dir(examples_path).await {
+        while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().map_or(false, |ext| ext == "org") {
                 let file_name = path.file_name().unwrap();
                 let dest = Path::new(notes_path).join(file_name);
-                match fs::copy(&path, &dest) {
+                match fs::copy(&path, &dest).await {
                     Ok(_) => {
                         println!("  Copied {}", file_name.to_string_lossy());
                         count += 1;
