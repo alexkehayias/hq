@@ -17,15 +17,17 @@ RUN rustup component add llvm-tools-preview 2>/dev/null; \
 
 ## Cache rust dependencies
 ## https://stackoverflow.com/questions/58473606/cache-rust-dependencies-with-docker-build
+## --locked ensures the build uses Cargo.lock exactly as committed, with no registry resolution drift.
 RUN mkdir ./src && echo 'fn main() { println!("Dummy!"); }' > ./src/main.rs
 COPY ./Cargo.toml .
-RUN cargo build --release
+COPY ./Cargo.lock .
+RUN cargo build --release --locked
 
 ## Actually build the app
 RUN rm -rf ./src
 COPY ./src ./src
 RUN touch -a -m ./src/main.rs
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # Run stage
 FROM debian:bookworm-slim AS runner
