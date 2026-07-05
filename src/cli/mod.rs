@@ -16,7 +16,7 @@ pub mod projects;
 pub mod query;
 pub mod rebuild;
 pub mod serve;
-pub mod task;
+pub mod tasks;
 pub mod web;
 
 use auth::ServiceKind;
@@ -125,14 +125,14 @@ enum Command {
         command: projects::ProjectsCommand,
     },
     /// Create, update, or delete tasks
-    Task {
+    Tasks {
         #[command(subcommand)]
-        command: TaskCommand,
+        command: TasksCommand,
     },
 }
 
 #[derive(Subcommand)]
-enum TaskCommand {
+enum TasksCommand {
     /// Create a new task
     Create {
         #[arg(long)]
@@ -269,26 +269,26 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let db = crate::core::db::async_db(&vec_db_path).await?;
             projects::run(command, &db).await?;
         }
-        Some(Command::Task { command }) => {
+        Some(Command::Tasks { command }) => {
             let task_db = crate::core::db::async_db(&vec_db_path).await?;
             match command {
-            TaskCommand::Create {
+            TasksCommand::Create {
                 title,
                 body,
                 project,
                 status,
             } => {
-                task::run_create(&task_db, &notes_path, &title, body.as_deref(), project.as_deref(), &status)
+                tasks::run_create(&task_db, &notes_path, &title, body.as_deref(), project.as_deref(), &status)
                     .await?;
             }
-            TaskCommand::Update {
+            TasksCommand::Update {
                 id,
                 title,
                 body,
                 status,
                 project,
             } => {
-                task::run_update(
+                tasks::run_update(
                     &task_db,
                     &notes_path,
                     &id,
@@ -299,14 +299,14 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 )
                 .await?;
             }
-            TaskCommand::Delete { id } => {
-                task::run_delete(&notes_path, &id).await?;
+            TasksCommand::Delete { id } => {
+                tasks::run_delete(&notes_path, &id).await?;
             }
-            TaskCommand::List { project, status } => {
-                task::run_list(&task_db, &notes_path, project.as_deref(), status.as_deref()).await?;
+            TasksCommand::List { project, status } => {
+                tasks::run_list(&task_db, &notes_path, project.as_deref(), status.as_deref()).await?;
             }
-            TaskCommand::Refile { id, project } => {
-                task::run_refile(&task_db, &notes_path, &id, &project).await?;
+            TasksCommand::Refile { id, project } => {
+                tasks::run_refile(&task_db, &notes_path, &id, &project).await?;
             }
         }
         }

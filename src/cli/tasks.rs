@@ -239,8 +239,7 @@ pub async fn run_list(
     println!("{:<40} {:<10} {:<24} {}", "ID", "Status", "Project", "Title");
     println!("{}", "-".repeat(100));
     for (id, task_status, project_display, title) in &tasks {
-        let short_id = if id.len() > 8 { &id[..8] } else { id };
-        println!("{short_id:<40} {task_status:<10} {project_display:<24} {title}");
+        println!("{id:<40} {task_status:<10} {project_display:<24} {title}");
     }
 
     Ok(())
