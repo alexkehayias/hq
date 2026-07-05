@@ -14,7 +14,7 @@ use std::time::Duration;
 pub struct HqBuiltin;
 
 /// Subcommands that the `hq` builtin is allowed to run inside the sandbox.
-const ALLOWED_SUBCOMMANDS: &[&str] = &["task", "eval", "projects"];
+const ALLOWED_SUBCOMMANDS: &[&str] = &["tasks", "eval", "projects"];
 
 /// Help text shown for the `hq` builtin, listing only allowed subcommands.
 const FILTERED_HELP: &str = "\
@@ -23,7 +23,7 @@ hq - personal AI assistant
 Usage: hq <COMMAND>
 
 Commands:
-  task       Create, update, or delete tasks
+  tasks      Create, update, or delete tasks
   eval       Run an eval
   projects   List projects
 
@@ -234,8 +234,8 @@ mod tests {
             "help output should list usage or commands: {output}"
         );
         assert!(
-            output.contains("task"),
-            "help output should list allowed subcommand 'task': {output}"
+            output.contains("tasks"),
+            "help output should list allowed subcommand 'tasks': {output}"
         );
         assert!(
             output.contains("eval"),
@@ -285,7 +285,7 @@ mod tests {
             "output should indicate the subcommand is not allowed: {output}"
         );
         assert!(
-            output.contains("task") && output.contains("eval") && output.contains("projects"),
+            output.contains("tasks") && output.contains("eval") && output.contains("projects"),
             "output should list allowed subcommands: {output}"
         );
     }
