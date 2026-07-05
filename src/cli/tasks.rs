@@ -693,7 +693,6 @@ mod tests {
         run_update(&db, &notes, &id, None, None, Some("DONE"), None)
             .await
             .unwrap();
-        let after_close = fs::read_to_string(&path).unwrap();
 
         // Now update the title only, status unchanged (status=None means preserve)
         run_update(&db, &notes, &id, Some("New title"), None, None, None)
