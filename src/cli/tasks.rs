@@ -562,6 +562,222 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // run_update — state transition logging (CLOSED + LOGBOOK)
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a TODO task and return (path, id) so tests can drive
+    /// subsequent updates without re-deriving the ID.
+    async fn create_todo_task(db: &Connection, notes: &str) -> (PathBuf, String) {
+        run_create(db, notes, "Test task", None, None, "TODO")
+            .await
+            .unwrap();
+        let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        (path, id)
+    }
+
+    #[tokio::test]
+    async fn test_update_logs_state_change_to_done() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes).await;
+
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("CLOSED:"),
+            "DONE transition should set CLOSED:, got:\n{content}"
+        );
+        assert!(
+            content.contains(":LOGBOOK:"),
+            "DONE transition should add :LOGBOOK: drawer, got:\n{content}"
+        );
+        assert!(
+            content.contains("- State \"DONE\"       from \"TODO\""),
+            "DONE transition should log state change, got:\n{content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_logs_state_change_to_canceled() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes).await;
+
+        run_update(&db, &notes, &id, None, None, Some("CANCELED"), None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("CLOSED:"),
+            "CANCELED transition should set CLOSED:, got:\n{content}"
+        );
+        assert!(
+            content.contains("- State \"CANCELED\"       from \"TODO\""),
+            "CANCELED transition should log state change, got:\n{content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_someday_does_not_set_closed() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes).await;
+
+        run_update(&db, &notes, &id, None, None, Some("SOMEDAY"), None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            !content.contains("CLOSED:"),
+            "SOMEDAY is not a closed state — no CLOSED: line, got:\n{content}"
+        );
+        assert!(
+            content.contains("- State \"SOMEDAY\"       from \"TODO\""),
+            "SOMEDAY transition should still log state change, got:\n{content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_reopen_clears_closed() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes).await;
+
+        // Close the task first
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+            .await
+            .unwrap();
+        let closed_content = fs::read_to_string(&path).unwrap();
+        assert!(closed_content.contains("CLOSED:"));
+
+        // Reopen it
+        run_update(&db, &notes, &id, None, None, Some("NEXT"), None)
+            .await
+            .unwrap();
+
+        let reopened_content = fs::read_to_string(&path).unwrap();
+        assert!(
+            !reopened_content.contains("CLOSED:"),
+            "Reopening should clear CLOSED:, got:\n{reopened_content}"
+        );
+        // Two logbook entries: one for closing, one for reopening
+        let logbook_entries: Vec<_> = reopened_content
+            .lines()
+            .filter(|l| l.starts_with("- State "))
+            .collect();
+        assert_eq!(
+            logbook_entries.len(),
+            2,
+            "Should have two state change entries (close + reopen), got:\n{reopened_content}"
+        );
+        assert!(
+            reopened_content.contains("- State \"DONE\"       from \"TODO\""),
+            "First entry should be the close transition, got:\n{reopened_content}"
+        );
+        assert!(
+            reopened_content.contains("- State \"NEXT\"       from \"DONE\""),
+            "Second entry should be the reopen transition, got:\n{reopened_content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_title_only_preserves_logbook() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes).await;
+
+        // Close the task to populate CLOSED + LOGBOOK
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+            .await
+            .unwrap();
+
+        // Now update the title only, status unchanged (status=None means preserve)
+        run_update(&db, &notes, &id, Some("New title"), None, None, None)
+            .await
+            .unwrap();
+
+        let after_title_update = fs::read_to_string(&path).unwrap();
+        // CLOSED should still be present
+        assert!(
+            after_title_update.contains("CLOSED:"),
+            "Title-only update should preserve CLOSED:, got:\n{after_title_update}"
+        );
+        // Logbook entry from the close should be preserved verbatim
+        assert!(
+            after_title_update.contains("- State \"DONE\"       from \"TODO\""),
+            "Title-only update should preserve existing LOGBOOK entry, got:\n{after_title_update}"
+        );
+        // No new logbook entry should have been added (status unchanged)
+        let entry_count = after_title_update
+            .lines()
+            .filter(|l| l.starts_with("- State "))
+            .count();
+        assert_eq!(
+            entry_count, 1,
+            "Title-only update should not add new state change entries, got:\n{after_title_update}"
+        );
+        // Title should be updated
+        assert!(after_title_update.contains("New title"));
+    }
+
+    #[tokio::test]
+    async fn test_update_status_noop_preserves_closed() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes).await;
+
+        // Close the task
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+            .await
+            .unwrap();
+
+        // "Update" to the same status (DONE -> DONE)
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        // No new logbook entry should be added when status doesn't change
+        let entry_count = content
+            .lines()
+            .filter(|l| l.starts_with("- State "))
+            .count();
+        assert_eq!(
+            entry_count, 1,
+            "Status noop should not add a new state change entry, got:\n{content}"
+        );
+        // CLOSED should be preserved
+        assert!(
+            content.contains("CLOSED:"),
+            "Status noop should preserve CLOSED:, got:\n{content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_done_no_closed() {
+        // New tasks created with a closed status should NOT get a CLOSED: line
+        // or LOGBOOK entries — only state transitions (updates) record these.
+        let (db, _dir, notes) = test_env().await;
+
+        run_create(&db, &notes, "Already done task", None, None, "DONE")
+            .await
+            .unwrap();
+
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            !content.contains("CLOSED:"),
+            "New task created as DONE should not have CLOSED:, got:\n{content}"
+        );
+        assert!(
+            !content.contains(":LOGBOOK:"),
+            "New task created as DONE should not have a :LOGBOOK: drawer, got:\n{content}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // run_delete
     // -----------------------------------------------------------------------
 
