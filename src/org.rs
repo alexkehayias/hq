@@ -76,6 +76,14 @@ pub struct Headline {
     title: String,
     properties: Vec<(String, String)>,
     body: Option<String>,
+    /// Inactive timestamp string (e.g. `"[2026-05-23 Sat 10:59]"`) emitted as
+    /// `CLOSED: {ts}` on its own line, between the headline title and the
+    /// property drawer. `None` means no CLOSED: line is emitted.
+    closed: Option<String>,
+    /// Lines to emit inside a `:LOGBOOK:` drawer (e.g. state-change entries
+    /// like `- State "DONE"       from "TODO"       [TS]`). The drawer is
+    /// emitted after the property drawer and before the body.
+    logbook: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +161,8 @@ pub struct HeadlineBuilder {
     title: Option<String>,
     properties: Vec<(String, String)>,
     body: Option<String>,
+    closed: Option<String>,
+    logbook: Vec<String>,
 }
 
 impl HeadlineBuilder {
@@ -186,6 +196,26 @@ impl HeadlineBuilder {
         self
     }
 
+    /// Set the CLOSED: planning timestamp (e.g. `"[2026-05-23 Sat 10:59]"`).
+    ///
+    /// The value is emitted verbatim on a `CLOSED:` line between the headline
+    /// title and the property drawer. Pass the bracketed inactive timestamp
+    /// string; do not include the `CLOSED:` prefix.
+    pub fn closed(mut self, timestamp: &str) -> Self {
+        self.closed = Some(timestamp.to_string());
+        self
+    }
+
+    /// Append a single line to the `:LOGBOOK:` drawer (e.g. a state-change
+    /// entry like `- State "DONE"       from "TODO"       [TS]`).
+    ///
+    /// Each call appends one line in the order called. The drawer is emitted
+    /// only if at least one entry has been added.
+    pub fn logbook_entry(mut self, line: &str) -> Self {
+        self.logbook.push(line.to_string());
+        self
+    }
+
     /// Consume the builder and produce a `Headline`.
     pub fn build(self) -> Headline {
         Headline {
@@ -194,6 +224,8 @@ impl HeadlineBuilder {
             title: self.title.unwrap_or_default(),
             properties: self.properties,
             body: self.body.filter(|b| !b.is_empty()),
+            closed: self.closed,
+            logbook: self.logbook,
         }
     }
 }
@@ -223,10 +255,24 @@ impl fmt::Display for Headline {
         }
         writeln!(f, " {}", self.title)?;
 
+        // CLOSED: planning line (between headline title and property drawer)
+        if let Some(closed) = &self.closed {
+            writeln!(f, "CLOSED: {closed}")?;
+        }
+
         // Property drawer (must come before body in org-mode)
         write_property_drawer(f, &self.properties)?;
 
-        // Body
+        // LOGBOOK drawer (between property drawer and body)
+        if !self.logbook.is_empty() {
+            writeln!(f, ":LOGBOOK:")?;
+            for entry in &self.logbook {
+                writeln!(f, "{entry}")?;
+            }
+            writeln!(f, ":END:")?;
+        }
+
+        // Body (after LOGBOOK drawer per org-mode convention)
         if let Some(body) = &self.body {
             writeln!(f, "{body}")?;
         }
@@ -379,6 +425,97 @@ mod tests {
 :ID:       uuid-123
 :END:
 Milk, eggs, bread
+";
+        assert_eq!(h.to_string(), expected);
+    }
+
+    #[test]
+    fn test_headline_with_closed() {
+        let h = Headline::builder()
+            .level(1)
+            .status("DONE")
+            .title("Fix emacs init")
+            .property("ID", "uuid-123")
+            .closed("[2026-05-23 Sat 10:59]")
+            .build();
+        let expected = "\
+* DONE Fix emacs init
+CLOSED: [2026-05-23 Sat 10:59]
+:PROPERTIES:
+:ID:       uuid-123
+:END:
+";
+        assert_eq!(h.to_string(), expected);
+    }
+
+    #[test]
+    fn test_headline_with_logbook() {
+        let h = Headline::builder()
+            .level(1)
+            .status("DONE")
+            .title("Fix emacs init")
+            .property("ID", "uuid-123")
+            .closed("[2026-05-23 Sat 10:59]")
+            .logbook_entry("- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]")
+            .build();
+        let expected = "\
+* DONE Fix emacs init
+CLOSED: [2026-05-23 Sat 10:59]
+:PROPERTIES:
+:ID:       uuid-123
+:END:
+:LOGBOOK:
+- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]
+:END:
+";
+        assert_eq!(h.to_string(), expected);
+    }
+
+    #[test]
+    fn test_headline_with_logbook_and_body() {
+        // Body must come AFTER the LOGBOOK drawer per org-mode convention.
+        let h = Headline::builder()
+            .level(1)
+            .status("DONE")
+            .title("Fix emacs init")
+            .property("ID", "uuid-123")
+            .closed("[2026-05-23 Sat 10:59]")
+            .logbook_entry("- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]")
+            .body("Need to update the Dockerfile.")
+            .build();
+        let expected = "\
+* DONE Fix emacs init
+CLOSED: [2026-05-23 Sat 10:59]
+:PROPERTIES:
+:ID:       uuid-123
+:END:
+:LOGBOOK:
+- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]
+:END:
+Need to update the Dockerfile.
+";
+        assert_eq!(h.to_string(), expected);
+    }
+
+    #[test]
+    fn test_headline_with_multiple_logbook_entries() {
+        let h = Headline::builder()
+            .level(1)
+            .status("TODO")
+            .title("Reopened task")
+            .property("ID", "uuid-456")
+            .logbook_entry("- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]")
+            .logbook_entry("- State \"TODO\"       from \"DONE\"       [2026-05-24 Sun 09:00]")
+            .build();
+        let expected = "\
+* TODO Reopened task
+:PROPERTIES:
+:ID:       uuid-456
+:END:
+:LOGBOOK:
+- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]
+- State \"TODO\"       from \"DONE\"       [2026-05-24 Sun 09:00]
+:END:
 ";
         assert_eq!(h.to_string(), expected);
     }
@@ -676,5 +813,60 @@ Investigate redirect issue
         assert_eq!(h.todo_keyword().unwrap().to_string(), "TODO");
         assert_eq!(h.title_raw().trim(), "Child task");
         assert_eq!(h.properties().unwrap().get("ID").unwrap(), "child-1");
+    }
+
+    #[test]
+    fn test_roundtrip_headline_with_closed_and_logbook() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("closed.org");
+
+        // Build a DONE headline with CLOSED: and a LOGBOOK drawer.
+        let content = Document::builder()
+            .property("ID", "doc-1")
+            .title("Closed task doc")
+            .filetags("task")
+            .headline(
+                Headline::builder()
+                    .level(1)
+                    .status("DONE")
+                    .title("Fix emacs init")
+                    .property("ID", "task-1")
+                    .closed("[2026-05-23 Sat 10:59]")
+                    .logbook_entry(
+                        "- State \"DONE\"       from \"TODO\"       [2026-05-23 Sat 10:59]",
+                    )
+                    .body("Need to update the Dockerfile.")
+                    .build(),
+            )
+            .build()
+            .to_string();
+
+        fs::write(&path, &content).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, content, "written file must match builder output");
+
+        // Re-parse with orgize and verify the headline-level fields.
+        let config = parsing_config();
+        let org = config.parse(&saved);
+        let h = org.document().headlines().next().unwrap();
+        assert_eq!(h.todo_keyword().unwrap().to_string(), "DONE");
+        assert_eq!(h.title_raw().trim(), "Fix emacs init");
+        assert_eq!(h.properties().unwrap().get("ID").unwrap(), "task-1");
+
+        // The saved file (which we already compared to the builder output
+        // above) is our round-trip proof: it contains the CLOSED: line,
+        // :LOGBOOK: drawer, and state-change entry in builder format.
+        assert!(
+            saved.contains("CLOSED: [2026-05-23 Sat 10:59]"),
+            "saved file should contain CLOSED: line, got:\n{saved}"
+        );
+        assert!(
+            saved.contains(":LOGBOOK:"),
+            "saved file should contain :LOGBOOK: drawer, got:\n{saved}"
+        );
+        assert!(
+            saved.contains("- State \"DONE\"       from \"TODO\""),
+            "saved file should contain the state-change entry, got:\n{saved}"
+        );
     }
 }
