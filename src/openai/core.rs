@@ -79,6 +79,13 @@ impl Message {
         &self.role
     }
 
+    /// Returns the tool call ID this message is responding to, if any.
+    ///
+    /// Only set on `Tool` role messages produced by tool call responses.
+    pub fn tool_call_id(&self) -> Option<&str> {
+        self.tool_call_id.as_deref()
+    }
+
     pub fn new(role: Role, content: &str) -> Self {
         Message {
             role,
