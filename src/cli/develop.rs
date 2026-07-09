@@ -111,24 +111,24 @@ pub async fn run(
         example_data::run(".hq-data/notes", ".hq-data/index", ".hq-data/db").await?;
     }
 
-    // Step 8: Ensure Herdr server is running (start a background server if needed)
-    println!("\n--- Starting Herdr ---");
+    // Step 8: Ensure herdr server is running (start a background server if needed)
+    println!("\n--- Starting herdr ---");
     ensure_herdr_server()?;
 
     // Step 9: Find an existing workspace for this worktree, or create a new one.
     // Reusing prevents duplicate workspaces when re-running `hq develop <name>` on an
-    // existing worktree (tmux used `-s {name}` which failed on collision; Herdr has no
+    // existing worktree (tmux used `-s {name}` which failed on collision; herdr has no
     // such guard, so we match by cwd instead).
     let abs_path = fs::canonicalize(".").await?;
     let worktree_abs = abs_path.to_string_lossy().to_string();
 
     let (workspace_id, root_pane) = match find_workspace_for_cwd(&worktree_abs)? {
         Some(found) => {
-            println!("  Reusing existing Herdr workspace for {worktree_abs}");
+            println!("  Reusing existing herdr workspace for {worktree_abs}");
             found
         }
         None => {
-            println!("  Creating Herdr workspace for {worktree_abs}...");
+            println!("  Creating herdr workspace for {worktree_abs}...");
             create_herdr_workspace(&worktree_abs, &name)?
         }
     };
@@ -140,12 +140,12 @@ pub async fn run(
     // Step 11: Focus our workspace so attach shows it (not some other one)
     focus_workspace(&workspace_id)?;
 
-    // Step 12: Attach to Herdr (blocks until detach)
+    // Step 12: Attach to herdr (blocks until detach)
     println!("\n=== Setup complete ===");
-    println!("  Attaching to Herdr (Ctrl-B Q to detach, server keeps running)...\n");
+    println!("  Attaching to herdr (Ctrl-B Q to detach, server keeps running)...\n");
     let status = Command::new("herdr")
         .status()
-        .context("Failed to attach to Herdr")?;
+        .context("Failed to attach to herdr")?;
     if !status.success() {
         anyhow::bail!("herdr attach failed");
     }
@@ -153,7 +153,7 @@ pub async fn run(
     Ok(())
 }
 
-/// Ensure a Herdr server is running. If `herdr status server` reports running, do nothing.
+/// Ensure a herdr server is running. If `herdr status server` reports running, do nothing.
 /// Otherwise spawn `herdr server` as a detached background process (stdio → /dev/null so it
 /// doesn't interfere with our later `herdr` attach) and poll until ready (up to 5s).
 fn ensure_herdr_server() -> Result<()> {
@@ -161,7 +161,7 @@ fn ensure_herdr_server() -> Result<()> {
         return Ok(());
     }
 
-    println!("  Herdr server not running, starting background server...");
+    println!("  herdr server not running, starting background server...");
     Command::new("herdr")
         .arg("server")
         .stdin(Stdio::null())
@@ -174,11 +174,11 @@ fn ensure_herdr_server() -> Result<()> {
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(100));
         if herdr_server_running()? {
-            println!("  Herdr server is ready");
+            println!("  herdr server is ready");
             return Ok(());
         }
     }
-    anyhow::bail!("Herdr server did not become ready within 5s")
+    anyhow::bail!("herdr server did not become ready within 5s")
 }
 
 /// Check whether `herdr status server` reports a running server.
@@ -194,7 +194,7 @@ fn herdr_server_running() -> Result<bool> {
     Ok(stdout.contains("status: running"))
 }
 
-/// Search existing Herdr workspaces for one whose root pane's cwd matches `worktree_abs`.
+/// Search existing herdr workspaces for one whose root pane's cwd matches `worktree_abs`.
 /// Returns `(workspace_id, root_pane_id)` if found, so we can reuse instead of duplicating.
 /// Matches by pane cwd because `workspace list` does not expose a cwd field at the workspace
 /// level — only panes carry one.
@@ -253,7 +253,7 @@ fn find_workspace_for_cwd(worktree_abs: &str) -> Result<Option<(String, String)>
     Ok(None)
 }
 
-/// Create a new Herdr workspace for `worktree_abs` with label `name`. Sets ZDOTDIR env var
+/// Create a new herdr workspace for `worktree_abs` with label `name`. Sets ZDOTDIR env var
 /// pointing at `.hq-data/` so zsh sources our custom .zshrc (which exports HQ_*). Returns
 /// `(workspace_id, root_pane_id)`. Uses `--no-focus` so we don't yank an attached client's
 /// view mid-setup; explicit `workspace focus` happens later.
