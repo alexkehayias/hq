@@ -164,7 +164,7 @@ Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `
 This project uses git worktrees for isolated development. Each worktree gets its own storage, database, and server port.
 
 ```bash
-# One-command: create worktree, set up env, start Claude Code in tmux
+# One-command: create worktree, set up env, start Claude Code in Herdr
 cargo run -- develop <branch-name>
 
 # Or manually:
@@ -175,12 +175,13 @@ cargo run -- develop . --no-init --no-examples
 ```
 
 Key behaviors:
-- **`hq develop`**: Creates a worktree, sets up storage, picks a port, runs init, loads example data, writes `.hq-data/.zshrc` with env vars (`HQ_STORAGE_PATH`, `HQ_PORT`, `HQ_HOST`), creates a tmux session with `ZDOTDIR` set, and starts Claude Code with `--worktree`.
-- **Ports**: `hq develop` picks an available port starting from 2222 and sets `$HQ_PORT` in the tmux session. `run.sh` requires `$HQ_PORT` to be set.
+- **`hq develop`**: Creates a worktree, sets up storage, picks a port, runs init, loads example data, writes `.hq-data/.zshrc` with env vars (`HQ_STORAGE_PATH`, `HQ_PORT`, `HQ_HOST`), creates a Herdr workspace with `ZDOTDIR` set, and starts Claude Code in it.
+- **Ports**: `hq develop` picks an available port starting from 2222 and sets `$HQ_PORT` in the Herdr workspace (via `.zshrc`). `run.sh` requires `$HQ_PORT` to be set.
 - **Environment**: `hq develop` writes `.hq-data/.zshrc` that sources your zsh config then sets worktree-specific env vars. No env files are persisted to disk.
 - **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
 - **Storage**: `.hq-data/` contains subdirs (`db/`, `index/`, `notes/`, etc.).
-- **Quick start**: `cargo run -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a tmux session.
+- **Quick start**: `cargo run -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a Herdr workspace.
+- **Herdr**: The develop command uses [Herdr](https://herdr.dev/) as its terminal multiplexer. It starts a background Herdr server if one isn't running, creates a workspace for the worktree, pre-spawns Claude Code in it, and attaches. Detach with `Ctrl-B Q` (server keeps running). Reattach later with bare `herdr`. Run `herdr server stop` to end sessions. Each worktree gets its own workspace in the shared default session.
 
 ## Testing
 

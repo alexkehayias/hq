@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use serde_json::Value;
 use std::env;
 use std::net::TcpStream;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use tokio::fs;
 
 use crate::cli::{example_data, init};
@@ -109,46 +111,212 @@ pub async fn run(
         example_data::run(".hq-data/notes", ".hq-data/index", ".hq-data/db").await?;
     }
 
-    // Step 8: Create tmux session with ZDOTDIR pointing to custom zsh config
-    println!("\n--- Creating tmux session ---");
+    // Step 8: Ensure Herdr server is running (start a background server if needed)
+    println!("\n--- Starting Herdr ---");
+    ensure_herdr_server()?;
+
+    // Step 9: Find an existing workspace for this worktree, or create a new one.
+    // Reusing prevents duplicate workspaces when re-running `hq develop <name>` on an
+    // existing worktree (tmux used `-s {name}` which failed on collision; Herdr has no
+    // such guard, so we match by cwd instead).
     let abs_path = fs::canonicalize(".").await?;
-    let tmux_path = abs_path.to_string_lossy().to_string();
+    let worktree_abs = abs_path.to_string_lossy().to_string();
 
-    let status = Command::new("tmux")
-        .args([
-            "new-session", "-d", "-s", &name, "-c", &tmux_path,
-            "-e", &format!("ZDOTDIR={tmux_path}/.hq-data"),
-        ])
-        .status()
-        .context("Failed to create tmux session")?;
-    if !status.success() {
-        anyhow::bail!("tmux new-session failed");
-    }
-    println!("  Created tmux session with worktree environment");
+    let (workspace_id, root_pane) = match find_workspace_for_cwd(&worktree_abs)? {
+        Some(found) => {
+            println!("  Reusing existing Herdr workspace for {worktree_abs}");
+            found
+        }
+        None => {
+            println!("  Creating Herdr workspace for {worktree_abs}...");
+            create_herdr_workspace(&worktree_abs, &name)?
+        }
+    };
 
-    // Step 9: Start Claude Code (worktree created in step 1, cwd set via tmux -c)
-    let status = Command::new("tmux")
-        .args(["send-keys", "-t", &name, "claude", "Enter"])
-        .status()
-        .context("Failed to start Claude Code in tmux")?;
-    if !status.success() {
-        anyhow::bail!("tmux send-keys failed");
-    }
-    println!("  Started Claude Code in tmux session '{name}'");
+    // Step 10: Start Claude Code in the workspace's root pane
+    start_claude_in_pane(&root_pane)?;
+    println!("  Started Claude Code in root pane {root_pane}");
 
-    // Step 10: Attach to the tmux session
+    // Step 11: Focus our workspace so attach shows it (not some other one)
+    focus_workspace(&workspace_id)?;
+
+    // Step 12: Attach to Herdr (blocks until detach)
     println!("\n=== Setup complete ===");
-    println!("  Attaching to tmux session '{name}'...");
-    println!("  (Use Ctrl-b d to detach, or exit Claude Code to return)\n");
-
-    let status = Command::new("tmux")
-        .args(["attach", "-t", &name])
+    println!("  Attaching to Herdr (Ctrl-B Q to detach, server keeps running)...\n");
+    let status = Command::new("herdr")
         .status()
-        .context("Failed to attach to tmux session")?;
+        .context("Failed to attach to Herdr")?;
     if !status.success() {
-        anyhow::bail!("tmux attach failed");
+        anyhow::bail!("herdr attach failed");
     }
 
+    Ok(())
+}
+
+/// Ensure a Herdr server is running. If `herdr status server` reports running, do nothing.
+/// Otherwise spawn `herdr server` as a detached background process (stdio → /dev/null so it
+/// doesn't interfere with our later `herdr` attach) and poll until ready (up to 5s).
+fn ensure_herdr_server() -> Result<()> {
+    if herdr_server_running()? {
+        return Ok(());
+    }
+
+    println!("  Herdr server not running, starting background server...");
+    Command::new("herdr")
+        .arg("server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("Failed to spawn herdr server — is herdr installed? https://herdr.dev/docs/install/")?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        if herdr_server_running()? {
+            println!("  Herdr server is ready");
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Herdr server did not become ready within 5s")
+}
+
+/// Check whether `herdr status server` reports a running server.
+fn herdr_server_running() -> Result<bool> {
+    let output = Command::new("herdr")
+        .args(["status", "server"])
+        .output()
+        .context("Failed to run `herdr status server` — is herdr installed?")?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.contains("status: running"))
+}
+
+/// Search existing Herdr workspaces for one whose root pane's cwd matches `worktree_abs`.
+/// Returns `(workspace_id, root_pane_id)` if found, so we can reuse instead of duplicating.
+/// Matches by pane cwd because `workspace list` does not expose a cwd field at the workspace
+/// level — only panes carry one.
+fn find_workspace_for_cwd(worktree_abs: &str) -> Result<Option<(String, String)>> {
+    let list_output = Command::new("herdr")
+        .args(["workspace", "list"])
+        .output()
+        .context("Failed to run `herdr workspace list`")?;
+    if !list_output.status.success() {
+        return Ok(None);
+    }
+    let list_json: Value = serde_json::from_slice(&list_output.stdout)
+        .context("Failed to parse `herdr workspace list` output as JSON")?;
+    let workspaces = list_json
+        .get("result")
+        .and_then(|r| r.get("workspaces"))
+        .and_then(|w| w.as_array())
+        .context("workspace list response missing result.workspaces array")?;
+
+    for ws in workspaces {
+        let workspace_id = ws
+            .get("workspace_id")
+            .and_then(|v| v.as_str())
+            .with_context(|| format!("workspace entry missing workspace_id: {ws:?}"))?
+            .to_string();
+
+        // For each workspace, fetch its panes and look for one whose cwd matches.
+        let pane_output = Command::new("herdr")
+            .args(["pane", "list", "--workspace", &workspace_id])
+            .output()
+            .with_context(|| format!("Failed to run `herdr pane list --workspace {workspace_id}`"))?;
+        if !pane_output.status.success() {
+            continue;
+        }
+        let pane_json: Value = match serde_json::from_slice(&pane_output.stdout) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let panes = pane_json
+            .get("result")
+        .and_then(|r| r.get("panes"))
+        .and_then(|p| p.as_array());
+        if let Some(panes) = panes {
+            for pane in panes {
+                if pane.get("cwd").and_then(|c| c.as_str()) == Some(worktree_abs) {
+                    let root_pane = pane
+                        .get("pane_id")
+                    .and_then(|v| v.as_str())
+                        .with_context(|| format!("pane entry missing pane_id: {pane:?}"))?
+                        .to_string();
+                    return Ok(Some((workspace_id, root_pane)));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Create a new Herdr workspace for `worktree_abs` with label `name`. Sets ZDOTDIR env var
+/// pointing at `.hq-data/` so zsh sources our custom .zshrc (which exports HQ_*). Returns
+/// `(workspace_id, root_pane_id)`. Uses `--no-focus` so we don't yank an attached client's
+/// view mid-setup; explicit `workspace focus` happens later.
+fn create_herdr_workspace(worktree_abs: &str, name: &str) -> Result<(String, String)> {
+    let zdotdir = format!("{worktree_abs}/.hq-data");
+    let output = Command::new("herdr")
+        .args([
+            "workspace", "create",
+            "--cwd", worktree_abs,
+            "--label", name,
+            "--env", &format!("ZDOTDIR={zdotdir}"),
+            "--no-focus",
+        ])
+        .output()
+        .context("Failed to run `herdr workspace create`")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("herdr workspace create failed: {stderr}");
+    }
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .context("Failed to parse `herdr workspace create` output as JSON")?;
+    let result = json
+        .get("result")
+        .context("workspace create response missing result")?;
+    let root_pane = result
+        .get("root_pane")
+    .and_then(|r| r.get("pane_id"))
+    .and_then(|v| v.as_str())
+        .context("workspace create response missing result.root_pane.pane_id")?
+        .to_string();
+    let workspace_id = result
+        .get("workspace")
+    .and_then(|w| w.get("workspace_id"))
+    .and_then(|v| v.as_str())
+        .context("workspace create response missing result.workspace.workspace_id")?
+        .to_string();
+    Ok((workspace_id, root_pane))
+}
+
+/// Run `claude` in the given pane atomically (text + Enter). Claude Code inherits the
+/// pane's zsh env, which includes ZDOTDIR (set on workspace create) → .hq-data/.zshrc → HQ_*.
+fn start_claude_in_pane(root_pane: &str) -> Result<()> {
+    let status = Command::new("herdr")
+        .args(["pane", "run", root_pane, "claude"])
+        .status()
+        .with_context(|| format!("Failed to run `herdr pane run {root_pane} claude`"))?;
+    if !status.success() {
+        anyhow::bail!("herdr pane run failed");
+    }
+    Ok(())
+}
+
+/// Focus the given workspace so the subsequent `herdr` attach shows our worktree's
+/// workspace, not some other one in the shared default session. Best-effort: logs a warning
+/// on failure rather than bailing, since attach still works without explicit focus.
+fn focus_workspace(workspace_id: &str) -> Result<()> {
+    let status = Command::new("herdr")
+        .args(["workspace", "focus", workspace_id])
+        .status()
+        .with_context(|| format!("Failed to run `herdr workspace focus {workspace_id}`"))?;
+    if !status.success() {
+        eprintln!("  warning: herdr workspace focus failed (attach may show a different workspace)");
+    }
     Ok(())
 }
 

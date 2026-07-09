@@ -77,7 +77,7 @@ enum Command {
     },
     /// Start a chat bot session
     Chat {},
-    /// Set up a development worktree with tmux and Claude Code
+    /// Set up a development worktree with Herdr and Claude Code
     Develop {
         /// Branch/worktree name
         name: String,
