@@ -27,8 +27,40 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "name": "token-count",
-                            "value": 20,
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests that a payload with optional `reasoning` is accepted
+    #[tokio::test]
+    #[serial]
+    async fn it_records_metric_with_reasoning() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/metrics")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80,
+                            "reasoning": 40
                         })
                         .to_string(),
                     ))
@@ -78,8 +110,10 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "name": "token-count",
-                            "value": 100,
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
                         })
                         .to_string(),
                     ))
@@ -105,8 +139,11 @@ mod tests {
 
         let body = body_to_string(response.into_body()).await;
         assert!(body.contains("\"events\""));
-        // The recorded metric should appear in the events
-        assert!(body.contains("token-count"));
+        // The recorded buckets should appear in the aggregated events
+        assert!(body.contains("\"input\""));
+        assert!(body.contains("\"output\""));
+        assert!(body.contains("\"cache_read\""));
+        assert!(body.contains("\"cache_write\""));
     }
 
     /// Tests getting metrics with limit_days parameter
@@ -125,8 +162,10 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "name": "token-count",
-                            "value": 50,
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
                         })
                         .to_string(),
                     ))
@@ -152,10 +191,10 @@ mod tests {
         assert!(body.contains("\"events\""));
     }
 
-    /// Tests that recording a metric with invalid name returns 422
+    /// Tests that a payload missing all required bucket fields returns 422
     #[tokio::test]
     #[serial]
-    async fn it_returns_422_for_invalid_metric_name() {
+    async fn it_returns_422_for_missing_required_field() {
         let app = test_app().await;
 
         let response = app
@@ -165,25 +204,21 @@ mod tests {
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        serde_json::json!({
-                            "name": "invalid-metric",
-                            "value": 20,
-                        })
-                        .to_string(),
+                        serde_json::json!({}).to_string(),
                     ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        // Invalid metric name should return 422 Unprocessable Entity (validation error)
+        // Missing all required bucket fields should return 422 (serde deserialization error)
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
-    /// Tests that recording a metric with missing value returns 422
+    /// Tests that a payload with a negative bucket value returns 422
     #[tokio::test]
     #[serial]
-    async fn it_returns_422_for_missing_value() {
+    async fn it_returns_422_for_negative_value() {
         let app = test_app().await;
 
         let response = app
@@ -194,7 +229,10 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "name": "token-count",
+                            "input": -1,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
                         })
                         .to_string(),
                     ))
@@ -203,34 +241,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Missing required field should return 422 Unprocessable Entity (validation error)
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    /// Tests that recording a metric with missing name returns 422
-    #[tokio::test]
-    #[serial]
-    async fn it_returns_422_for_missing_name() {
-        let app = test_app().await;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/metrics")
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "value": 20,
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // Missing required field should return 422 Unprocessable Entity (validation error)
+        // u32 rejects negative integers — serde deserialization fails with 422
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

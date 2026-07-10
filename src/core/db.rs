@@ -177,12 +177,20 @@ embedding float[384]
     // Create table for storing timeseries metric events
     let create_metric_event_table = db.execute(
         "CREATE TABLE IF NOT EXISTS metric_event (
-    -- Metric name
-    name TEXT NOT NULL,
-    -- Timestamp when the event was received (ISO 8601 format)
+    -- Legacy columns, kept nullable so pre-bucket data stays readable.
+    -- Older events populated `name` with a metric identifier (e.g. \"token-count\")
+    -- and `value` with an aggregate count; new events populate the bucket
+    -- columns below instead.
+    name TEXT,
     timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    -- Numeric value for the event (e.g., increment amount)
-    value INTEGER NOT NULL
+    value INTEGER,
+    -- Token buckets posted by upstream LLM providers. Legacy rows have
+    -- 0 in all buckets (see migrate_db); new events populate these.
+    input INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0,
+    cache_write INTEGER NOT NULL DEFAULT 0,
+    reasoning INTEGER
 );",
         [],
     );
@@ -192,9 +200,9 @@ embedding float[384]
         Err(e) => println!("Create metric event table failed: {}", e),
     };
 
-    // Create index on metric_event for efficient queries by id and timestamp
+    // Create index on metric_event for efficient queries by timestamp
     let create_metric_event_index = db.execute(
-        "CREATE INDEX IF NOT EXISTS metric_event_name_timestamp_idx ON metric_event(name, timestamp);",
+        "CREATE INDEX IF NOT EXISTS metric_event_timestamp_idx ON metric_event(timestamp);",
         [],
     );
 
@@ -473,6 +481,60 @@ COMMIT;",
         Ok(_) => (),
         Err(e) => println!("Create eval_result table failed: {}", e),
     };
+
+    // 2026-07-09 Migrate metric_event to token-bucket schema.
+    //
+    // The upstream payload changed from a generic {name, value} (where
+    // `value` was an aggregate token count) to structured token buckets
+    // (input/output/cache_read/cache_write/optional reasoning). Old rows
+    // keep their name/value so historical data stays readable; new bucket
+    // columns are added with 0 defaults so legacy rows don't contribute
+    // to bucket aggregations but aren't lost either.
+    //
+    // Uses rename-and-replace (matching the note_meta migration pattern
+    // above) so `name`/`value` can become nullable — SQLite doesn't
+    // support ALTER COLUMN, so a table rebuild is the only way to relax
+    // NOT NULL constraints.
+    let has_input_column: bool = db
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('metric_event') WHERE name = 'input'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !has_input_column {
+        let migrate_metric_event = db.execute_batch(
+            r"BEGIN;
+
+CREATE TABLE IF NOT EXISTS metric_event_new (
+    name TEXT,
+    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    value INTEGER,
+    input INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0,
+    cache_write INTEGER NOT NULL DEFAULT 0,
+    reasoning INTEGER
+);
+
+INSERT INTO metric_event_new (name, timestamp, value)
+SELECT name, timestamp, value FROM metric_event;
+
+DROP TABLE metric_event;
+
+ALTER TABLE metric_event_new RENAME TO metric_event;
+
+CREATE INDEX IF NOT EXISTS metric_event_timestamp_idx ON metric_event(timestamp);
+
+COMMIT;",
+        );
+
+        match migrate_metric_event {
+            Ok(_) => (),
+            Err(e) => println!("Migrate metric_event table failed: {}", e),
+        }
+    }
 
     Ok(())
 }

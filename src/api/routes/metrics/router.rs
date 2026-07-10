@@ -4,35 +4,11 @@ use std::sync::{Arc, RwLock};
 
 use axum::{Router, extract::State, http::StatusCode, response::Json};
 use axum_extra::extract::Query;
-use rusqlite::{
-    ToSql,
-    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
-};
 
 use super::public;
 use crate::api::state::AppState;
 
 type SharedState = Arc<RwLock<AppState>>;
-
-impl ToSql for public::MetricName {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        // Use serde serialization to convert the enum back into a
-        // string to save to the database while still enforcing metric
-        // names can only be a `MetricName` variant.
-        let name = serde_json::to_string(self).expect("Failed to parse enum into string");
-        let value: String = serde_json::from_str(&name).expect("Failed to parse string from enum");
-        Ok(value.into())
-    }
-}
-
-impl FromSql for public::MetricName {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // Serde deserialization can only parse an enum from string if
-        // it's double quoted.
-        serde_json::from_str(&format!("\"{}\"", value.as_str()?))
-            .map_err(|e| FromSqlError::Other(Box::new(e)))
-    }
-}
 
 /// Record a metric event
 async fn record_metric(
@@ -41,14 +17,20 @@ async fn record_metric(
 ) -> Result<StatusCode, crate::api::public::ApiError> {
     let db = state.read().unwrap().db.clone();
 
-    let name = payload.name;
-    let value = payload.value;
-
-    // Insert the metric event into the database
+    // Insert the metric event into the database. name/value stay NULL
+    // for new rows — they only exist on legacy data migrated from the
+    // pre-bucket schema.
     db.call(move |conn| {
         conn.execute(
-            "INSERT INTO metric_event (name, value) VALUES (?, ?)",
-            tokio_rusqlite::params![&name, &value],
+            "INSERT INTO metric_event (input, output, cache_read, cache_write, reasoning) \
+             VALUES (?, ?, ?, ?, ?)",
+            tokio_rusqlite::params![
+                payload.input,
+                payload.output,
+                payload.cache_read,
+                payload.cache_write,
+                payload.reasoning,
+            ],
         )?;
         Ok(())
     })
@@ -67,27 +49,36 @@ async fn get_metrics(
     // Default to last 30 days if not specified
     let limit_days = params.limit_days.unwrap_or(30);
 
-    // Build SQL query to fetch metrics with grouping by name and timestamp
+    // Aggregate token buckets by calendar day. Legacy rows (migrated
+    // from the pre-bucket schema) have 0 in all bucket columns so they
+    // don't contribute to the new aggregations; their name/value stay
+    // readable via direct queries for historical purposes.
     let results = db
         .call(move |conn| {
             let mut stmt = conn.prepare(
                 r#"
-            SELECT name,
-            DATE(timestamp) AS day,
-            SUM(value) AS daily_total
+            SELECT DATE(timestamp) AS day,
+                   SUM(input),
+                   SUM(output),
+                   SUM(cache_read),
+                   SUM(cache_write),
+                   SUM(reasoning)
             FROM metric_event
             WHERE timestamp >= datetime('now', '-' || ? || ' days')
-            GROUP BY name, day
-            ORDER BY name, day DESC
+            GROUP BY day
+            ORDER BY day DESC
             "#,
             )?;
 
             let events = stmt
                 .query_map([limit_days], |row| {
                     Ok(public::MetricEvent {
-                        name: row.get(0)?,
-                        timestamp: row.get(1)?,
-                        value: row.get(2)?,
+                        timestamp: row.get(0)?,
+                        input: row.get(1)?,
+                        output: row.get(2)?,
+                        cache_read: row.get(3)?,
+                        cache_write: row.get(4)?,
+                        reasoning: row.get(5)?,
                     })
                 })?
                 .filter_map(Result::ok)
