@@ -25,8 +25,8 @@ use super::db::{chat_session_count, chat_session_list};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
-    ChatBuilder, find_chat_session_by_id, get_or_create_session, insert_chat_message,
-    set_session_mode,
+    ChatBuilder, ToolSecurityMiddleware, find_chat_session_by_id, get_or_create_session,
+    insert_chat_message, set_session_mode,
 };
 use crate::ai::tools::{
     BashTool, CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool,
@@ -621,7 +621,8 @@ async fn chat_handler(
         .database(&db, Some(&session_id), None)
         .transcript(transcript)
         .tools(tools)
-        .streaming(tx.clone());
+        .streaming(tx.clone())
+        .middleware(vec![Box::new(ToolSecurityMiddleware::default())]);
 
     // Add skill management tools if the registry is available
     chat = chat.skills(skill_registry.clone(), &storage_path_owned, &session_id);
