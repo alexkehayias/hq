@@ -75,7 +75,7 @@ fn tokenize_value(idx: &Index, field: Field, text: &str) -> Vec<String> {
 /// Fuzzy matching (typo tolerance) is only applied when `is_fuzzy` is
 /// true, which the caller sets based on whether the field is a fuzzy
 /// search field (title only — see `is_fuzzy_search_field`).
-fn per_token(field: Field, is_fuzzy: bool, token: &str) -> Box<dyn Query> {
+fn build_token_query(field: Field, is_fuzzy: bool, token: &str) -> Box<dyn Query> {
     let term = Term::from_field_text(field, token);
     if is_fuzzy {
         Box::new(FuzzyTermQuery::new(term, fuzzy_distance(token), true))
@@ -128,12 +128,12 @@ fn build_field_query(
         // De Morgan, NOT (a OR b) == NOT a AND NOT b, so a
         // single MustNot over a Should clause is equivalent.
         let inner: Box<dyn Query> = if tokens.len() == 1 {
-            per_token(query_field, is_fuzzy, &tokens[0])
+            build_token_query(query_field, is_fuzzy, &tokens[0])
         } else {
             Box::new(BooleanQuery::from(
                 tokens
                     .iter()
-                    .map(|t| (Occur::Should, per_token(query_field, is_fuzzy, t)))
+                    .map(|t| (Occur::Should, build_token_query(query_field, is_fuzzy, t)))
                     .collect::<Vec<(Occur, Box<dyn Query>)>>(),
             ))
         };
@@ -144,12 +144,12 @@ fn build_field_query(
     } else {
         // Non-negated: match docs containing any token.
         if tokens.len() == 1 {
-            Some(per_token(query_field, is_fuzzy, &tokens[0]))
+            Some(build_token_query(query_field, is_fuzzy, &tokens[0]))
         } else {
             Some(Box::new(BooleanQuery::from(
                 tokens
                     .iter()
-                    .map(|t| (Occur::Should, per_token(query_field, is_fuzzy, t)))
+                    .map(|t| (Occur::Should, build_token_query(query_field, is_fuzzy, t)))
                     .collect::<Vec<(Occur, Box<dyn Query>)>>(),
             )))
         }
@@ -560,12 +560,12 @@ mod tests {
     }
 
     #[test]
-    fn test_per_token_fuzzy_short_term() {
+    fn test_build_token_query_fuzzy_short_term() {
         // Short term (≤4 chars) on a fuzzy field (title) should
         // produce a FuzzyTermQuery with distance 1.
         let (_schema, idx) = build_test_index();
         let title_field = idx.schema().get_field("title").unwrap();
-        let query = per_token(title_field, true, "FMV");
+        let query = build_token_query(title_field, true, "FMV");
         let fuzzy = query
             .as_any()
             .downcast_ref::<FuzzyTermQuery>();
@@ -576,12 +576,12 @@ mod tests {
     }
 
     #[test]
-    fn test_per_token_fuzzy_long_term() {
+    fn test_build_token_query_fuzzy_long_term() {
         // Longer term on a fuzzy field should also produce a
         // FuzzyTermQuery (with distance 2 via fuzzy_distance).
         let (_schema, idx) = build_test_index();
         let title_field = idx.schema().get_field("title").unwrap();
-        let query = per_token(title_field, true, "Sedol");
+        let query = build_token_query(title_field, true, "Sedol");
         let fuzzy = query
             .as_any()
             .downcast_ref::<FuzzyTermQuery>();
@@ -592,12 +592,12 @@ mod tests {
     }
 
     #[test]
-    fn test_per_token_non_fuzzy_field() {
+    fn test_build_token_query_non_fuzzy_field() {
         // Non-fuzzy field (body) should produce a plain TermQuery
         // regardless of token length.
         let (_schema, idx) = build_test_index();
         let body_field = idx.schema().get_field("body").unwrap();
-        let query = per_token(body_field, false, "FMV");
+        let query = build_token_query(body_field, false, "FMV");
         let term_q = query
             .as_any()
             .downcast_ref::<TermQuery>();
@@ -608,17 +608,17 @@ mod tests {
     }
 
     #[test]
-    fn test_per_token_matches_document() {
-        // Behavioral check: per_token builds a query that actually
+    fn test_build_token_query_matches_document() {
+        // Behavioral check: build_token_query builds a query that actually
         // matches the right document when executed.
         let (_schema, idx) = build_test_index();
         index_doc(&idx, "doc-1", "", "lee sedol alphago");
         let body_field = idx.schema().get_field("body").unwrap();
-        let query = per_token(body_field, false, "lee");
+        let query = build_token_query(body_field, false, "lee");
         let ids = execute_query(&idx, &*query, 10);
         assert!(
             ids.contains(&"doc-1".to_string()),
-            "per_token query should match doc containing the token"
+            "build_token_query should match doc containing the token"
         );
     }
 
