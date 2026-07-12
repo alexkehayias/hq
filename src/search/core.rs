@@ -46,7 +46,7 @@ fn fulltext_search(index_path: &str, query: &aql::Expr, limit: usize) -> Result<
     let searcher = reader.searcher();
 
     // Parse query using custom parser
-    let index_query = aql_to_index_query(query, &schema, &idx);
+    let index_query = aql_to_index_query(&idx, &schema, query);
 
     if let Some(idx_query) = index_query {
         let results = searcher

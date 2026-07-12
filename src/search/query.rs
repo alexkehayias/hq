@@ -37,6 +37,16 @@ fn parse_date_to_timestamp(date_str: &str) -> u64 {
 
 const DEFAULT_FIELD_NAME: &str = "__default";
 
+/// Only apply fuzzy search to title field for typo tolerance
+/// otherwise the search hits become less useful
+fn is_fuzzy_search_field(field: &str) -> bool {
+    matches!(field, "title")
+}
+
+fn is_sql_only_field(field: &str) -> bool {
+    matches!(field, "scheduled" | "deadline" | "closed" | "date")
+}
+
 /// Choose a fuzzy edit distance based on term length.
 ///
 /// Short terms (≤4 chars) get distance 1 because distance 2 on a
@@ -60,21 +70,97 @@ fn tokenize_value(idx: &Index, field: Field, text: &str) -> Vec<String> {
     out
 }
 
-pub fn aql_to_index_query(
-    expr: &Expr,
-    schema: &Schema,
+/// Build a single-token query for one token of a tokenized value.
+///
+/// Fuzzy matching (typo tolerance) is only applied when `is_fuzzy` is
+/// true, which the caller sets based on whether the field is a fuzzy
+/// search field (title only — see `is_fuzzy_search_field`).
+fn per_token(field: Field, is_fuzzy: bool, token: &str) -> Box<dyn Query> {
+    let term = Term::from_field_text(field, token);
+    if is_fuzzy {
+        Box::new(FuzzyTermQuery::new(term, fuzzy_distance(token), true))
+    } else {
+        Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+    }
+}
+
+/// Build the query for a single field using tokenized text.
+///
+/// The analyzer lowercases and splits on punctuation the same way
+/// the indexer does, so query tokens match what's in the dictionary.
+/// Multi-token non-phrase values become a `BooleanQuery(Should)` of
+/// per-token queries so docs containing any token match. Phrases use
+/// `PhraseQuery` with lowercased tokens and slop 2.
+fn build_field_query(
     idx: &Index,
+    query_field: Field,
+    query_field_name: &str,
+    value: &str,
+    phrase: bool,
+    negated: bool,
 ) -> Option<Box<dyn Query>> {
-    fn is_sql_only_field(field: &str) -> bool {
-        matches!(field, "scheduled" | "deadline" | "closed" | "date")
+    let tokens = tokenize_value(idx, query_field, value);
+    if tokens.is_empty() {
+        return None;
     }
+    let is_fuzzy = is_fuzzy_search_field(query_field_name);
 
-    fn is_fuzzy_search_field(field: &str) -> bool {
-        // Only apply fuzzy search to title field for typo tolerance
-        // otherwise the search hits become less useful
-        matches!(field, "title")
+    if phrase {
+        let terms: Vec<Term> = tokens
+            .iter()
+            .map(|t| Term::from_field_text(query_field, t))
+            .collect();
+        let mut phrase_q = PhraseQuery::new(terms);
+        phrase_q.set_slop(2);
+        if negated {
+            Some(Box::new(BooleanQuery::new(vec![
+                (Occur::Must, Box::new(AllQuery)),
+                (
+                    Occur::MustNot,
+                    Box::new(phrase_q) as Box<dyn Query>,
+                ),
+            ])))
+        } else {
+            Some(Box::new(phrase_q))
+        }
+    } else if negated {
+        // Exclude docs containing ANY token of the value. By
+        // De Morgan, NOT (a OR b) == NOT a AND NOT b, so a
+        // single MustNot over a Should clause is equivalent.
+        let inner: Box<dyn Query> = if tokens.len() == 1 {
+            per_token(query_field, is_fuzzy, &tokens[0])
+        } else {
+            Box::new(BooleanQuery::from(
+                tokens
+                    .iter()
+                    .map(|t| (Occur::Should, per_token(query_field, is_fuzzy, t)))
+                    .collect::<Vec<(Occur, Box<dyn Query>)>>(),
+            ))
+        };
+        Some(Box::new(BooleanQuery::new(vec![
+            (Occur::Must, Box::new(AllQuery)),
+            (Occur::MustNot, inner),
+        ])))
+    } else {
+        // Non-negated: match docs containing any token.
+        if tokens.len() == 1 {
+            Some(per_token(query_field, is_fuzzy, &tokens[0]))
+        } else {
+            Some(Box::new(BooleanQuery::from(
+                tokens
+                    .iter()
+                    .map(|t| (Occur::Should, per_token(query_field, is_fuzzy, t)))
+                    .collect::<Vec<(Occur, Box<dyn Query>)>>(),
+            )))
+        }
     }
+}
 
+pub fn aql_to_index_query(
+    idx: &Index,
+    schema: &Schema,
+    expr: &Expr,
+) -> Option<Box<dyn Query>> {
     match expr {
         Expr::Term {
             field: Some(field), ..
@@ -97,85 +183,17 @@ pub fn aql_to_index_query(
                 vec![(field_name.clone(), schema.get_field(&field_name).unwrap())]
             };
 
-            // Build the query for a single field using tokenized text.
-            // The analyzer lowercases and splits on punctuation the same way
-            // the indexer does, so query tokens match what's in the dictionary.
-            let build_field_query = |query_field: Field,
-                                      query_field_name: &str|
-             -> Option<Box<dyn Query>> {
-                let tokens = tokenize_value(idx, query_field, value);
-                if tokens.is_empty() {
-                    return None;
-                }
-                let is_fuzzy = is_fuzzy_search_field(query_field_name);
-                let per_token = |token: &str| -> Box<dyn Query> {
-                    let term = Term::from_field_text(query_field, token);
-                    if is_fuzzy {
-                        Box::new(FuzzyTermQuery::new(
-                            term,
-                            fuzzy_distance(token),
-                            true,
-                        ))
-                    } else {
-                        Box::new(TermQuery::new(term, IndexRecordOption::Basic))
-                    }
-                };
-
-                if *phrase {
-                    let terms: Vec<Term> = tokens
-                        .iter()
-                        .map(|t| Term::from_field_text(query_field, t))
-                        .collect();
-                    let mut phrase_q = PhraseQuery::new(terms);
-                    phrase_q.set_slop(2);
-                    if *negated {
-                        Some(Box::new(BooleanQuery::new(vec![
-                            (Occur::Must, Box::new(AllQuery)),
-                            (
-                                Occur::MustNot,
-                                Box::new(phrase_q) as Box<dyn Query>,
-                            ),
-                        ])))
-                    } else {
-                        Some(Box::new(phrase_q))
-                    }
-                } else if *negated {
-                    // Exclude docs containing ANY token of the value. By
-                    // De Morgan, NOT (a OR b) == NOT a AND NOT b, so a
-                    // single MustNot over a Should clause is equivalent.
-                    let inner: Box<dyn Query> = if tokens.len() == 1 {
-                        per_token(&tokens[0])
-                    } else {
-                        Box::new(BooleanQuery::from(
-                            tokens
-                                .iter()
-                                .map(|t| (Occur::Should, per_token(t)))
-                                .collect::<Vec<(Occur, Box<dyn Query>)>>(),
-                        ))
-                    };
-                    Some(Box::new(BooleanQuery::new(vec![
-                        (Occur::Must, Box::new(AllQuery)),
-                        (Occur::MustNot, inner),
-                    ])))
-                } else {
-                    // Non-negated: match docs containing any token.
-                    if tokens.len() == 1 {
-                        Some(per_token(&tokens[0]))
-                    } else {
-                        Some(Box::new(BooleanQuery::from(
-                            tokens
-                                .iter()
-                                .map(|t| (Occur::Should, per_token(t)))
-                                .collect::<Vec<(Occur, Box<dyn Query>)>>(),
-                        )))
-                    }
-                }
-            };
-
             let terms: Vec<Box<dyn Query>> = fields
                 .iter()
                 .filter_map(|(query_field_name, query_field)| {
-                    build_field_query(*query_field, query_field_name)
+                    build_field_query(
+                        idx,
+                        *query_field,
+                        query_field_name,
+                        value,
+                        *phrase,
+                        *negated,
+                    )
                 })
                 .collect();
 
@@ -236,8 +254,8 @@ pub fn aql_to_index_query(
             // - Only the left expression has a query term
             // - Only the right expression has a query term
             // - Neither left or right expressions have a query term
-            let left_query = aql_to_index_query(left, schema, idx);
-            let right_query = aql_to_index_query(right, schema, idx);
+            let left_query = aql_to_index_query(idx, schema, left);
+            let right_query = aql_to_index_query(idx, schema, right);
             if let Some(lq) = left_query {
                 if let Some(rq) = right_query {
                     Some(Box::new(BooleanQuery::from(vec![
@@ -254,8 +272,8 @@ pub fn aql_to_index_query(
             }
         }
         Expr::Or(left, right) => {
-            let left_query = aql_to_index_query(left, schema, idx);
-            let right_query = aql_to_index_query(right, schema, idx);
+            let left_query = aql_to_index_query(idx, schema, left);
+            let right_query = aql_to_index_query(idx, schema, right);
             if let Some(lq) = left_query {
                 if let Some(rq) = right_query {
                     Some(Box::new(BooleanQuery::from(vec![
@@ -456,14 +474,20 @@ mod tests {
 
     /// Search `idx` for `query_str` (AQL syntax) and return the top doc ids.
     fn search_top_ids(idx: &Index, query_str: &str, limit: usize) -> Vec<String> {
-        use tantivy::collector::TopDocs;
         let schema = idx.schema();
         let expr = parse_query(query_str).unwrap();
-        let query = aql_to_index_query(&expr, &schema, idx).expect("query should build");
+        let query = aql_to_index_query(idx, &schema, &expr).expect("query should build");
+        execute_query(idx, &*query, limit)
+    }
+
+    /// Execute a pre-built query against `idx` and return the top doc ids.
+    fn execute_query(idx: &Index, query: &dyn Query, limit: usize) -> Vec<String> {
+        use tantivy::collector::TopDocs;
+        let schema = idx.schema();
         let reader = idx.reader().unwrap();
         let searcher = reader.searcher();
         let hits = searcher
-            .search(&query, &TopDocs::with_limit(limit).order_by_score())
+            .search(query, &TopDocs::with_limit(limit).order_by_score())
             .unwrap();
         hits.iter()
             .map(|(_, addr)| {
@@ -525,7 +549,7 @@ mod tests {
         // lowercased. After the fix, this should build a real BooleanQuery.
         let (_schema, idx) = build_test_index();
         let expr = parse_query("Lee Sedol").unwrap();
-        let query = aql_to_index_query(&expr, &idx.schema(), &idx);
+        let query = aql_to_index_query(&idx, &idx.schema(), &expr);
         assert!(
             query.is_some(),
             "query for capitalized terms should build a real query"
@@ -533,6 +557,160 @@ mod tests {
         let binding = query.unwrap();
         let bq = binding.as_any().downcast_ref::<BooleanQuery>();
         assert!(bq.is_some(), "top-level query should be a BooleanQuery (And)");
+    }
+
+    #[test]
+    fn test_per_token_fuzzy_short_term() {
+        // Short term (≤4 chars) on a fuzzy field (title) should
+        // produce a FuzzyTermQuery with distance 1.
+        let (_schema, idx) = build_test_index();
+        let title_field = idx.schema().get_field("title").unwrap();
+        let query = per_token(title_field, true, "FMV");
+        let fuzzy = query
+            .as_any()
+            .downcast_ref::<FuzzyTermQuery>();
+        assert!(
+            fuzzy.is_some(),
+            "short term on fuzzy field should be a FuzzyTermQuery"
+        );
+    }
+
+    #[test]
+    fn test_per_token_fuzzy_long_term() {
+        // Longer term on a fuzzy field should also produce a
+        // FuzzyTermQuery (with distance 2 via fuzzy_distance).
+        let (_schema, idx) = build_test_index();
+        let title_field = idx.schema().get_field("title").unwrap();
+        let query = per_token(title_field, true, "Sedol");
+        let fuzzy = query
+            .as_any()
+            .downcast_ref::<FuzzyTermQuery>();
+        assert!(
+            fuzzy.is_some(),
+            "long term on fuzzy field should be a FuzzyTermQuery"
+        );
+    }
+
+    #[test]
+    fn test_per_token_non_fuzzy_field() {
+        // Non-fuzzy field (body) should produce a plain TermQuery
+        // regardless of token length.
+        let (_schema, idx) = build_test_index();
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = per_token(body_field, false, "FMV");
+        let term_q = query
+            .as_any()
+            .downcast_ref::<TermQuery>();
+        assert!(
+            term_q.is_some(),
+            "non-fuzzy field should produce a TermQuery, not FuzzyTermQuery"
+        );
+    }
+
+    #[test]
+    fn test_per_token_matches_document() {
+        // Behavioral check: per_token builds a query that actually
+        // matches the right document when executed.
+        let (_schema, idx) = build_test_index();
+        index_doc(&idx, "doc-1", "", "lee sedol alphago");
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = per_token(body_field, false, "lee");
+        let ids = execute_query(&idx, &*query, 10);
+        assert!(
+            ids.contains(&"doc-1".to_string()),
+            "per_token query should match doc containing the token"
+        );
+    }
+
+    #[test]
+    fn test_build_field_query_empty_tokens_returns_none() {
+        // Punctuation-only input produces no tokens, so the query
+        // builder should return None.
+        let (_schema, idx) = build_test_index();
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = build_field_query(&idx, body_field, "body", "!!!", false, false);
+        assert!(
+            query.is_none(),
+            "punctuation-only input should produce no query"
+        );
+    }
+
+    #[test]
+    fn test_build_field_query_single_token_non_negated() {
+        // A single token, non-negated, non-phrase should return the
+        // per-token query directly (not wrapped in a BooleanQuery).
+        let (_schema, idx) = build_test_index();
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = build_field_query(&idx, body_field, "body", "lee", false, false);
+        assert!(query.is_some(), "single token should produce a query");
+        // For body (non-fuzzy), this should be a TermQuery
+        let q = query.unwrap();
+        let term_q = q.as_any().downcast_ref::<TermQuery>();
+        assert!(
+            term_q.is_some(),
+            "single token on non-fuzzy field should be a TermQuery"
+        );
+    }
+
+    #[test]
+    fn test_build_field_query_multi_token_non_negated() {
+        // Multiple tokens, non-negated should return a BooleanQuery(Should)
+        // so docs containing any token match.
+        let (_schema, idx) = build_test_index();
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = build_field_query(&idx, body_field, "body", "lee sedol", false, false);
+        assert!(query.is_some(), "multi-token should produce a query");
+        let q = query.unwrap();
+        let bq = q.as_any().downcast_ref::<BooleanQuery>();
+        assert!(
+            bq.is_some(),
+            "multi-token non-negated should be a BooleanQuery(Should)"
+        );
+    }
+
+    #[test]
+    fn test_build_field_query_phrase() {
+        // Phrase query should produce a PhraseQuery with lowercased
+        // tokens so it matches indexed text.
+        let (_schema, idx) = build_test_index();
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = build_field_query(&idx, body_field, "body", "Lee Sedol", true, false);
+        assert!(query.is_some(), "phrase should produce a query");
+        let q = query.unwrap();
+        let pq = q.as_any().downcast_ref::<PhraseQuery>();
+        assert!(pq.is_some(), "phrase should produce a PhraseQuery");
+    }
+
+    #[test]
+    fn test_build_field_query_negated_multi_token() {
+        // Negated multi-token should wrap in a BooleanQuery with
+        // Must(All) + MustNot(Should of per-token queries).
+        let (_schema, idx) = build_test_index();
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = build_field_query(&idx, body_field, "body", "lee sedol", false, true);
+        assert!(query.is_some(), "negated multi-token should produce a query");
+        let q = query.unwrap();
+        let bq = q.as_any().downcast_ref::<BooleanQuery>();
+        assert!(
+            bq.is_some(),
+            "negated multi-token should be a BooleanQuery (Must + MustNot)"
+        );
+    }
+
+    #[test]
+    fn test_build_field_query_phrase_matches() {
+        // Behavioral check: a phrase query should match docs where
+        // the tokens appear in order, not just any doc with the tokens.
+        let (_schema, idx) = build_test_index();
+        index_doc(&idx, "doc-phrase", "", "lee sedol beats alphago");
+        index_doc(&idx, "doc-scattered", "", "sedol then lee later");
+        let body_field = idx.schema().get_field("body").unwrap();
+        let query = build_field_query(&idx, body_field, "body", "lee sedol", true, false);
+        let ids = execute_query(&idx, &*query.unwrap(), 10);
+        assert!(
+            ids.contains(&"doc-phrase".to_string()),
+            "phrase query should match doc with tokens in order"
+        );
     }
 
     #[test]
