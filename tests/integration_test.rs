@@ -359,8 +359,10 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "name": "token-count",
-                            "value": 20,
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
                         })
                         .to_string(),
                     ))

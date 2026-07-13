@@ -11,13 +11,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const avgTokensPerDayEl = document.getElementById('avgTokensPerDay');
   const estCostEl = document.getElementById('estCost');
 
-  // Local LLM maps to Claude Sonnet 4.5 level capability so use that
-  // as the benchmark.
-  // - $3 per 1MM input tokens
-  // - $15 per 1MM output tokens
-  // Assume 1:1 ratio of input tokens to output tokens for chat usage
-  // with tool calls plus coding agent usage.
-  const COST_PER_MILLION_TOKENS = 9.0;
+  // Per-bucket cost rates (USD per million tokens), based on Anthropic
+  // Sonnet 4.5 pricing — the local LLM maps to roughly that capability.
+  // Cache reads are heavily discounted (replaying cached context is
+  // cheap); cache writes carry a 1.25x premium over fresh input (the
+  // provider charges more to populate the cache). Reasoning tokens are
+  // billed at output rates (OpenAI o1-style).
+  const COST_PER_MILLION = {
+    input: 3.0,
+    output: 15.0,
+    cache_read: 0.3,
+    cache_write: 3.75,
+    reasoning: 15.0,
+  };
+
+  // Bucket labels + colors for the stacked chart (in display order).
+  const BUCKETS = [
+    { key: 'input', label: 'Input', color: '#3b82f6' },
+    { key: 'cache_read', label: 'Cache Read', color: '#10b981' },
+    { key: 'cache_write', label: 'Cache Write', color: '#f59e0b' },
+    { key: 'output', label: 'Output', color: '#ef4444' },
+    { key: 'reasoning', label: 'Reasoning', color: '#8b5cf6' },
+  ];
 
   let chartInstance = null;
 
@@ -69,71 +84,62 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderChart(events) {
-    // Group events by metric name
-    const metricsByName = {};
+    // Bucket each event by calendar day (events come pre-aggregated by
+    // day from the API). UTC midnight keeps dates off-by-one clean.
+    const dailyAggregates = new Map();
     for (const event of events) {
-      if (!metricsByName[event.name]) {
-        metricsByName[event.name] = [];
-      }
-      // Assume UTC time so we don't get off by one dates
       const [year, month, day] = event.timestamp.split('-').map(Number);
       const jsIsStupidMonth = month - 1;
-      const utcMidnight = new Date(year, jsIsStupidMonth, day);
-      metricsByName[event.name].push({
-        timestamp: utcMidnight,
-        value: event.value,
-      });
+      const utcMidnight = new Date(year, jsIsStupidMonth, day).getTime();
+
+      const existing = dailyAggregates.get(utcMidnight) ?? {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning: 0,
+      };
+      existing.input += event.input;
+      existing.output += event.output;
+      existing.cache_read += event.cache_read;
+      existing.cache_write += event.cache_write;
+      // reasoning is optional — legacy days may have null
+      if (event.reasoning != null) {
+        existing.reasoning += event.reasoning;
+      }
+      dailyAggregates.set(utcMidnight, existing);
     }
 
-    // Sort each metric's events by timestamp
-    for (const name in metricsByName) {
-      metricsByName[name].sort((a, b) => a.timestamp - b.timestamp);
-    }
-
-    // Prepare data for echarts
-    const series = [];
-    const metricNames = Object.keys(metricsByName);
-
-    if (metricNames.length === 0) {
+    const timeline = Array.from(dailyAggregates.keys()).sort();
+    if (timeline.length === 0) {
       showState('empty');
       return;
     }
 
-    // Find all unique timestamps across all metrics
-    const allTimestamps = new Set();
-    for (const name in metricsByName) {
-      for (const event of metricsByName[name]) {
-        allTimestamps.add(event.timestamp.getTime());
-      }
-    }
-
-    // Create sorted array of timestamps
-    const timeline = Array.from(allTimestamps).sort();
-
-    // For each metric, create a series
-    for (const name of metricNames) {
-      const eventsMap = new Map(
-        metricsByName[name].map((e) => [e.timestamp.getTime(), e.value]),
-      );
-
-      const data = timeline.map((ts) => eventsMap.get(ts) || null);
-
-      series.push({
-        name: formatMetricName(name),
-        type: 'line',
-        data: data,
-        smooth: true,
-        connectNulls: false,
-      });
-    }
-
-    // Format timestamps for x-axis
     const xAxisData = timeline.map((ts) => {
       const date = new Date(ts);
       return `${date.getMonth() + 1}/${date.getDate()}`;
     });
 
-    // Initialize or update chart
+    // One stacked series per bucket so the chart shows daily totals
+    // broken down by token category.
+    const series = BUCKETS.map((bucket) => ({
+      name: bucket.label,
+      type: 'line',
+      stack: 'tokens',
+      areaStyle: { color: bucket.color },
+      lineStyle: { width: 1, color: bucket.color },
+      itemStyle: { color: bucket.color },
+      smooth: true,
+      connectNulls: false,
+      data: timeline.map((ts) => {
+        const agg = dailyAggregates.get(ts);
+        return bucket.key === 'reasoning' && agg.reasoning === 0
+          ? null // hide reasoning on days where it's absent
+          : (agg[bucket.key] ?? 0);
+      }),
+    }));
+
     if (chartInstance) {
       chartInstance.dispose();
     }
@@ -142,12 +148,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const option = {
       tooltip: {
         trigger: 'axis',
-        axisPointer: {
-          type: 'cross',
-        },
+        axisPointer: { type: 'cross' },
       },
       legend: {
-        data: series.map((s) => s.name),
+        data: BUCKETS.map((b) => b.label),
         bottom: 0,
       },
       grid: {
@@ -161,15 +165,12 @@ document.addEventListener('DOMContentLoaded', () => {
         boundaryGap: false,
         data: xAxisData,
       },
-      yAxis: {
-        type: 'value',
-      },
-      series: series,
+      yAxis: { type: 'value' },
+      series,
     };
 
     chartInstance.setOption(option);
 
-    // Handle window resize
     window.addEventListener('resize', () => {
       if (chartInstance) {
         chartInstance.resize();
@@ -177,37 +178,43 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function formatMetricName(name) {
-    // Convert kebab-case to Title Case
-    return name
-      .split('-')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+  function totalTokensFor(event) {
+    return (
+      event.input +
+      event.output +
+      event.cache_read +
+      event.cache_write +
+      (event.reasoning ?? 0)
+    );
+  }
+
+  function costFor(event) {
+    return (
+      (event.input * COST_PER_MILLION.input +
+        event.output * COST_PER_MILLION.output +
+        event.cache_read * COST_PER_MILLION.cache_read +
+        event.cache_write * COST_PER_MILLION.cache_write +
+        (event.reasoning ?? 0) * COST_PER_MILLION.reasoning) /
+      1_000_000
+    );
   }
 
   function updateSummaryMetrics(events, _limitDays) {
-    // Filter for token-count events
-    const tokenEvents = events.filter((e) => e.name === 'token-count');
-
-    if (tokenEvents.length === 0) {
+    if (events.length === 0) {
       totalTokensEl.textContent = '--';
       avgTokensPerDayEl.textContent = '--';
       estCostEl.textContent = '--';
       return;
     }
 
-    // Sum all token values
-    const totalTokens = tokenEvents.reduce((sum, e) => sum + e.value, 0);
+    const totalTokens = events.reduce((sum, e) => sum + totalTokensFor(e), 0);
+    const estCost = events.reduce((sum, e) => sum + costFor(e), 0);
 
-    // Calculate average per day (use the actual number of days with data)
-    const uniqueDays = new Set(tokenEvents.map((e) => e.timestamp));
-    const daysWithData = uniqueDays.size;
-    const avgTokensPerDay = daysWithData > 0 ? totalTokens / daysWithData : 0;
+    // Average per day with data (not per day in the window — days without
+    // events don't count against the average).
+    const uniqueDays = new Set(events.map((e) => e.timestamp)).size;
+    const avgTokensPerDay = uniqueDays > 0 ? totalTokens / uniqueDays : 0;
 
-    // Calculate estimated cost
-    const estCost = (totalTokens / 1_000_000) * COST_PER_MILLION_TOKENS;
-
-    // Format and display
     totalTokensEl.textContent = formatNumber(totalTokens);
     avgTokensPerDayEl.textContent = formatNumber(Math.round(avgTokensPerDay));
     estCostEl.textContent = `$${estCost.toFixed(2)}`;
