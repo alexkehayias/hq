@@ -2,7 +2,7 @@ use crate::search::aql::{Expr, RangeOp};
 use std::ops::Bound;
 use tantivy::Index;
 use tantivy::Term;
-use tantivy::query::{AllQuery, BooleanQuery, FuzzyTermQuery, PhraseQuery, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, FuzzyTermQuery, PhraseQuery, RegexQuery, TermQuery};
 use tantivy::query::{Occur, Query};
 use tantivy::schema::{Field, IndexRecordOption, Schema};
 
@@ -248,6 +248,30 @@ pub fn aql_to_index_query(
                 Some(Box::new(range_query))
             }
         }
+        Expr::FieldExists { field, .. } if is_sql_only_field(field) => None,
+        Expr::FieldExists {
+            field,
+            negated,
+        } => {
+            // `field:` with no value filters for documents that have any
+            // non-null value in the field. Tantivy's `ExistsQuery` requires
+            // fast fields, which our TEXT | STORED schema doesn't have, so
+            // we match any token in the inverted index via a `.*` regex.
+            let tantivy_field = schema.get_field(field).unwrap();
+            let regex_query = RegexQuery::from_pattern(".*", tantivy_field)
+                .expect("wildcard regex should compile");
+            if *negated {
+                Some(Box::new(BooleanQuery::from(vec![
+                    (Occur::Must, Box::new(AllQuery) as Box<dyn Query>),
+                    (
+                        Occur::MustNot,
+                        Box::new(regex_query) as Box<dyn Query>,
+                    ),
+                ])))
+            } else {
+                Some(Box::new(regex_query))
+            }
+        }
         Expr::And(left, right) => {
             // This handles the following cases:
             // - Left and right expressions have a query term
@@ -375,6 +399,10 @@ pub fn expr_to_sql(expr: &Expr) -> Option<String> {
                 _ => None,
             }
         }
+        Expr::FieldExists { field, negated } if is_allowed(field) => {
+            let op = if *negated { "IS NULL" } else { "IS NOT NULL" };
+            Some(format!("{} {}", field, op))
+        }
         _ => None,
     }
 }
@@ -417,6 +445,9 @@ pub fn query_to_similarity(expr: &Expr) -> Option<String> {
                 _ => None,
             }
         }
+        // Field-existence checks don't contribute text to the similarity
+        // vector — only concrete term values (title/body) do.
+        Expr::FieldExists { .. } => None,
         _ => None,
     }
 }
@@ -468,6 +499,35 @@ mod tests {
         writer.commit().unwrap();
 
         // Force the reader to see the new doc
+        let reader = idx.reader_builder().reload_policy(ReloadPolicy::Manual).try_into().unwrap();
+        drop(reader);
+    }
+
+    /// Index a document with an explicit `status` value, for testing
+    /// field-exists queries against the status field.
+    fn index_doc_with_status(idx: &Index, id: &str, title: &str, body: &str, status_val: &str) {
+        let schema = idx.schema();
+        let id_field = schema.get_field("id").unwrap();
+        let title_field = schema.get_field("title").unwrap();
+        let body_field = schema.get_field("body").unwrap();
+        let type_field = schema.get_field("type").unwrap();
+        let status_field = schema.get_field("status").unwrap();
+
+        let mut writer: IndexWriter = idx.writer(50_000_000).unwrap();
+        let id_term = Term::from_field_text(id_field, id);
+        writer.delete_term(id_term);
+
+        writer
+            .add_document(doc!(
+                id_field => id,
+                type_field => "note",
+                title_field => title,
+                body_field => body,
+                status_field => status_val,
+            ))
+            .unwrap();
+        writer.commit().unwrap();
+
         let reader = idx.reader_builder().reload_policy(ReloadPolicy::Manual).try_into().unwrap();
         drop(reader);
     }
@@ -826,5 +886,92 @@ mod tests {
             expr_to_sql(&expr),
             Some("scheduled = '2024-12-12'".to_string())
         );
+    }
+
+    #[test]
+    fn test_field_exists_builds_regex_query() {
+        // `todo:` resolves to status, which is a Tantivy-indexed (non-SQL)
+        // field. The query builder should return Some(RegexQuery) that
+        // matches docs with any token in the status inverted index.
+        let (_schema, idx) = build_test_index();
+        let expr = parse_query("todo:").unwrap();
+        let query = aql_to_index_query(&idx, &idx.schema(), &expr);
+        assert!(query.is_some(), "todo: should build a Tantivy query");
+    }
+
+    #[test]
+    fn test_field_exists_matches_docs_with_status() {
+        // Behavioral check: doc-1 has status="todo", doc-2 has no status.
+        // `todo:` (FieldExists on status) should match only doc-1.
+        let (_schema, idx) = build_test_index();
+        index_doc_with_status(&idx, "doc-with-status", "", "irrelevant body", "todo");
+        index_doc(&idx, "doc-no-status", "", "also irrelevant");
+
+        let results = search_top_ids(&idx, "todo:", 10);
+        assert!(
+            results.contains(&"doc-with-status".to_string()),
+            "doc with a status should match todo: — got {:?}",
+            results
+        );
+        assert!(
+            !results.contains(&"doc-no-status".to_string()),
+            "doc without a status should NOT match todo: — got {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_field_exists_negated_matches_docs_without_status() {
+        // `-todo:` should match docs that do NOT have a status set.
+        let (_schema, idx) = build_test_index();
+        index_doc_with_status(&idx, "doc-with-status", "", "body one", "done");
+        index_doc(&idx, "doc-no-status", "", "body two");
+
+        let results = search_top_ids(&idx, "-todo:", 10);
+        assert!(
+            !results.contains(&"doc-with-status".to_string()),
+            "doc with status should be excluded by -todo: — got {:?}",
+            results
+        );
+        assert!(
+            results.contains(&"doc-no-status".to_string()),
+            "doc without status should match -todo: — got {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_field_exists_sql_only_returns_none_in_tantivy() {
+        // SQL-only fields (scheduled, deadline, closed, date) are handled
+        // by the SQL layer; Tantivy should return None for them.
+        let (_schema, idx) = build_test_index();
+        let expr = parse_query("scheduled:").unwrap();
+        assert!(
+            aql_to_index_query(&idx, &idx.schema(), &expr).is_none(),
+            "SQL-only FieldExists should be dropped from Tantivy"
+        );
+    }
+
+    #[test]
+    fn test_field_exists_sql_for_date_field() {
+        // SQL-only FieldExists should emit IS NOT NULL / IS NULL.
+        let expr = parse_query("scheduled:").unwrap();
+        assert_eq!(
+            expr_to_sql(&expr),
+            Some("scheduled IS NOT NULL".to_string())
+        );
+
+        let expr = parse_query("-closed:").unwrap();
+        assert_eq!(
+            expr_to_sql(&expr),
+            Some("closed IS NULL".to_string())
+        );
+    }
+
+    #[test]
+    fn test_field_exists_non_sql_field_dropped_from_sql() {
+        // `todo:` (status) is not a SQL field — Tantivy handles it.
+        let expr = parse_query("todo:").unwrap();
+        assert_eq!(expr_to_sql(&expr), None);
     }
 }

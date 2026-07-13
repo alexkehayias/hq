@@ -26,8 +26,25 @@ pub enum Expr {
         value: String,
         negated: bool,
     },
+    FieldExists {
+        field: String,
+        negated: bool,
+    },
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
+}
+
+/// Map user-facing field names to their canonical schema name.
+///
+/// Aliases are matched case-sensitively (lowercase only) to match
+/// the existing field-name convention. Add new aliases here; downstream
+/// consumers see only canonical names.
+fn resolve_field_alias(field: &str) -> &str {
+    match field {
+        "project" => "category",
+        "todo" => "status",
+        _ => field,
+    }
 }
 
 pub fn parse_query(input: &str) -> Result<Expr, ErrMode<InputError<&str>>> {
@@ -83,6 +100,7 @@ fn parse_not<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputError<&'a str
     match &mut expr {
         Expr::Term { negated: n, .. } => *n = *n || negated,
         Expr::Range { negated: n, .. } => *n = *n || negated,
+        Expr::FieldExists { negated: n, .. } => *n = *n || negated,
         _ => (),
     }
 
@@ -106,7 +124,7 @@ fn parse_range_expr<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputError<
     .parse_next(input)?;
     let value = take_while(1.., |c: char| !c.is_whitespace() && c != ')').parse_next(input)?;
     Ok(Expr::Range {
-        field: field.to_string(),
+        field: resolve_field_alias(field).to_string(),
         op,
         value: value.to_string(),
         negated,
@@ -115,8 +133,24 @@ fn parse_range_expr<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputError<
 
 fn parse_fielded_term<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputError<&'a str>>> {
     let negated = opt(literal("-")).parse_next(input)?.is_some();
-    let field: &str = alphanumeric1.parse_next(input)?;
+    let field_raw: &str = alphanumeric1.parse_next(input)?;
     literal(":").parse_next(input)?;
+
+    let field = resolve_field_alias(field_raw);
+
+    // `field:` with no value: end-of-input, whitespace, or `)` means
+    // "filter for documents that have any non-null value in this field".
+    let next_is_stopper = input
+        .chars()
+        .next()
+        .map(|c| c.is_whitespace() || c == ')')
+        .unwrap_or(true);
+    if next_is_stopper {
+        return Ok(Expr::FieldExists {
+            field: field.to_string(),
+            negated,
+        });
+    }
 
     let term_parser = alt((
         delimited(literal("\""), take_while(1.., |c| c != '"'), literal("\""))
@@ -259,6 +293,139 @@ mod tests {
                     negated: false
                 })
             ),
+        );
+    }
+
+    #[test]
+    fn test_field_alias_project_resolves_to_category() {
+        let result = parse_query("project:work").unwrap();
+        assert_eq!(
+            result,
+            Expr::Term {
+                field: Some(String::from("category")),
+                value: String::from("work"),
+                phrase: false,
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_alias_todo_resolves_to_status() {
+        let result = parse_query("todo:done").unwrap();
+        assert_eq!(
+            result,
+            Expr::Term {
+                field: Some(String::from("status")),
+                value: String::from("done"),
+                phrase: false,
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_alias_applied_to_range_expr() {
+        let result = parse_query("project:>2024-01-01").unwrap();
+        assert_eq!(
+            result,
+            Expr::Range {
+                field: String::from("category"),
+                op: RangeOp::Gt,
+                value: String::from("2024-01-01"),
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_unaliased_field_passes_through() {
+        // `category` is the canonical name — it should not be remapped.
+        let result = parse_query("category:work").unwrap();
+        assert_eq!(
+            result,
+            Expr::Term {
+                field: Some(String::from("category")),
+                value: String::from("work"),
+                phrase: false,
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_exists_at_end_of_input() {
+        let result = parse_query("todo:").unwrap();
+        assert_eq!(
+            result,
+            Expr::FieldExists {
+                field: String::from("status"),
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_exists_followed_by_whitespace() {
+        // `todo: bar` — FieldExists for status, then default term "bar"
+        let result = parse_query("todo: bar").unwrap();
+        assert_eq!(
+            result,
+            Expr::And(
+                Box::new(Expr::FieldExists {
+                    field: String::from("status"),
+                    negated: false
+                }),
+                Box::new(Expr::Term {
+                    field: None,
+                    value: String::from("bar"),
+                    phrase: false,
+                    negated: false
+                })
+            )
+        );
+    }
+
+    #[test]
+    fn test_negated_field_exists() {
+        let result = parse_query("-todo:").unwrap();
+        assert_eq!(
+            result,
+            Expr::FieldExists {
+                field: String::from("status"),
+                negated: true
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_exists_before_closing_paren() {
+        // `)` is a value stopper in the existing parser, so `(todo:)`
+        // should parse as FieldExists rather than failing.
+        let result = parse_query("todo:)");
+        // The `)` is left unconsumed in the input — only FieldExists
+        // should be produced from the `todo:` portion.
+        assert!(result.is_ok(), "parse should succeed: {:?}", result);
+        let expr = result.unwrap();
+        assert_eq!(
+            expr,
+            Expr::FieldExists {
+                field: String::from("status"),
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_exists_unaliased_field() {
+        // A non-aliased field with no value should also produce FieldExists.
+        let result = parse_query("category:").unwrap();
+        assert_eq!(
+            result,
+            Expr::FieldExists {
+                field: String::from("category"),
+                negated: false
+            }
         );
     }
 }
