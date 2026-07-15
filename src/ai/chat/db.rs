@@ -301,3 +301,63 @@ pub async fn set_session_mode(
     .await
     .map_err(anyhow::Error::from)
 }
+
+/// List all chat subscription (session_id, channel) pairs. Used at
+/// server startup to eagerly spawn ChatTasks for subscriber sessions so
+/// messages aren't dropped before the session's first HTTP request.
+pub async fn list_subscriptions(db: &Connection) -> Result<Vec<(String, String)>, Error> {
+    let rows = db
+        .call(move |conn| {
+            let mut stmt =
+                conn.prepare("SELECT session_id, channel FROM chat_subscription ORDER BY session_id, channel")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .filter_map(Result::ok)
+                .collect::<Vec<(String, String)>>();
+            Ok(rows)
+        })
+        .await?;
+    Ok(rows)
+}
+
+/// Add a subscription for a session + channel. INSERT OR IGNORE so
+/// repeated calls are idempotent.
+pub async fn add_subscription(
+    db: &Connection,
+    session_id: &str,
+    channel: &str,
+) -> Result<(), Error> {
+    let s_id = session_id.to_owned();
+    let ch = channel.to_owned();
+    db.call(move |conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_subscription (session_id, channel) VALUES (?, ?)",
+            rusqlite::params![s_id, ch],
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+}
+
+/// Remove a subscription for a session + channel. No-op if it doesn't
+/// exist.
+pub async fn remove_subscription(
+    db: &Connection,
+    session_id: &str,
+    channel: &str,
+) -> Result<(), Error> {
+    let s_id = session_id.to_owned();
+    let ch = channel.to_owned();
+    db.call(move |conn| {
+        conn.execute(
+            "DELETE FROM chat_subscription WHERE session_id = ? AND channel = ?",
+            rusqlite::params![s_id, ch],
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+}

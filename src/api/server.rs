@@ -10,6 +10,8 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use super::routes;
+use crate::ai::chat::{ChatSessionManager, ChatTaskDeps};
+use crate::ai::pubsub::PubSubBroker;
 use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::core::{AppConfig, db::async_db};
@@ -71,7 +73,39 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
     let skill_registry = SkillRegistry::new(&config.skills_path)
         .await
         .expect("Failed to create skill registry");
-    let app_state = AppState::new(db.clone(), config.clone(), skill_registry);
+    let skill_registry = Arc::new(RwLock::new(skill_registry));
+
+    // Construct pub/sub broker and chat session manager. The broker is
+    // shared across the process (handlers, jobs, tools can publish);
+    // ChatSessionManager spawns a long-lived ChatTask per session that
+    // owns the in-memory transcript.
+    let broker = Arc::new(PubSubBroker::new());
+    let chat_deps = ChatTaskDeps {
+        db: db.clone(),
+        config: Arc::new(config.clone()),
+        skill_registry: Arc::clone(&skill_registry),
+    };
+    let chat_sessions = Arc::new(ChatSessionManager::new(
+        Arc::clone(&broker),
+        chat_deps,
+    ));
+
+    // Eagerly spawn ChatTasks for sessions with persisted subscriptions
+    // so pub/sub messages aren't dropped before a session's first HTTP
+    // request. Best-effort — log and continue if this fails.
+    if let Err(e) = chat_sessions.restore_subscriptions().await {
+        tracing::error!("Failed to restore chat subscriptions on startup: {}", e);
+    }
+
+    let app_state = AppState::new(
+        db.clone(),
+        config.clone(),
+        // Pass the shared Arc<RwLock<SkillRegistry>> so AppState and
+        // ChatTaskDeps see the same registry (skills loaded at startup).
+        Arc::clone(&skill_registry),
+        broker,
+        chat_sessions,
+    );
     let shared_state = Arc::new(RwLock::new(app_state));
     let app = app(Arc::clone(&shared_state));
 

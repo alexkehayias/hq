@@ -25,24 +25,13 @@ use super::db::{chat_session_count, chat_session_list};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
-    ChatBuilder, InfiniteLoopDetector, ToolSecurityMiddleware, find_chat_session_by_id,
-    get_or_create_session, insert_chat_message, set_session_mode,
+    find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
 };
-use crate::ai::tools::{
-    BashTool, CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool,
-    NoteSearchTool, NotifyTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool,
-    WebsiteViewTool, run_in_sandbox,
-};
+use crate::ai::tools::run_in_sandbox;
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
 use crate::api::utils::DetectDisconnect;
-use crate::core::AppConfig;
-use crate::notify::{
-    PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
-    mark_push_subscription_invalid,
-};
-use crate::openai::{BoxedToolCall, Message, Role};
-use crate::search::index_chat_messages;
+use crate::openai::{Message, Role};
 // Re-export public types for this module
 pub use super::public::{
     ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatTranscriptResponse,
@@ -213,85 +202,25 @@ async fn chat_handler(
 ) -> Result<impl IntoResponse, crate::api::public::ApiError> {
     let session_id = payload.session_id;
     let (tx, rx) = mpsc::unbounded_channel::<String>();
-    let (disconnect_notifier, mut disconnect_receiver) = broadcast::channel::<()>(1);
+    let (disconnect_notifier, disconnect_receiver) = broadcast::channel::<()>(1);
 
     let db = state.read().expect("Unable to read share state").db.clone();
 
-    let (
-        note_search_tool,
-        meeting_search_tool,
-        web_search_tool,
-        email_unread_tool,
-        calendar_tool,
-        website_view_tool,
-        tasks_due_today_tool,
-        tasks_scheduled_today_tool,
-        memory_tool,
-        datetime_tool,
-        bash_tool,
-        notify_tool,
-        skill_registry,
-        openai_api_hostname,
-        openai_api_key,
-        openai_model,
-        vapid_key_path,
-        index_dir_path,
-        storage_path_owned,
-    ) = {
-        let shared_state = state.read().expect("Unable to read share state");
-        let AppConfig {
-            note_search_api_url,
-            storage_path,
-            index_path,
-            openai_api_hostname,
-            openai_api_key,
-            openai_model,
-            vapid_key_path,
-            ..
-        } = &shared_state.config;
-        (
-            NoteSearchTool::new(note_search_api_url),
-            MeetingSearchTool::new(note_search_api_url),
-            WebSearchTool::new(note_search_api_url),
-            EmailUnreadTool::new(note_search_api_url),
-            CalendarTool::new(db.clone(), note_search_api_url),
-            WebsiteViewTool::new(storage_path, &session_id),
-            TasksDueTodayTool::new(note_search_api_url),
-            TasksScheduledTodayTool::new(note_search_api_url),
-            MemoryTool::new(storage_path),
-            DateTimeTool::new(),
-            BashTool::new(storage_path, &session_id),
-            NotifyTool::new(db.clone(), vapid_key_path),
-            shared_state.skill_registry.clone(),
-            openai_api_hostname.clone(),
-            openai_api_key.clone(),
-            openai_model.clone(),
-            vapid_key_path.clone(),
-            index_path.clone(),
-            storage_path.clone(),
-        )
-    };
-
-    let all_tools: Vec<BoxedToolCall> = vec![
-        Box::new(note_search_tool),
-        Box::new(meeting_search_tool),
-        Box::new(web_search_tool),
-        Box::new(email_unread_tool),
-        Box::new(calendar_tool),
-        Box::new(website_view_tool),
-        Box::new(tasks_due_today_tool),
-        Box::new(tasks_scheduled_today_tool),
-        #[cfg(debug_assertions)]
-        Box::new(memory_tool),
-        Box::new(datetime_tool),
-        Box::new(bash_tool),
-        Box::new(notify_tool),
-    ];
-
-    let tools = all_tools;
+    // Variables needed by slash command paths below (skill listing,
+    // bash sandbox workspace). Tool construction for chat turns is now
+    // handled by ChatTask — see src/ai/chat/session.rs.
+    let skill_registry = state
+        .read()
+        .expect("Unable to read share state")
+        .skill_registry
+        .clone();
+    let storage_path_owned = state
+        .read()
+        .expect("Unable to read share state")
+        .config
+        .storage_path
+        .clone();
     let user_msg = Message::new(Role::User, &payload.message);
-
-    let db = state.read().expect("Unable to read share state").db.clone();
 
     // Parse message using slash command system
     let slash_cmd = payload.message.parse()?;
@@ -505,7 +434,30 @@ async fn chat_handler(
                 .into_response());
         }
         (SessionMode::Chat, SlashCommand::None(_)) => {
-            // Continue in chat mode - fall through to existing logic
+            // Route through ChatTask — it owns the long-lived transcript
+            // and handles streaming (via tx) + push notification on
+            // disconnect. This replaces the inline ChatBuilder + next_msg
+            // logic that used to run here.
+            let chat_sessions = state
+                .read()
+                .expect("Unable to read share state")
+                .chat_sessions
+                .clone();
+            // Move tx into the command; rx stays here for the SSE stream.
+            chat_sessions.send_http(&session_id, user_msg, tx);
+
+            let sse_stream = tokio_stream::StreamExt::map(
+                UnboundedReceiverStream::new(rx),
+                |chunk| Ok::<Event, Infallible>(Event::default().data(chunk)),
+            );
+            let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
+            return Ok(Sse::new(wrapped_sse_stream)
+                .keep_alive(
+                    KeepAlive::default()
+                        .text("keep-alive")
+                        .interval(Duration::from_millis(100)),
+                )
+                .into_response());
         }
         (_, SlashCommand::Error(err_msg)) => {
             let _ = tx.send(
@@ -557,166 +509,9 @@ async fn chat_handler(
         }
     }
 
-    // Create SSE stream after mode detection (for non-early-return cases)
-    let sse_stream = tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
-        Ok::<Event, Infallible>(Event::default().data(chunk))
-    });
-    let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
-
-    // Create session in database if it doesn't already exist
-
-    // Try to fetch the session from the db
-    let transcript_with_ids = find_chat_session_by_id(&db, &session_id).await?;
-    let mut transcript: Vec<Message> = transcript_with_ids
-        .into_iter()
-        .map(|(_, msg)| msg)
-        .collect();
-
-    // Initialize a new transcript
-    if transcript.is_empty() {
-        // NOTE: The system message is effectively immutable. Adding
-        // new skills and continuing a chat session may cause it to
-        // not be found.
-        let mut system_content = state
-            .read()
-            .expect("Unable to read share state")
-            .config
-            .system_message
-            .clone();
-
-        // Append skill instructions if there are skills in the registry
-        {
-            let registry = skill_registry
-                .read()
-                .expect("Unable to read skill registry");
-            let skill_count = registry.count();
-            if skill_count > 0 {
-                let skill_names: Vec<String> = registry
-                    .list_skills()
-                    .iter()
-                    .map(|s| format!("{}: {}", s.name, s.description))
-                    .collect();
-
-                let skills_section = format!(
-                    "\n\n## Available Skills\n\
-                    You have access to the following skills. **Always use relevant skills first before using tools.**\n\
-                    - {}\n\
-                    \nTo use a skill, first load it using the `load_skill` tool. Loaded skills appear in the transcript enclosed in a `<skill>` tag so you can refer to them. You don't need to load a skill more than once. Skills are just instructions, they may reference other tools but you can't call a skill as a tool. Follow loaded skill instructions very carefully.",
-                    skill_names.join("\n- ")
-                );
-                system_content.push_str(&skills_section);
-            }
-        }
-
-        tracing::debug!("System message: {}", &system_content);
-
-        // Save the system message and add it as the first message in
-        // the transcript
-        let system_msg = Message::new(Role::System, &system_content);
-        insert_chat_message(&db, &session_id, &system_msg).await?;
-        transcript.push(system_msg);
-    }
-
-    let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
-        .database(&db, Some(&session_id), None)
-        .transcript(transcript)
-        .tools(tools)
-        .streaming(tx.clone())
-        .middleware(vec![
-            Box::new(InfiniteLoopDetector::new(3)),
-            Box::new(ToolSecurityMiddleware::default()),
-        ]);
-
-    // Add skill management tools if the registry is available
-    chat = chat.skills(skill_registry.clone(), &storage_path_owned, &session_id);
-
-    let mut chat = chat.build();
-
-    tokio::spawn(async move {
-        let result = chat.next_msg(user_msg.clone()).await;
-
-        match result {
-            Ok(messages) => {
-                // Index new chat messages for full-text search (batch, single writer)
-                let db_clone = db.clone();
-                let index_dir_path_clone = index_dir_path.clone();
-                let session_id_clone = session_id.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = index_chat_messages(
-                        &db_clone,
-                        &index_dir_path_clone,
-                        &session_id_clone,
-                        messages.clone(),
-                    )
-                    .await
-                    {
-                        tracing::error!("Failed to index chat messages: {}", e);
-                    }
-                });
-
-                // Send a notification if the client disconnected
-                if tx.is_closed() {
-                    let _ = disconnect_receiver.recv().await;
-                    tracing::info!("Sending notification!");
-                    let db_for_notify = db.clone();
-                    let vapid_key_path_for_notify = vapid_key_path.to_string();
-                    let session_id_for_notify = session_id.clone();
-                    tokio::spawn(async move {
-                        let payload = PushNotificationPayload::new(
-                            "New chat response",
-                            "New response after you disconnected.",
-                            Some(&format!("/chat/?session_id={session_id_for_notify}")),
-                            None,
-                            None,
-                        );
-                        let subscriptions = find_all_notification_subscriptions(&db_for_notify)
-                            .await
-                            .unwrap();
-                        let failed_subscriptions = broadcast_push_notification(
-                            subscriptions,
-                            vapid_key_path_for_notify,
-                            payload,
-                        )
-                        .await;
-                        for sub in failed_subscriptions {
-                            let _ =
-                                mark_push_subscription_invalid(&db_for_notify, &sub.endpoint).await;
-                        }
-                    });
-                };
-            }
-            Err(e) => {
-                tracing::error!("Chat handler error: {}. Root cause: {}", e, e.root_cause());
-
-                let err_msg = format!("Something went wrong: {}", e);
-                let completion_chunk = json!({
-                    "id": "error",
-                    "choices": [
-                        {
-                            "finish_reason": "error",
-                            "delta": { "content": err_msg }
-                        }
-                    ]
-                })
-                .to_string();
-                // Skip sending if client disconnected
-                if !tx.is_closed() {
-                    let _ = tx.send(completion_chunk);
-                }
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    });
-
-    let resp = Sse::new(wrapped_sse_stream)
-        .keep_alive(
-            KeepAlive::default()
-                .text("keep-alive")
-                .interval(Duration::from_millis(100)),
-        )
-        .into_response();
-
-    Ok(resp)
+    // Unreachable — every match arm returns early. The (Chat, None)
+    // arm routes through ChatTask and returns its own SSE response.
+    unreachable!("chat_handler match should cover all cases")
 }
 
 /// Create the chat router

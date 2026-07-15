@@ -174,6 +174,11 @@ This skill has scripts and references.
         use hq::core::AppConfig;
         use hq::core::db::async_db;
 
+        // Note: this test constructs AppState directly (not via
+        // test_app_with_skills) because it needs to populate the skills
+        // directory with subdirectories first. The pubsub/chat_sessions
+        // construction mirrors test_utils::build_pubsub_and_chat_sessions.
+
         let temp_dir = std::env::temp_dir();
         let dir = temp_dir.join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&dir).expect("Failed to create base directory");
@@ -214,9 +219,15 @@ This skill has scripts and references.
             openai_api_key: String::from("test-api-key"),
             system_message: String::from("You are a helpful assistant."),
         };
-        let skill_registry =
-            SkillRegistry::new(skills_path.display().to_string()).await.unwrap();
-        let app_state = AppState::new(db, app_config, skill_registry);
+        let skill_registry = Arc::new(RwLock::new(
+            SkillRegistry::new(skills_path.display().to_string()).await.unwrap(),
+        ));
+        let (pubsub, chat_sessions) = crate::test_utils::build_pubsub_and_chat_sessions(
+            db.clone(),
+            Arc::new(app_config.clone()),
+            Arc::clone(&skill_registry),
+        );
+        let app_state = AppState::new(db, app_config, skill_registry, pubsub, chat_sessions);
         let app = app(Arc::new(RwLock::new(app_state)));
 
         let response = app

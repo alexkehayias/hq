@@ -8,3 +8,5 @@ pub use middleware::{
 };
 pub mod models;
 pub use core::{Chat, ChatBuilder};
+pub mod session;
+pub use session::{ChatCommand, ChatSessionManager, ChatTaskDeps};

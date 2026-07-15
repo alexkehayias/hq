@@ -7,6 +7,8 @@ use std::sync::{Arc, RwLock};
 use axum::{Router, body::Body};
 
 use hq::ai::chat::db::{get_or_create_session, insert_chat_message};
+use hq::ai::chat::{ChatSessionManager, ChatTaskDeps};
+use hq::ai::pubsub::PubSubBroker;
 use hq::ai::skills::SkillRegistry;
 use hq::api::AppState;
 use hq::api::app;
@@ -21,6 +23,25 @@ use hq::search::{index_all, index_all_chat_sessions};
 pub async fn body_to_string(body: Body) -> String {
     let bytes = axum::body::to_bytes(body, 16384usize).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+/// Construct the pub/sub broker and chat session manager needed by
+/// `AppState::new`. Returns `(broker, chat_sessions)` ready to pass in.
+/// Shared by all test_app* helpers so they don't repeat boilerplate.
+#[allow(dead_code)]
+pub fn build_pubsub_and_chat_sessions(
+    db: tokio_rusqlite::Connection,
+    config: Arc<AppConfig>,
+    skill_registry: Arc<RwLock<SkillRegistry>>,
+) -> (Arc<PubSubBroker>, Arc<ChatSessionManager>) {
+    let broker = Arc::new(PubSubBroker::new());
+    let chat_deps = ChatTaskDeps {
+        db,
+        config,
+        skill_registry,
+    };
+    let chat_sessions = Arc::new(ChatSessionManager::new(Arc::clone(&broker), chat_deps));
+    (broker, chat_sessions)
 }
 
 /// Creates a test application router with temporary directories.
@@ -80,8 +101,15 @@ pub async fn test_app() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let skill_registry = SkillRegistry::new(&skills_path).await.unwrap();
-    let app_state = AppState::new(db, app_config, skill_registry);
+    let skill_registry = Arc::new(RwLock::new(
+        SkillRegistry::new(&skills_path).await.unwrap(),
+    ));
+    let (pubsub, chat_sessions) = build_pubsub_and_chat_sessions(
+        db.clone(),
+        Arc::new(app_config.clone()),
+        Arc::clone(&skill_registry),
+    );
+    let app_state = AppState::new(db, app_config, skill_registry, pubsub, chat_sessions);
     app(Arc::new(RwLock::new(app_state)))
 }
 
@@ -166,8 +194,15 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let skill_registry = SkillRegistry::new(&skills_path).await.unwrap();
-    let app_state = AppState::new(db, app_config, skill_registry);
+    let skill_registry = Arc::new(RwLock::new(
+        SkillRegistry::new(&skills_path).await.unwrap(),
+    ));
+    let (pubsub, chat_sessions) = build_pubsub_and_chat_sessions(
+        db.clone(),
+        Arc::new(app_config.clone()),
+        Arc::clone(&skill_registry),
+    );
+    let app_state = AppState::new(db, app_config, skill_registry, pubsub, chat_sessions);
     (app(Arc::new(RwLock::new(app_state.clone()))), app_state)
 }
 
@@ -257,8 +292,15 @@ pub async fn test_app_with_skills() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let skill_registry = SkillRegistry::new(skills_path.display().to_string()).await.unwrap();
-    let app_state = AppState::new(db, app_config, skill_registry);
+    let skill_registry = Arc::new(RwLock::new(
+        SkillRegistry::new(skills_path.display().to_string()).await.unwrap(),
+    ));
+    let (pubsub, chat_sessions) = build_pubsub_and_chat_sessions(
+        db.clone(),
+        Arc::new(app_config.clone()),
+        Arc::clone(&skill_registry),
+    );
+    let app_state = AppState::new(db, app_config, skill_registry, pubsub, chat_sessions);
     app(Arc::new(RwLock::new(app_state)))
 }
 
