@@ -11,7 +11,12 @@
 //!
 //! This module is populated incrementally; see `.claude/plans/warm-twirling-stonebraker.md`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    unexpected_cfgs,
+    dead_code
+)]
 
 pub mod builtins;
 pub mod error;

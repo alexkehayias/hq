@@ -93,7 +93,6 @@ mod verify;
 mod wc;
 mod yaml;
 mod yes;
-mod zip_cmd;
 
 mod helpers;
 pub(crate) use helpers::BuiltinHelper;
