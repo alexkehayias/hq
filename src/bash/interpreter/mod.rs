@@ -1339,7 +1339,6 @@ impl Interpreter {
             "readlink" => Readlink,
             "mkdir" => Mkdir,
             "mktemp" => Mktemp,
-            "mkfifo" => Mkfifo,
             "rm" => Rm,
             "cp" => Cp,
             "mv" => Mv,
@@ -1351,8 +1350,6 @@ impl Interpreter {
             // Directory listing and search
             "ls" => Ls,
             "find" => Find,
-            "truncate" => Truncate,
-            "shuf" => Shuf,
             // File inspection
             "file" => File,
             "stat" => Stat,
@@ -1367,8 +1364,6 @@ impl Interpreter {
             // Numeric / math
             "seq" => Seq,
             "expr" => Expr,
-            "bc" => Bc,
-            "numfmt" => Numfmt,
             // Misc utilities
             "yes" => Yes,
             "sleep" => Sleep,
@@ -1406,10 +1401,7 @@ impl Interpreter {
             "verify" => Verify,
             "csv" => Csv,
             "help" => Help,
-            "iconv" => Iconv,
             "json" => Json,
-            "patch" => Patch,
-            "tomlq" => Tomlq,
             "yaml" => Yaml,
         );
 
@@ -11349,18 +11341,6 @@ echo "count=$COUNT"
         assert_eq!(lines, vec!["/testdir/a.txt", "/testdir/b.txt"]);
     }
 
-    #[tokio::test]
-    async fn test_mkfifo_creates_fifo_in_vfs() {
-        let result = run_script("mkfifo /tmp/mypipe && test -p /tmp/mypipe && echo ok").await;
-        assert_eq!(result.exit_code, 0);
-        assert_eq!(result.stdout.trim(), "ok");
-    }
-
-    #[tokio::test]
-    async fn test_mkfifo_test_p_returns_true() {
-        let result = run_script("mkfifo /tmp/mypipe && test -p /tmp/mypipe && echo yes").await;
-        assert_eq!(result.stdout.trim(), "yes");
-    }
 
     // /dev/urandom integration tests
 
