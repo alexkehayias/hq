@@ -47,8 +47,21 @@ uuid = { version = "1.23.4", features = ["v4"] }
 tokio-rusqlite = "0.6.0"
 tokio-stream = "0.1.18"
 htmd = "0.5.4"
-bashkit = { version = "0.12.0", features = ["realfs"] }
 libc = "0.2"
+
+# Vendored bashkit deps (previously transitive via bashkit)
+bitflags = "2"
+num-traits = "0.2"
+os_display = "0.1.3"
+fancy-regex = "0.18"
+hmac = "0.13"
+md-5 = "0.11"
+sha1 = "0.11"
+sha2 = "0.11"
+url = "2"
+getrandom = "0.4"
+bigdecimal = "0.4"
+unit-prefix = "0.5"
 
 
 [dev-dependencies]

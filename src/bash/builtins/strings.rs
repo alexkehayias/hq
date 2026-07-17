@@ -1,0 +1,428 @@
+//! strings builtin command - print printable strings from binary data
+
+use async_trait::async_trait;
+
+use super::{Builtin, Context};
+use crate::bash::error::Result;
+use crate::bash::interpreter::ExecResult;
+
+/// The strings builtin - find printable strings in files.
+///
+/// Usage: strings [-n MIN] [-t FORMAT] [FILE...]
+///
+/// Options:
+///   -n MIN     Minimum string length (default: 4)
+///   -t FORMAT  Print offset: d (decimal), o (octal), x (hex)
+///   -a         Scan entire file (default, for compatibility)
+pub struct Strings;
+
+struct StringsOptions {
+    min_length: usize,
+    offset_format: Option<OffsetFormat>,
+}
+
+#[derive(Clone, Copy)]
+enum OffsetFormat {
+    Decimal,
+    Octal,
+    Hex,
+}
+
+fn parse_strings_args(
+    args: &[String],
+) -> std::result::Result<(StringsOptions, Vec<String>), String> {
+    let mut opts = StringsOptions {
+        min_length: 4,
+        offset_format: None,
+    };
+    let mut files = Vec::new();
+    let mut p = super::arg_parser::ArgParser::new(args);
+    // After a `--` delimiter every remaining argument is a filename, even if it
+    // looks like an option (e.g. `strings -- -8` treats `-8` as a file).
+    let mut no_more_options = false;
+
+    while !p.is_done() {
+        if no_more_options {
+            if let Some(file) = p.positional() {
+                files.push(file.to_string());
+            } else {
+                p.advance();
+            }
+        } else if let Some(val) = p.flag_value("-n", "strings")? {
+            opts.min_length = val
+                .parse()
+                .map_err(|_| format!("strings: invalid minimum string length: '{}'", val))?;
+        } else if let Some(val) = p.flag_value("-t", "strings")? {
+            opts.offset_format = Some(match val {
+                "d" => OffsetFormat::Decimal,
+                "o" => OffsetFormat::Octal,
+                "x" => OffsetFormat::Hex,
+                other => {
+                    return Err(format!("strings: invalid radix for -t: '{}'", other));
+                }
+            });
+        } else if p.flag("-a") {
+            // Default behavior, ignore
+        } else if let Some(arg) = p.current() {
+            if arg == "--" {
+                no_more_options = true;
+                p.advance();
+            } else if let Some(rest) = arg.strip_prefix('-')
+                && !rest.is_empty()
+                && rest.chars().all(|c| c.is_ascii_digit())
+            {
+                opts.min_length = rest
+                    .parse()
+                    .map_err(|_| format!("strings: invalid minimum string length: '{}'", rest))?;
+                p.advance();
+            } else if let Some(file) = p.positional() {
+                files.push(file.to_string());
+            } else {
+                p.advance();
+            }
+        } else {
+            p.advance();
+        }
+    }
+
+    if opts.min_length == 0 {
+        opts.min_length = 1;
+    }
+
+    Ok((opts, files))
+}
+
+fn extract_strings(data: &[u8], opts: &StringsOptions) -> String {
+    let mut output = String::new();
+    let mut current = String::new();
+    let mut start_offset = 0;
+
+    for (i, &byte) in data.iter().enumerate() {
+        if (0x20..0x7f).contains(&byte) || byte == b'\t' {
+            if current.is_empty() {
+                start_offset = i;
+            }
+            current.push(byte as char);
+        } else {
+            if current.len() >= opts.min_length {
+                if let Some(fmt) = opts.offset_format {
+                    match fmt {
+                        OffsetFormat::Decimal => {
+                            output.push_str(&format!("{:>7} ", start_offset));
+                        }
+                        OffsetFormat::Octal => {
+                            output.push_str(&format!("{:>7o} ", start_offset));
+                        }
+                        OffsetFormat::Hex => {
+                            output.push_str(&format!("{:>7x} ", start_offset));
+                        }
+                    }
+                }
+                output.push_str(&current);
+                output.push('\n');
+            }
+            current.clear();
+        }
+    }
+
+    // Don't forget the last string
+    if current.len() >= opts.min_length {
+        if let Some(fmt) = opts.offset_format {
+            match fmt {
+                OffsetFormat::Decimal => {
+                    output.push_str(&format!("{:>7} ", start_offset));
+                }
+                OffsetFormat::Octal => {
+                    output.push_str(&format!("{:>7o} ", start_offset));
+                }
+                OffsetFormat::Hex => {
+                    output.push_str(&format!("{:>7x} ", start_offset));
+                }
+            }
+        }
+        output.push_str(&current);
+        output.push('\n');
+    }
+
+    output
+}
+
+#[async_trait]
+impl Builtin for Strings {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = super::check_help_version(
+            ctx.args,
+            "Usage: strings [OPTION]... [FILE]...\nPrint the sequences of printable characters in files.\n\n  -a\t\tscan the whole file (default)\n  -n MIN\tprint sequences of at least MIN characters (default 4)\n  -t FORMAT\tprint the offset using FORMAT (d=decimal, o=octal, x=hex)\n  --help\t\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("strings (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let (opts, files) = match parse_strings_args(ctx.args) {
+            Ok(v) => v,
+            Err(e) => return Ok(ExecResult::err(format!("{}\n", e), 1)),
+        };
+
+        let mut output = String::new();
+
+        if files.is_empty() {
+            // Read from stdin (treat as bytes)
+            if let Some(stdin) = ctx.stdin {
+                output.push_str(&extract_strings(stdin.as_bytes(), &opts));
+            }
+        } else {
+            for file in &files {
+                if file == "-" {
+                    if let Some(stdin) = ctx.stdin {
+                        output.push_str(&extract_strings(stdin.as_bytes(), &opts));
+                    }
+                } else {
+                    let path = if file.starts_with('/') {
+                        std::path::PathBuf::from(file)
+                    } else {
+                        ctx.cwd.join(file)
+                    };
+
+                    match ctx.fs.read_file(&path).await {
+                        Ok(content) => {
+                            output.push_str(&extract_strings(&content, &opts));
+                        }
+                        Err(e) => {
+                            return Ok(ExecResult::err(format!("strings: {}: {}\n", file, e), 1));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(ExecResult::ok(output))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use crate::bash::fs::{FileSystem, InMemoryFs};
+
+    async fn run_strings(args: &[&str], stdin: Option<&str>) -> ExecResult {
+        let fs = Arc::new(InMemoryFs::new());
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Strings.execute(ctx).await.unwrap()
+    }
+
+    async fn run_strings_with_fs(args: &[&str], files: &[(&str, &[u8])]) -> ExecResult {
+        let fs = Arc::new(InMemoryFs::new());
+        for (path, content) in files {
+            fs.write_file(std::path::Path::new(path), content)
+                .await
+                .unwrap();
+        }
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin: None,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Strings.execute(ctx).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_strings_basic() {
+        let result = run_strings(&[], Some("hello world")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hello world\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_binary_data() {
+        // Mix of binary and text
+        let mut data = vec![0u8, 1, 2, 3];
+        data.extend_from_slice(b"hello");
+        data.extend_from_slice(&[0, 1, 2]);
+        data.extend_from_slice(b"world");
+        data.push(0);
+
+        let result = run_strings_with_fs(&["/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hello\nworld\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_min_length() {
+        let result = run_strings(&["-n", "8"], Some("hi there how are you")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hi there how are you\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_min_length_filter() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"ab");
+        data.push(0);
+        data.extend_from_slice(b"cdef");
+        data.push(0);
+        data.extend_from_slice(b"ghijklm");
+        data.push(0);
+
+        let result = run_strings_with_fs(&["-n", "4", "/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "cdef\nghijklm\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_min_length_shorthand() {
+        let data = b"short\0longest-string\0";
+        let result = run_strings_with_fs(&["-8", "/test.bin"], &[("/test.bin", data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "longest-string\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_dash_prefixed_filename() {
+        let data = b"dash-file\0";
+        let result = run_strings_with_fs(&["-data.bin"], &[("/-data.bin", data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "dash-file\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_double_dash_delimits_options() {
+        let data = b"after-delimiter\0";
+        let result = run_strings_with_fs(&["--", "/test.bin"], &[("/test.bin", data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "after-delimiter\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_double_dash_treats_option_like_arg_as_file() {
+        // After `--`, an option-looking name like `-8` is a filename, not the
+        // `-NUM` minimum-length shorthand.
+        let data = b"numeric-name\0";
+        let result = run_strings_with_fs(&["--", "-8"], &[("/-8", data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "numeric-name\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_short_min() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"ab");
+        data.push(0);
+        data.extend_from_slice(b"cd");
+        data.push(0);
+
+        let result = run_strings_with_fs(&["-n", "2", "/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "ab\ncd\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_offset_decimal() {
+        let mut data = vec![0u8; 10];
+        data.extend_from_slice(b"hello");
+        data.push(0);
+
+        let result = run_strings_with_fs(&["-t", "d", "/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("10 hello"));
+    }
+
+    #[tokio::test]
+    async fn test_strings_offset_hex() {
+        let mut data = vec![0u8; 16];
+        data.extend_from_slice(b"test");
+        data.push(0);
+
+        let result = run_strings_with_fs(&["-t", "x", "/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("10 test"));
+    }
+
+    #[tokio::test]
+    async fn test_strings_empty_input() {
+        let result = run_strings(&[], Some("")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_strings_all_binary() {
+        let data = vec![0u8, 1, 2, 3, 4, 5];
+        let result = run_strings_with_fs(&["/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_strings_file_not_found() {
+        let result = run_strings(&["/nonexistent"], None).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("strings:"));
+    }
+
+    #[tokio::test]
+    async fn test_strings_tab_is_printable() {
+        let result = run_strings(&["-n", "1"], Some("a\tb")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a\tb\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_multiple_sequences() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"first");
+        data.extend_from_slice(&[0, 0, 0]);
+        data.extend_from_slice(b"second");
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(b"third");
+
+        let result = run_strings_with_fs(&["/test.bin"], &[("/test.bin", &data)]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "first\nsecond\nthird\n");
+    }
+
+    #[tokio::test]
+    async fn test_strings_invalid_min_length() {
+        let result = run_strings(&["-n", "abc"], Some("test")).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid minimum string length"));
+    }
+}

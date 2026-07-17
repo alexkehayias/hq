@@ -1,0 +1,1264 @@
+//! Resource limits for virtual execution.
+//!
+//! These limits prevent runaway scripts from consuming excessive resources.
+//!
+//! # Security Mitigations
+//!
+//! This module mitigates the following threats (see `specs/threat-model.md`):
+//!
+//! - **TM-DOS-001**: Large script input → `max_input_bytes`
+//! - **TM-DOS-002, TM-DOS-004, TM-DOS-019**: Command flooding → `max_commands`
+//! - **TM-DOS-016, TM-DOS-017**: Infinite loops → `max_loop_iterations`
+//! - **TM-DOS-018**: Nested loop multiplication → `max_total_loop_iterations`
+//! - **TM-DOS-020, TM-DOS-021**: Function recursion → `max_function_depth`
+//! - **TM-DOS-022**: Parser recursion → `max_ast_depth`
+//! - **TM-DOS-023**: CPU exhaustion → `timeout`
+//! - **TM-DOS-024**: Parser hang → `parser_timeout`, `max_parser_operations`
+//! - **TM-DOS-027**: Builtin parser recursion → `MAX_AWK_PARSER_DEPTH`, `MAX_JQ_JSON_DEPTH` (in builtins)
+//! - **TM-DOS-063**: Persistent file descriptor exhaustion → `max_file_descriptors`
+//!
+//! # Fail Points (enabled with `failpoints` feature)
+//!
+//! - `limits::tick_command` - Inject failures in command counting
+//! - `limits::tick_loop` - Inject failures in loop iteration counting
+//! - `limits::push_function` - Inject failures in function depth tracking
+
+use std::time::Duration;
+
+#[cfg(feature = "failpoints")]
+use fail::fail_point;
+
+/// Resource limits for script execution
+#[derive(Debug, Clone)]
+pub struct ExecutionLimits {
+    /// Maximum number of commands that can be executed (fuel model)
+    /// Default: 10,000
+    pub max_commands: usize,
+
+    /// Maximum iterations for a single loop
+    /// Default: 10,000
+    pub max_loop_iterations: usize,
+
+    // THREAT[TM-DOS-018]: Nested loops each reset their per-loop counter,
+    // allowing 10K^depth total iterations. This global cap prevents that.
+    /// Maximum total loop iterations across all loops (nested and sequential).
+    /// Prevents nested loop multiplication attack (TM-DOS-018).
+    /// Default: 1,000,000
+    pub max_total_loop_iterations: usize,
+
+    /// Maximum function call depth (recursion limit)
+    /// Default: 100
+    pub max_function_depth: usize,
+
+    /// Execution timeout
+    /// Default: 30 seconds
+    pub timeout: Duration,
+
+    /// Parser timeout (separate from execution timeout)
+    /// Default: 5 seconds
+    /// This limits how long the parser can spend parsing a script before giving up.
+    /// Protects against parser hang attacks (V3 in threat model).
+    pub parser_timeout: Duration,
+
+    /// Maximum input script size in bytes
+    /// Default: 10MB (10,000,000 bytes)
+    /// Protects against memory exhaustion from large scripts (V1 in threat model).
+    pub max_input_bytes: usize,
+
+    /// Maximum AST nesting depth during parsing
+    /// Default: 100
+    /// Protects against stack overflow from deeply nested scripts (V4 in threat model).
+    pub max_ast_depth: usize,
+
+    /// Maximum parser operations (fuel model for parsing)
+    /// Default: 100,000
+    /// Protects against parser DoS attacks that could otherwise cause CPU exhaustion.
+    pub max_parser_operations: usize,
+
+    /// Maximum stdout capture size in bytes
+    /// Default: 1MB (1,048,576 bytes)
+    /// Prevents unbounded output accumulation from runaway commands.
+    pub max_stdout_bytes: usize,
+
+    /// Maximum stderr capture size in bytes
+    /// Default: 1MB (1,048,576 bytes)
+    /// Prevents unbounded error output accumulation.
+    pub max_stderr_bytes: usize,
+
+    // THREAT[TM-DOS-088]: Command substitutions clone the entire interpreter
+    // state (variables, arrays, functions, etc.) per nesting level. At depth N,
+    // memory ≈ N × state_size. A separate, tighter limit than max_function_depth
+    // prevents OOM from deeply nested $(...) chains.
+    /// Maximum command substitution nesting depth.
+    /// Default: 32
+    pub max_subst_depth: usize,
+
+    // THREAT[TM-DOS-092]: Nested `( ... )` subshells keep saved call-stack
+    // clones and CoW state snapshots alive until unwind. Bound nesting so large
+    // positional parameters/state cannot be multiplied up to max_ast_depth.
+    /// Maximum explicit subshell nesting depth.
+    /// Default: 32
+    pub max_subshell_depth: usize,
+
+    /// Maximum persistent custom file descriptors opened via `exec N>file`,
+    /// `exec N<file`, or fd duplication. Standard fds 0/1/2 do not count.
+    /// Default: 1024
+    pub max_file_descriptors: usize,
+
+    /// Maximum command history entries retained per Bash instance.
+    /// Default: 1,000
+    pub max_history_entries: usize,
+
+    /// Maximum retained command history bytes per Bash instance.
+    /// Counts command and cwd strings, including loaded persisted history.
+    /// Default: 1MB (1,048,576 bytes)
+    pub max_history_bytes: usize,
+
+    /// Maximum bytes formatted by the `history` builtin in one call.
+    /// Default: 1MB (1,048,576 bytes)
+    pub max_history_output_bytes: usize,
+
+    /// Maximum fields produced by one IFS word-splitting operation.
+    /// Default: 100,000
+    pub max_word_split_fields: usize,
+
+    /// Maximum total bytes copied into fields by one IFS word-splitting operation.
+    /// Default: 10MB (10,000,000 bytes)
+    pub max_word_split_bytes: usize,
+
+    /// Whether to capture the final environment state in ExecResult.
+    /// Default: false (opt-in to avoid cloning cost when not needed)
+    pub capture_final_env: bool,
+}
+
+impl Default for ExecutionLimits {
+    fn default() -> Self {
+        Self {
+            max_commands: 10_000,
+            max_loop_iterations: 10_000,
+            max_total_loop_iterations: 1_000_000,
+            max_function_depth: 100,
+            timeout: Duration::from_secs(30),
+            parser_timeout: Duration::from_secs(5),
+            max_input_bytes: 10_000_000, // 10MB
+            max_ast_depth: 100,
+            max_parser_operations: 100_000,
+            max_stdout_bytes: 1_048_576, // 1MB
+            max_stderr_bytes: 1_048_576, // 1MB
+            max_subst_depth: 32,
+            max_subshell_depth: 32,
+            max_file_descriptors: 1024,
+            max_history_entries: 1_000,
+            max_history_bytes: 1_048_576,        // 1MB
+            max_history_output_bytes: 1_048_576, // 1MB
+            max_word_split_fields: 100_000,
+            max_word_split_bytes: 10_000_000,
+            capture_final_env: false,
+        }
+    }
+}
+
+impl ExecutionLimits {
+    /// Create new limits with defaults
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Relaxed limits for CLI / interactive use.
+    ///
+    /// Command/loop counters are effectively unlimited — the user chose to run
+    /// the script, so counting-based limits are unhelpful. Timeout is removed
+    /// (user has Ctrl-C). Stdout/stderr caps are raised to 10 MB.
+    ///
+    /// Limits that guard against crashes are kept: function depth, AST depth,
+    /// parser fuel, parser timeout, input size.
+    pub fn cli() -> Self {
+        Self {
+            max_commands: usize::MAX,
+            max_loop_iterations: usize::MAX,
+            max_total_loop_iterations: usize::MAX,
+            timeout: Duration::from_secs(u64::MAX / 2), // effectively no timeout
+            max_stdout_bytes: 10_485_760,               // 10 MB
+            max_stderr_bytes: 10_485_760,               // 10 MB
+            max_history_output_bytes: 10_485_760,       // 10 MB
+            ..Self::default()
+        }
+    }
+
+    /// Set maximum command count.
+    /// A value of 0 is a valid strict limit that disables command execution.
+    pub fn max_commands(mut self, count: usize) -> Self {
+        self.max_commands = count;
+        self
+    }
+
+    /// Set maximum loop iterations (per-loop).
+    /// A value of 0 is a valid strict limit that prevents loop iteration.
+    pub fn max_loop_iterations(mut self, count: usize) -> Self {
+        self.max_loop_iterations = count;
+        self
+    }
+
+    /// Set maximum total loop iterations (across all nested/sequential loops).
+    /// Prevents TM-DOS-018 nested loop multiplication.
+    /// A value of 0 is a valid strict limit that prevents loop iteration.
+    pub fn max_total_loop_iterations(mut self, count: usize) -> Self {
+        self.max_total_loop_iterations = count;
+        self
+    }
+
+    /// Set maximum function depth.
+    /// A value of 0 is a valid strict limit that prevents function calls.
+    pub fn max_function_depth(mut self, depth: usize) -> Self {
+        self.max_function_depth = depth;
+        self
+    }
+
+    /// Set execution timeout
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Set parser timeout
+    pub fn parser_timeout(mut self, timeout: Duration) -> Self {
+        self.parser_timeout = timeout;
+        self
+    }
+
+    /// Set maximum input script size in bytes.
+    /// A value of 0 is a valid strict limit that rejects non-empty scripts.
+    pub fn max_input_bytes(mut self, bytes: usize) -> Self {
+        self.max_input_bytes = bytes;
+        self
+    }
+
+    /// Set maximum AST nesting depth.
+    /// A value of 0 is a valid strict parser limit.
+    pub fn max_ast_depth(mut self, depth: usize) -> Self {
+        self.max_ast_depth = depth;
+        self
+    }
+
+    /// Set maximum parser operations.
+    /// A value of 0 is a valid strict parser fuel limit.
+    pub fn max_parser_operations(mut self, ops: usize) -> Self {
+        self.max_parser_operations = ops;
+        self
+    }
+
+    /// Set maximum stdout capture size in bytes.
+    /// A value of 0 is a valid strict limit that captures no stdout.
+    pub fn max_stdout_bytes(mut self, bytes: usize) -> Self {
+        self.max_stdout_bytes = bytes;
+        self
+    }
+
+    /// Set maximum stderr capture size in bytes.
+    /// A value of 0 is a valid strict limit that captures no stderr.
+    pub fn max_stderr_bytes(mut self, bytes: usize) -> Self {
+        self.max_stderr_bytes = bytes;
+        self
+    }
+
+    /// Set maximum command substitution nesting depth.
+    /// A value of 0 is a valid strict limit that prevents command substitution.
+    pub fn max_subst_depth(mut self, depth: usize) -> Self {
+        self.max_subst_depth = depth;
+        self
+    }
+
+    /// Set maximum explicit subshell nesting depth.
+    /// A value of 0 is a valid strict limit that prevents explicit subshells.
+    pub fn max_subshell_depth(mut self, depth: usize) -> Self {
+        self.max_subshell_depth = depth;
+        self
+    }
+
+    /// Set maximum persistent custom file descriptors.
+    /// A value of 0 is a valid strict limit that prevents custom descriptors.
+    pub fn max_file_descriptors(mut self, count: usize) -> Self {
+        self.max_file_descriptors = count;
+        self
+    }
+
+    /// Set maximum retained history entries.
+    /// Passing 0 disables history retention.
+    pub fn max_history_entries(mut self, count: usize) -> Self {
+        self.max_history_entries = count;
+        self
+    }
+
+    /// Set maximum retained history bytes.
+    /// Passing 0 disables history retention.
+    pub fn max_history_bytes(mut self, bytes: usize) -> Self {
+        self.max_history_bytes = bytes;
+        self
+    }
+
+    /// Set maximum `history` builtin output bytes.
+    /// Passing 0 makes `history` output empty.
+    pub fn max_history_output_bytes(mut self, bytes: usize) -> Self {
+        self.max_history_output_bytes = bytes;
+        self
+    }
+
+    /// Set maximum fields produced by one IFS word-splitting operation.
+    /// Passing 0 is treated as "use default" (no-op) to prevent misconfiguration.
+    pub fn max_word_split_fields(mut self, count: usize) -> Self {
+        if count > 0 {
+            self.max_word_split_fields = count;
+        }
+        self
+    }
+
+    /// Set maximum total bytes copied by one IFS word-splitting operation.
+    /// Passing 0 is treated as "use default" (no-op) to prevent misconfiguration.
+    pub fn max_word_split_bytes(mut self, bytes: usize) -> Self {
+        if bytes > 0 {
+            self.max_word_split_bytes = bytes;
+        }
+        self
+    }
+
+    /// Enable capturing final environment state in ExecResult
+    pub fn capture_final_env(mut self, capture: bool) -> Self {
+        self.capture_final_env = capture;
+        self
+    }
+}
+
+// THREAT[TM-DOS-059]: Session-level cumulative resource limits.
+// Per-exec limits reset every exec() call. Session limits persist across
+// all exec() calls within a Bash instance, preventing a tenant from
+// circumventing per-execution limits by splitting work across many calls.
+
+/// Default max total commands across all exec() calls: 100,000
+pub const DEFAULT_SESSION_MAX_COMMANDS: u64 = 100_000;
+
+/// Default max exec() invocations per session: 1,000
+pub const DEFAULT_SESSION_MAX_EXEC_CALLS: u64 = 1_000;
+
+/// Session-level resource limits that persist across `exec()` calls.
+///
+/// These limits prevent tenants from circumventing per-execution limits
+/// by splitting work across many small `exec()` calls.
+#[derive(Debug, Clone)]
+pub struct SessionLimits {
+    /// Maximum total commands across all exec() calls.
+    /// Default: 100,000
+    pub max_total_commands: u64,
+
+    /// Maximum number of exec() invocations per session.
+    /// Default: 1,000
+    pub max_exec_calls: u64,
+}
+
+impl Default for SessionLimits {
+    fn default() -> Self {
+        Self {
+            max_total_commands: DEFAULT_SESSION_MAX_COMMANDS,
+            max_exec_calls: DEFAULT_SESSION_MAX_EXEC_CALLS,
+        }
+    }
+}
+
+impl SessionLimits {
+    /// Create new session limits with defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set maximum total commands across all exec() calls.
+    /// A value of 0 is a valid strict limit that disables command execution.
+    pub fn max_total_commands(mut self, count: u64) -> Self {
+        self.max_total_commands = count;
+        self
+    }
+
+    /// Set maximum number of exec() invocations.
+    /// A value of 0 is a valid strict limit that disables exec() calls.
+    pub fn max_exec_calls(mut self, count: u64) -> Self {
+        self.max_exec_calls = count;
+        self
+    }
+
+    /// Create unlimited session limits (no restrictions).
+    pub fn unlimited() -> Self {
+        Self {
+            max_total_commands: u64::MAX,
+            max_exec_calls: u64::MAX,
+        }
+    }
+}
+
+/// Execution counters for tracking resource usage
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionCounters {
+    /// Number of commands executed
+    pub commands: usize,
+
+    /// Current function call depth
+    pub function_depth: usize,
+
+    /// Per-loop iteration counters by nesting depth (top = current loop)
+    pub loop_iterations: Vec<usize>,
+
+    // THREAT[TM-DOS-018]: Nested loop multiplication
+    // This counter never resets, tracking total iterations across all loops.
+    /// Total loop iterations across all loops (never reset)
+    pub total_loop_iterations: usize,
+
+    /// Current command substitution nesting depth.
+    pub subst_depth: usize,
+
+    /// Current explicit subshell nesting depth.
+    pub subshell_depth: usize,
+
+    // THREAT[TM-DOS-059]: Session-level cumulative counters.
+    // These persist across exec() calls (never reset by reset_for_execution).
+    /// Total commands across all exec() calls in this session.
+    pub session_commands: u64,
+
+    /// Number of exec() invocations in this session.
+    pub session_exec_calls: u64,
+}
+
+impl ExecutionCounters {
+    /// Create new counters
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Reset counters for a new exec() invocation.
+    /// Each exec() is a separate script and gets its own budget.
+    /// This prevents a prior exec() from permanently poisoning the session.
+    pub fn reset_for_execution(&mut self) {
+        self.commands = 0;
+        self.loop_iterations.clear();
+        self.total_loop_iterations = 0;
+        // function_depth/subst_depth/subshell_depth should already be 0 between
+        // exec() calls, but reset defensively to avoid stuck state.
+        self.function_depth = 0;
+        self.subst_depth = 0;
+        self.subshell_depth = 0;
+    }
+
+    /// Increment command counter, returns error if limit exceeded
+    pub fn tick_command(&mut self, limits: &ExecutionLimits) -> Result<(), LimitExceeded> {
+        // Fail point: test behavior when counter increment is corrupted
+        #[cfg(feature = "failpoints")]
+        fail_point!("limits::tick_command", |action| {
+            match action.as_deref() {
+                Some("skip_increment") => {
+                    // Simulate counter not incrementing (potential bypass)
+                    return Ok(());
+                }
+                Some("force_overflow") => {
+                    // Simulate counter overflow
+                    self.commands = usize::MAX;
+                    return Err(LimitExceeded::MaxCommands(limits.max_commands));
+                }
+                Some("corrupt_high") => {
+                    // Simulate counter corruption to a high value
+                    self.commands = limits.max_commands + 1;
+                }
+                _ => {}
+            }
+            Ok(())
+        });
+
+        self.commands = self.commands.saturating_add(1);
+        self.session_commands = self.session_commands.saturating_add(1);
+        if self.commands > limits.max_commands {
+            return Err(LimitExceeded::MaxCommands(limits.max_commands));
+        }
+        Ok(())
+    }
+
+    /// Check session-level limits. Called at exec() entry and during execution.
+    pub fn check_session_limits(
+        &self,
+        session_limits: &SessionLimits,
+    ) -> Result<(), LimitExceeded> {
+        if self.session_exec_calls > session_limits.max_exec_calls {
+            return Err(LimitExceeded::SessionMaxExecCalls(
+                session_limits.max_exec_calls,
+            ));
+        }
+        if self.session_commands > session_limits.max_total_commands {
+            return Err(LimitExceeded::SessionMaxCommands(
+                session_limits.max_total_commands,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Increment exec call counter for session tracking.
+    pub fn tick_exec_call(&mut self) {
+        self.session_exec_calls = self.session_exec_calls.saturating_add(1);
+    }
+
+    /// Increment loop iteration counter, returns error if limit exceeded
+    pub fn tick_loop(&mut self, limits: &ExecutionLimits) -> Result<(), LimitExceeded> {
+        // Fail point: test behavior when loop counter is corrupted
+        #[cfg(feature = "failpoints")]
+        fail_point!("limits::tick_loop", |action| {
+            match action.as_deref() {
+                Some("skip_check") => {
+                    // Simulate limit check being bypassed
+                    if let Some(current) = self.loop_iterations.last_mut() {
+                        *current += 1;
+                    }
+                    return Ok(());
+                }
+                Some("reset_counter") => {
+                    // Simulate counter being reset (infinite loop potential)
+                    if let Some(current) = self.loop_iterations.last_mut() {
+                        *current = 0;
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
+            Ok(())
+        });
+
+        if self.loop_iterations.is_empty() {
+            // Defensive fallback for direct tick_loop() calls outside loop helpers.
+            self.loop_iterations.push(0);
+        }
+        let current = self
+            .loop_iterations
+            .last_mut()
+            .expect("loop stack initialized above");
+        *current += 1;
+        self.total_loop_iterations += 1;
+        if *current > limits.max_loop_iterations {
+            return Err(LimitExceeded::MaxLoopIterations(limits.max_loop_iterations));
+        }
+        // THREAT[TM-DOS-018]: Check global cap to prevent nested loop multiplication
+        if self.total_loop_iterations > limits.max_total_loop_iterations {
+            return Err(LimitExceeded::MaxTotalLoopIterations(
+                limits.max_total_loop_iterations,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Enter a new loop scope.
+    pub fn enter_loop(&mut self) {
+        self.loop_iterations.push(0);
+    }
+
+    /// Exit the current loop scope.
+    pub fn exit_loop(&mut self) {
+        self.loop_iterations.pop();
+    }
+
+    /// Push function call, returns error if depth exceeded
+    pub fn push_function(&mut self, limits: &ExecutionLimits) -> Result<(), LimitExceeded> {
+        // Fail point: test behavior when function depth tracking fails
+        #[cfg(feature = "failpoints")]
+        fail_point!("limits::push_function", |action| {
+            match action.as_deref() {
+                Some("skip_check") => {
+                    // Simulate depth check being bypassed (stack overflow potential)
+                    self.function_depth += 1;
+                    return Ok(());
+                }
+                Some("corrupt_depth") => {
+                    // Simulate depth counter corruption
+                    self.function_depth = 0;
+                    return Ok(());
+                }
+                _ => {}
+            }
+            Ok(())
+        });
+
+        // Check before incrementing so we don't leave invalid state on failure
+        if self.function_depth >= limits.max_function_depth {
+            return Err(LimitExceeded::MaxFunctionDepth(limits.max_function_depth));
+        }
+        self.function_depth += 1;
+        Ok(())
+    }
+
+    /// Pop function call
+    pub fn pop_function(&mut self) {
+        if self.function_depth > 0 {
+            self.function_depth -= 1;
+        }
+    }
+
+    /// Push command substitution, returns error if depth exceeded.
+    /// THREAT[TM-DOS-088]: Command substitutions clone interpreter state,
+    /// so their nesting depth must be bounded more tightly than functions.
+    pub fn push_subst(&mut self, limits: &ExecutionLimits) -> Result<(), LimitExceeded> {
+        if self.subst_depth >= limits.max_subst_depth {
+            return Err(LimitExceeded::MaxSubstDepth(limits.max_subst_depth));
+        }
+        self.subst_depth += 1;
+        Ok(())
+    }
+
+    /// Pop command substitution
+    pub fn pop_subst(&mut self) {
+        self.subst_depth = self.subst_depth.saturating_sub(1);
+    }
+
+    /// Push explicit subshell, returns error if depth exceeded.
+    /// THREAT[TM-DOS-092]: Explicit subshells keep parent snapshots alive, so
+    /// nesting must be bounded separately from parser AST depth.
+    pub fn push_subshell(&mut self, limits: &ExecutionLimits) -> Result<(), LimitExceeded> {
+        if self.subshell_depth >= limits.max_subshell_depth {
+            return Err(LimitExceeded::MaxSubshellDepth(limits.max_subshell_depth));
+        }
+        self.subshell_depth += 1;
+        Ok(())
+    }
+
+    /// Pop explicit subshell.
+    pub fn pop_subshell(&mut self) {
+        self.subshell_depth = self.subshell_depth.saturating_sub(1);
+    }
+}
+
+/// Error returned when a resource limit is exceeded
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LimitExceeded {
+    #[error("maximum command count exceeded ({0})")]
+    MaxCommands(usize),
+
+    #[error("maximum loop iterations exceeded ({0})")]
+    MaxLoopIterations(usize),
+
+    #[error("maximum total loop iterations exceeded ({0})")]
+    MaxTotalLoopIterations(usize),
+
+    #[error("maximum function depth exceeded ({0})")]
+    MaxFunctionDepth(usize),
+
+    #[error("maximum command substitution depth exceeded ({0})")]
+    MaxSubstDepth(usize),
+
+    #[error("maximum subshell depth exceeded ({0})")]
+    MaxSubshellDepth(usize),
+
+    #[error("maximum file descriptors exceeded ({0})")]
+    MaxFileDescriptors(usize),
+
+    #[error("execution timeout ({0:?})")]
+    Timeout(Duration),
+
+    #[error("parser timeout ({0:?})")]
+    ParserTimeout(Duration),
+
+    #[error("input too large ({0} bytes, max {1} bytes)")]
+    InputTooLarge(usize, usize),
+
+    #[error("AST nesting too deep ({0} levels, max {1})")]
+    AstTooDeep(usize, usize),
+
+    #[error("parser fuel exhausted ({0} operations, max {1})")]
+    ParserExhausted(usize, usize),
+
+    #[error("session command limit exceeded ({0} total commands)")]
+    SessionMaxCommands(u64),
+
+    #[error("session exec() call limit exceeded ({0} calls)")]
+    SessionMaxExecCalls(u64),
+
+    #[error("memory limit exceeded: {0}")]
+    Memory(String),
+}
+
+// THREAT[TM-DOS-060]: Per-instance memory budget.
+// Without limits, a script can create unbounded variables, arrays, and
+// functions, consuming arbitrary heap memory and OOMing a multi-tenant process.
+
+/// Default max variable count (scalar variables).
+pub const DEFAULT_MAX_VARIABLE_COUNT: usize = 10_000;
+/// Default max total variable bytes (keys + values).
+pub const DEFAULT_MAX_TOTAL_VARIABLE_BYTES: usize = 10_000_000; // 10MB
+/// Default max array entries (total across all indexed + associative arrays).
+pub const DEFAULT_MAX_ARRAY_ENTRIES: usize = 100_000;
+/// Default max function definitions.
+pub const DEFAULT_MAX_FUNCTION_COUNT: usize = 1_000;
+/// Default max total function body bytes (source text).
+pub const DEFAULT_MAX_FUNCTION_BODY_BYTES: usize = 1_000_000; // 1MB
+
+/// Memory limits for a Bash instance.
+///
+/// Controls the maximum amount of interpreter-level memory
+/// (variables, arrays, functions) a single instance can consume.
+#[derive(Debug, Clone)]
+pub struct MemoryLimits {
+    /// Maximum number of scalar variables.
+    pub max_variable_count: usize,
+    /// Maximum total bytes across all variable keys + values.
+    pub max_total_variable_bytes: usize,
+    /// Maximum total entries across all indexed and associative arrays.
+    pub max_array_entries: usize,
+    /// Maximum number of function definitions.
+    pub max_function_count: usize,
+    /// Maximum total bytes of function body source text.
+    pub max_function_body_bytes: usize,
+}
+
+impl Default for MemoryLimits {
+    fn default() -> Self {
+        Self {
+            max_variable_count: DEFAULT_MAX_VARIABLE_COUNT,
+            max_total_variable_bytes: DEFAULT_MAX_TOTAL_VARIABLE_BYTES,
+            max_array_entries: DEFAULT_MAX_ARRAY_ENTRIES,
+            max_function_count: DEFAULT_MAX_FUNCTION_COUNT,
+            max_function_body_bytes: DEFAULT_MAX_FUNCTION_BODY_BYTES,
+        }
+    }
+}
+
+impl MemoryLimits {
+    /// Create new memory limits with defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set maximum variable count.
+    /// A value of 0 is a valid strict limit that prevents variables.
+    pub fn max_variable_count(mut self, count: usize) -> Self {
+        self.max_variable_count = count;
+        self
+    }
+
+    /// Set maximum total variable bytes.
+    /// A value of 0 is a valid strict limit that prevents variable storage.
+    pub fn max_total_variable_bytes(mut self, bytes: usize) -> Self {
+        self.max_total_variable_bytes = bytes;
+        self
+    }
+
+    /// Set maximum array entries.
+    /// A value of 0 is a valid strict limit that prevents array entries.
+    pub fn max_array_entries(mut self, count: usize) -> Self {
+        self.max_array_entries = count;
+        self
+    }
+
+    /// Set maximum function count.
+    /// A value of 0 is a valid strict limit that prevents function definitions.
+    pub fn max_function_count(mut self, count: usize) -> Self {
+        self.max_function_count = count;
+        self
+    }
+
+    /// Set maximum function body bytes.
+    /// A value of 0 is a valid strict limit that prevents function bodies.
+    pub fn max_function_body_bytes(mut self, bytes: usize) -> Self {
+        self.max_function_body_bytes = bytes;
+        self
+    }
+
+    /// Create unlimited memory limits.
+    pub fn unlimited() -> Self {
+        Self {
+            max_variable_count: usize::MAX,
+            max_total_variable_bytes: usize::MAX,
+            max_array_entries: usize::MAX,
+            max_function_count: usize::MAX,
+            max_function_body_bytes: usize::MAX,
+        }
+    }
+}
+
+/// Tracks approximate memory usage for budget enforcement.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryBudget {
+    /// Number of scalar variables (excluding internal markers).
+    pub variable_count: usize,
+    /// Total bytes in variable keys + values.
+    pub variable_bytes: usize,
+    /// Total entries across all arrays (indexed + associative).
+    pub array_entries: usize,
+    /// Number of function definitions.
+    pub function_count: usize,
+    /// Total bytes in function bodies.
+    pub function_body_bytes: usize,
+}
+
+impl MemoryBudget {
+    /// Check if adding a variable would exceed limits.
+    pub fn check_variable_insert(
+        &self,
+        key_len: usize,
+        value_len: usize,
+        is_new: bool,
+        old_key_len: usize,
+        old_value_len: usize,
+        limits: &MemoryLimits,
+    ) -> Result<(), LimitExceeded> {
+        if is_new && self.variable_count >= limits.max_variable_count {
+            return Err(LimitExceeded::Memory(format!(
+                "variable count limit ({}) exceeded",
+                limits.max_variable_count
+            )));
+        }
+        let new_bytes =
+            (self.variable_bytes + key_len + value_len).saturating_sub(old_key_len + old_value_len);
+        if new_bytes > limits.max_total_variable_bytes {
+            return Err(LimitExceeded::Memory(format!(
+                "variable byte limit ({}) exceeded",
+                limits.max_total_variable_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    /// Record a variable insert (call after successful insert).
+    pub fn record_variable_insert(
+        &mut self,
+        key_len: usize,
+        value_len: usize,
+        is_new: bool,
+        old_key_len: usize,
+        old_value_len: usize,
+    ) {
+        if is_new {
+            self.variable_count += 1;
+        }
+        self.variable_bytes =
+            (self.variable_bytes + key_len + value_len).saturating_sub(old_key_len + old_value_len);
+    }
+
+    /// Record a variable removal.
+    pub fn record_variable_remove(&mut self, key_len: usize, value_len: usize) {
+        self.variable_count = self.variable_count.saturating_sub(1);
+        self.variable_bytes = self.variable_bytes.saturating_sub(key_len + value_len);
+    }
+
+    /// Check if adding array entries would exceed limits.
+    pub fn check_array_entries(
+        &self,
+        additional: usize,
+        limits: &MemoryLimits,
+    ) -> Result<(), LimitExceeded> {
+        if self.array_entries + additional > limits.max_array_entries {
+            return Err(LimitExceeded::Memory(format!(
+                "array entry limit ({}) exceeded",
+                limits.max_array_entries
+            )));
+        }
+        Ok(())
+    }
+
+    /// Record array entry changes.
+    pub fn record_array_insert(&mut self, added: usize) {
+        self.array_entries += added;
+    }
+
+    /// Record array entry removal.
+    pub fn record_array_remove(&mut self, removed: usize) {
+        self.array_entries = self.array_entries.saturating_sub(removed);
+    }
+
+    /// Check if adding a function would exceed limits.
+    pub fn check_function_insert(
+        &self,
+        body_bytes: usize,
+        is_new: bool,
+        old_body_bytes: usize,
+        limits: &MemoryLimits,
+    ) -> Result<(), LimitExceeded> {
+        if is_new && self.function_count >= limits.max_function_count {
+            return Err(LimitExceeded::Memory(format!(
+                "function count limit ({}) exceeded",
+                limits.max_function_count
+            )));
+        }
+        // saturating_sub mirrors record_function_insert: if accounting ever
+        // drifts so old_body_bytes exceeds the running total (e.g. after a
+        // snapshot restore recomputes sizes differently), the check must not
+        // underflow-panic.
+        let new_bytes = (self.function_body_bytes + body_bytes).saturating_sub(old_body_bytes);
+        if new_bytes > limits.max_function_body_bytes {
+            return Err(LimitExceeded::Memory(format!(
+                "function body byte limit ({}) exceeded",
+                limits.max_function_body_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    /// Record a function insert.
+    pub fn record_function_insert(
+        &mut self,
+        body_bytes: usize,
+        is_new: bool,
+        old_body_bytes: usize,
+    ) {
+        if is_new {
+            self.function_count += 1;
+        }
+        self.function_body_bytes =
+            (self.function_body_bytes + body_bytes).saturating_sub(old_body_bytes);
+    }
+
+    /// Record a function removal.
+    pub fn record_function_remove(&mut self, body_bytes: usize) {
+        self.function_count = self.function_count.saturating_sub(1);
+        self.function_body_bytes = self.function_body_bytes.saturating_sub(body_bytes);
+    }
+
+    /// Recompute budget from actual variable/array state.
+    ///
+    /// Used after `restore_shell_state` where the budget was not serialized
+    /// alongside the snapshot. `is_internal` should return true for variable
+    /// names that are internal markers (not user-visible).
+    pub fn recompute_from_state<F>(
+        variables: &std::collections::HashMap<String, String>,
+        arrays: &std::collections::HashMap<String, std::collections::HashMap<usize, String>>,
+        assoc_arrays: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+        function_count: usize,
+        function_body_bytes: usize,
+        is_internal: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> bool,
+    {
+        let mut budget = Self::default();
+        for (k, v) in variables {
+            if !is_internal(k) {
+                budget.variable_count += 1;
+                budget.variable_bytes += k.len() + v.len();
+            }
+        }
+        for arr in arrays.values() {
+            budget.array_entries += arr.len();
+        }
+        for arr in assoc_arrays.values() {
+            budget.array_entries += arr.len();
+        }
+        budget.function_count = function_count;
+        budget.function_body_bytes = function_body_bytes;
+        budget
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_limits() {
+        let limits = ExecutionLimits::default();
+        assert_eq!(limits.max_commands, 10_000);
+        assert_eq!(limits.max_loop_iterations, 10_000);
+        assert_eq!(limits.max_total_loop_iterations, 1_000_000);
+        assert_eq!(limits.max_function_depth, 100);
+        assert_eq!(limits.timeout, Duration::from_secs(30));
+        assert_eq!(limits.parser_timeout, Duration::from_secs(5));
+        assert_eq!(limits.max_input_bytes, 10_000_000);
+        assert_eq!(limits.max_ast_depth, 100);
+        assert_eq!(limits.max_parser_operations, 100_000);
+        assert_eq!(limits.max_stdout_bytes, 1_048_576);
+        assert_eq!(limits.max_stderr_bytes, 1_048_576);
+        assert_eq!(limits.max_subst_depth, 32);
+        assert_eq!(limits.max_subshell_depth, 32);
+        assert_eq!(limits.max_history_entries, 1_000);
+        assert_eq!(limits.max_history_bytes, 1_048_576);
+        assert_eq!(limits.max_history_output_bytes, 1_048_576);
+        assert!(!limits.capture_final_env);
+    }
+
+    #[test]
+    fn test_builder_pattern() {
+        let limits = ExecutionLimits::new()
+            .max_commands(100)
+            .max_loop_iterations(50)
+            .max_function_depth(10)
+            .timeout(Duration::from_secs(5));
+
+        assert_eq!(limits.max_commands, 100);
+        assert_eq!(limits.max_loop_iterations, 50);
+        assert_eq!(limits.max_function_depth, 10);
+        assert_eq!(limits.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_command_counter() {
+        let limits = ExecutionLimits::new().max_commands(5);
+        let mut counters = ExecutionCounters::new();
+
+        for _ in 0..5 {
+            assert!(counters.tick_command(&limits).is_ok());
+        }
+
+        // 6th command should fail
+        assert!(matches!(
+            counters.tick_command(&limits),
+            Err(LimitExceeded::MaxCommands(5))
+        ));
+    }
+
+    #[test]
+    fn test_command_counter_saturates_on_overflow() {
+        let limits = ExecutionLimits::new().max_commands(5);
+        let mut counters = ExecutionCounters::new();
+        counters.commands = usize::MAX;
+        counters.session_commands = u64::MAX;
+
+        assert!(matches!(
+            counters.tick_command(&limits),
+            Err(LimitExceeded::MaxCommands(5))
+        ));
+        assert_eq!(counters.commands, usize::MAX);
+        assert_eq!(counters.session_commands, u64::MAX);
+    }
+
+    #[test]
+    fn test_exec_counter_saturates_on_overflow() {
+        let mut counters = ExecutionCounters::new();
+        counters.session_exec_calls = u64::MAX;
+
+        counters.tick_exec_call();
+
+        assert_eq!(counters.session_exec_calls, u64::MAX);
+    }
+
+    #[test]
+    fn test_loop_counter() {
+        let limits = ExecutionLimits::new().max_loop_iterations(3);
+        let mut counters = ExecutionCounters::new();
+        counters.enter_loop();
+
+        for _ in 0..3 {
+            assert!(counters.tick_loop(&limits).is_ok());
+        }
+
+        // 4th iteration should fail
+        assert!(matches!(
+            counters.tick_loop(&limits),
+            Err(LimitExceeded::MaxLoopIterations(3))
+        ));
+
+        // New loop scope should reset current-loop count
+        counters.exit_loop();
+        counters.enter_loop();
+        assert!(counters.tick_loop(&limits).is_ok());
+    }
+
+    #[test]
+    fn test_total_loop_counter_accumulates() {
+        let limits = ExecutionLimits::new()
+            .max_loop_iterations(5)
+            .max_total_loop_iterations(8);
+        let mut counters = ExecutionCounters::new();
+        counters.enter_loop();
+
+        // First loop: 5 iterations (per-loop limit)
+        for _ in 0..5 {
+            assert!(counters.tick_loop(&limits).is_ok());
+        }
+        assert_eq!(counters.total_loop_iterations, 5);
+
+        // New loop should reset current-loop counter
+        counters.exit_loop();
+        counters.enter_loop();
+        assert_eq!(counters.loop_iterations.last().copied(), Some(0));
+        // total_loop_iterations should NOT reset
+        assert_eq!(counters.total_loop_iterations, 5);
+
+        // Second loop: should fail after 3 more (total = 8 cap)
+        assert!(counters.tick_loop(&limits).is_ok()); // total=6
+        assert!(counters.tick_loop(&limits).is_ok()); // total=7
+        assert!(counters.tick_loop(&limits).is_ok()); // total=8
+
+        // 9th total iteration should fail
+        assert!(matches!(
+            counters.tick_loop(&limits),
+            Err(LimitExceeded::MaxTotalLoopIterations(8))
+        ));
+    }
+
+    #[test]
+    fn test_nested_loops_track_independently() {
+        let limits = ExecutionLimits::new().max_loop_iterations(2);
+        let mut counters = ExecutionCounters::new();
+
+        counters.enter_loop();
+        assert!(counters.tick_loop(&limits).is_ok()); // outer=1
+
+        counters.enter_loop();
+        assert!(counters.tick_loop(&limits).is_ok()); // inner=1
+        assert!(counters.tick_loop(&limits).is_ok()); // inner=2
+        counters.exit_loop();
+
+        assert!(counters.tick_loop(&limits).is_ok()); // outer=2 (still tracked)
+        assert!(matches!(
+            counters.tick_loop(&limits),
+            Err(LimitExceeded::MaxLoopIterations(2))
+        )); // outer=3 -> fail
+    }
+
+    #[test]
+    fn test_function_depth() {
+        let limits = ExecutionLimits::new().max_function_depth(2);
+        let mut counters = ExecutionCounters::new();
+
+        assert!(counters.push_function(&limits).is_ok());
+        assert!(counters.push_function(&limits).is_ok());
+
+        // 3rd call should fail
+        assert!(matches!(
+            counters.push_function(&limits),
+            Err(LimitExceeded::MaxFunctionDepth(2))
+        ));
+
+        // Pop and try again
+        counters.pop_function();
+        assert!(counters.push_function(&limits).is_ok());
+    }
+
+    #[test]
+    fn test_subshell_depth() {
+        let limits = ExecutionLimits::new().max_subshell_depth(2);
+        let mut counters = ExecutionCounters::new();
+
+        assert!(counters.push_subshell(&limits).is_ok());
+        assert!(counters.push_subshell(&limits).is_ok());
+        assert!(matches!(
+            counters.push_subshell(&limits),
+            Err(LimitExceeded::MaxSubshellDepth(2))
+        ));
+
+        counters.pop_subshell();
+        assert!(counters.push_subshell(&limits).is_ok());
+    }
+
+    #[test]
+    fn test_reset_for_execution() {
+        let limits = ExecutionLimits::new().max_commands(5);
+        let mut counters = ExecutionCounters::new();
+
+        // Exhaust command budget
+        for _ in 0..5 {
+            counters.tick_command(&limits).unwrap();
+        }
+        assert!(counters.tick_command(&limits).is_err());
+
+        // Also accumulate some loop/function state
+        counters.loop_iterations = vec![42];
+        counters.total_loop_iterations = 999;
+        counters.function_depth = 3;
+        counters.subst_depth = 2;
+        counters.subshell_depth = 2;
+
+        // Reset should restore all counters
+        counters.reset_for_execution();
+        assert_eq!(counters.commands, 0);
+        assert!(counters.loop_iterations.is_empty());
+        assert_eq!(counters.total_loop_iterations, 0);
+        assert_eq!(counters.function_depth, 0);
+        assert_eq!(counters.subst_depth, 0);
+        assert_eq!(counters.subshell_depth, 0);
+
+        // Should be able to tick commands again
+        assert!(counters.tick_command(&limits).is_ok());
+    }
+
+    #[test]
+    fn test_zero_limit_is_strict_policy() {
+        let limits = ExecutionLimits::cli()
+            .max_commands(0)
+            .max_loop_iterations(0)
+            .max_total_loop_iterations(0)
+            .max_function_depth(0)
+            .max_input_bytes(0)
+            .max_ast_depth(0)
+            .max_parser_operations(0)
+            .max_stdout_bytes(0)
+            .max_stderr_bytes(0)
+            .max_subst_depth(0)
+            .max_subshell_depth(0)
+            .max_file_descriptors(0)
+            .max_word_split_fields(0)
+            .max_word_split_bytes(0);
+
+        let defaults = ExecutionLimits::default();
+        assert_eq!(limits.max_commands, 0);
+        assert_eq!(limits.max_loop_iterations, 0);
+        assert_eq!(limits.max_total_loop_iterations, 0);
+        assert_eq!(limits.max_function_depth, 0);
+        assert_eq!(limits.max_input_bytes, 0);
+        assert_eq!(limits.max_ast_depth, 0);
+        assert_eq!(limits.max_parser_operations, 0);
+        assert_eq!(limits.max_stdout_bytes, 0);
+        assert_eq!(limits.max_stderr_bytes, 0);
+        assert_eq!(limits.max_subst_depth, 0);
+        assert_eq!(limits.max_subshell_depth, 0);
+        assert_eq!(limits.max_file_descriptors, 0);
+        assert_eq!(limits.max_word_split_fields, defaults.max_word_split_fields);
+        assert_eq!(limits.max_word_split_bytes, defaults.max_word_split_bytes);
+    }
+
+    #[test]
+    fn test_nonzero_limit_works() {
+        let limits = ExecutionLimits::default()
+            .max_commands(5)
+            .max_loop_iterations(7)
+            .max_total_loop_iterations(42)
+            .max_function_depth(3)
+            .max_input_bytes(1024)
+            .max_ast_depth(10)
+            .max_parser_operations(500)
+            .max_stdout_bytes(2048)
+            .max_stderr_bytes(4096)
+            .max_subst_depth(8)
+            .max_subshell_depth(6)
+            .max_file_descriptors(16)
+            .max_word_split_fields(17)
+            .max_word_split_bytes(18);
+
+        assert_eq!(limits.max_commands, 5);
+        assert_eq!(limits.max_loop_iterations, 7);
+        assert_eq!(limits.max_total_loop_iterations, 42);
+        assert_eq!(limits.max_function_depth, 3);
+        assert_eq!(limits.max_input_bytes, 1024);
+        assert_eq!(limits.max_ast_depth, 10);
+        assert_eq!(limits.max_parser_operations, 500);
+        assert_eq!(limits.max_stdout_bytes, 2048);
+        assert_eq!(limits.max_stderr_bytes, 4096);
+        assert_eq!(limits.max_subst_depth, 8);
+        assert_eq!(limits.max_subshell_depth, 6);
+        assert_eq!(limits.max_file_descriptors, 16);
+        assert_eq!(limits.max_word_split_fields, 17);
+        assert_eq!(limits.max_word_split_bytes, 18);
+    }
+
+    #[test]
+    fn test_session_limits_zero_is_strict_policy() {
+        let limits = SessionLimits::unlimited()
+            .max_total_commands(0)
+            .max_exec_calls(0);
+
+        assert_eq!(limits.max_total_commands, 0);
+        assert_eq!(limits.max_exec_calls, 0);
+    }
+
+    #[test]
+    fn test_memory_limits_zero_is_strict_policy() {
+        let limits = MemoryLimits::unlimited()
+            .max_variable_count(0)
+            .max_total_variable_bytes(0)
+            .max_array_entries(0)
+            .max_function_count(0)
+            .max_function_body_bytes(0);
+
+        assert_eq!(limits.max_variable_count, 0);
+        assert_eq!(limits.max_total_variable_bytes, 0);
+        assert_eq!(limits.max_array_entries, 0);
+        assert_eq!(limits.max_function_count, 0);
+        assert_eq!(limits.max_function_body_bytes, 0);
+    }
+}
