@@ -1,3 +1,4 @@
+import ApprovalCard from './approval-card.js';
 import MessageBubble from './message-bubble.js';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -135,6 +136,18 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.setSelectionRange(newPos, newPos);
   };
 
+  // Render an ApprovalCard in the chat display. Called from the
+  // stream reader when an approval_request chunk arrives.
+  const renderApprovalCard = (parsed, currentSessionId) => {
+    const card = new ApprovalCard();
+    card.setAttribute('request-id', parsed.request_id);
+    card.setAttribute('session-id', currentSessionId);
+    // setCalls must be called after the element is connected so the
+    // render() triggered by attribute changes picks up the calls.
+    document.getElementById('chat-display').prepend(card);
+    card.setCalls(parsed.calls || []);
+  };
+
   const sendMessage = () => {
     const message = chatInput.value.trim();
     if (message === '') return;
@@ -231,6 +244,20 @@ document.addEventListener('DOMContentLoaded', () => {
                   }
                 } catch (e) {
                   console.error('Error parsing JSON:', e);
+                }
+              } else if (line.trim() !== '') {
+                // Non-SSE line: could be an approval_request chunk
+                // emitted by ApprovalMiddleware. These are plain JSON
+                // objects (no "data: " prefix) sent on the same tx
+                // channel as the LLM stream.
+                try {
+                  const parsed = JSON.parse(line.trim());
+                  if (parsed.type === 'approval_request') {
+                    renderApprovalCard(parsed, sessionId);
+                  }
+                } catch (_e) {
+                  // Not JSON — ignore. The stream can contain
+                  // stray whitespace or other non-JSON content.
                 }
               }
             });
