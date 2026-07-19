@@ -1,6 +1,18 @@
 import ApprovalCard from './approval-card.js';
 import MessageBubble from './message-bubble.js';
 
+// Polyfill to get a UUID with a fallback if running in a non https
+// session or localhost
+if (!window.crypto.randomUUID) {
+  window.crypto.randomUUID = () =>
+    ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c) =>
+      (
+        c ^
+        (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))
+      ).toString(16),
+    );
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // Preload dog images to avoid fetching them each time
   const dogImages = [];

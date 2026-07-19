@@ -1,0 +1,2687 @@
+//! In-memory filesystem implementation.
+//!
+//! [`InMemoryFs`] provides a simple, fast, thread-safe filesystem that stores
+//! all data in memory using a `HashMap`.
+//!
+//! # Security Mitigations
+//!
+//! This module mitigates the following threats (see `specs/threat-model.md`):
+//!
+//! - **TM-ESC-001**: Path traversal → `normalize_path()` collapses `..` safely
+//! - **TM-ESC-002**: Symlink escape → symlinks stored but not followed
+//! - **TM-ESC-003**: Real FS access → in-memory by default, no real syscalls
+//! - **TM-DOS-011**: Symlink loops → no symlink resolution during path lookup
+//! - **TM-INJ-005**: Path injection → path normalization at all entry points
+//!
+//! # Resource Limits
+//!
+//! `InMemoryFs` enforces configurable limits to prevent memory exhaustion:
+//!
+//! - `max_total_bytes`: Maximum total size of all files (default: 100MB)
+//! - `max_file_size`: Maximum size of a single file (default: 10MB)
+//! - `max_file_count`: Maximum number of files (default: 10,000)
+//!
+//! See [`FsLimits`](crate::FsLimits) for configuration.
+//!
+//! # Fail Points (enabled with `failpoints` feature)
+//!
+//! For testing error handling, the following fail points are available:
+//!
+//! - `fs::read_file` - Inject failures in file reads
+//! - `fs::write_file` - Inject failures in file writes
+//! - `fs::mkdir` - Inject failures in directory creation
+//! - `fs::remove` - Inject failures in file/directory removal
+//! - `fs::lock_read` - Inject failures in read lock acquisition
+//! - `fs::lock_write` - Inject failures in write lock acquisition
+
+// RwLock.read()/write().unwrap() only panics on lock poisoning (prior panic
+// while holding lock). This is intentional - corrupted state should not propagate.
+#![allow(clippy::unwrap_used)]
+
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::io::{Error as IoError, ErrorKind};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::SystemTime;
+
+use super::limits::{FsLimits, FsUsage};
+use super::traits::{DirEntry, FileSystem, FileSystemExt, FileType, Metadata};
+use crate::bash::error::Result;
+
+#[cfg(feature = "failpoints")]
+use fail::fail_point;
+
+/// In-memory filesystem implementation.
+///
+/// `InMemoryFs` is the default filesystem used by [`Bash::new()`](crate::bash::Bash::new).
+/// It stores all files and directories in memory using a `HashMap`, making it
+/// ideal for virtual execution where no real filesystem access is needed.
+///
+/// # Features
+///
+/// - **Thread-safe**: Uses `RwLock` for concurrent read/write access
+/// - **Binary-safe**: Fully supports binary data including null bytes
+/// - **Default directories**: Creates `/`, `/tmp`, `/home`, `/home/user`, `/dev`
+/// - **Special devices**: `/dev/null` discards writes and returns empty on read
+///
+/// # Example
+///
+/// ```ignore
+/// use crate::bash::{Bash, FileSystem, InMemoryFs};
+/// use std::path::Path;
+/// use std::sync::Arc;
+///
+/// # #[tokio::main]
+/// # async fn main() -> bashkit::Result<()> {
+/// // InMemoryFs is the default when using Bash::new()
+/// let mut bash = Bash::new();
+///
+/// // Or create explicitly for direct filesystem access
+/// let fs = Arc::new(InMemoryFs::new());
+///
+/// // Write files
+/// fs.write_file(Path::new("/tmp/test.txt"), b"hello").await?;
+///
+/// // Read files
+/// let content = fs.read_file(Path::new("/tmp/test.txt")).await?;
+/// assert_eq!(content, b"hello");
+///
+/// // Create directories
+/// fs.mkdir(Path::new("/data/nested/dir"), true).await?;
+///
+/// // Check existence
+/// assert!(fs.exists(Path::new("/data/nested/dir")).await?);
+///
+/// // Use with Bash
+/// let mut bash = Bash::builder().fs(fs.clone()).build();
+/// bash.exec("echo 'from bash' >> /tmp/test.txt").await?;
+///
+/// let content = fs.read_file(Path::new("/tmp/test.txt")).await?;
+/// assert_eq!(content, b"hellofrom bash\n");
+/// # Ok(())
+/// # }
+/// ```ignore
+///
+/// # Default Directory Structure
+///
+/// `InMemoryFs::new()` creates these directories:
+///
+/// ```text
+/// /
+/// ├── tmp/
+/// ├── home/
+/// │   └── user/
+/// └── dev/
+///     └── null  (special device)
+/// ```ignore
+///
+/// # Binary Data
+///
+/// The filesystem fully supports binary data:
+///
+/// ```ignore
+/// use crate::bash::{FileSystem, InMemoryFs};
+/// use std::path::Path;
+///
+/// # #[tokio::main]
+/// # async fn main() -> bashkit::Result<()> {
+/// let fs = InMemoryFs::new();
+///
+/// // Write binary with null bytes
+/// let data = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF];
+/// fs.write_file(Path::new("/tmp/binary.bin"), &data).await?;
+///
+/// // Read it back unchanged
+/// let read = fs.read_file(Path::new("/tmp/binary.bin")).await?;
+/// assert_eq!(read, data);
+/// # Ok(())
+/// # }
+/// ```ignore
+///
+/// # Resource Limits
+///
+/// Configure limits to prevent memory exhaustion:
+///
+/// ```ignore
+/// use crate::bash::{FileSystem, InMemoryFs, FsLimits};
+/// use std::path::Path;
+///
+/// # #[tokio::main]
+/// # async fn main() -> bashkit::Result<()> {
+/// let limits = FsLimits::new()
+///     .max_total_bytes(1_000_000)   // 1MB total
+///     .max_file_size(100_000)       // 100KB per file
+///     .max_file_count(100);         // 100 files max
+///
+/// let fs = InMemoryFs::with_limits(limits);
+///
+/// // This works
+/// fs.write_file(Path::new("/tmp/small.txt"), b"hello").await?;
+///
+/// // This would fail with "file too large" error:
+/// // let big_data = vec![0u8; 200_000];
+/// // fs.write_file(Path::new("/tmp/big.bin"), &big_data).await?;
+/// # Ok(())
+/// # }
+/// ```ignore
+pub struct InMemoryFs {
+    entries: RwLock<HashMap<PathBuf, FsEntry>>,
+    limits: FsLimits,
+}
+
+/// Lazy file content loader type.
+///
+/// Called at most once when the file is first read. The loader is never called
+/// if the file is overwritten before being read.
+pub type LazyLoader = Arc<dyn Fn() -> Vec<u8> + Send + Sync>;
+
+enum FsEntry {
+    File {
+        content: Vec<u8>,
+        metadata: Metadata,
+    },
+    /// A file whose content is loaded on first read.
+    ///
+    /// `stat()` returns metadata without triggering the load.
+    /// On first `read_file()`, the loader is called and the entry is replaced
+    /// with a regular `File`. If written before read, the loader is never called.
+    LazyFile {
+        loader: LazyLoader,
+        metadata: Metadata,
+    },
+    Directory {
+        metadata: Metadata,
+    },
+    Symlink {
+        target: PathBuf,
+        metadata: Metadata,
+    },
+    Fifo {
+        content: Vec<u8>,
+        metadata: Metadata,
+    },
+}
+
+impl Clone for FsEntry {
+    fn clone(&self) -> Self {
+        match self {
+            Self::File { content, metadata } => Self::File {
+                content: content.clone(),
+                metadata: metadata.clone(),
+            },
+            Self::LazyFile { loader, metadata } => Self::LazyFile {
+                loader: Arc::clone(loader),
+                metadata: metadata.clone(),
+            },
+            Self::Directory { metadata } => Self::Directory {
+                metadata: metadata.clone(),
+            },
+            Self::Symlink { target, metadata } => Self::Symlink {
+                target: target.clone(),
+                metadata: metadata.clone(),
+            },
+            Self::Fifo { content, metadata } => Self::Fifo {
+                content: content.clone(),
+                metadata: metadata.clone(),
+            },
+        }
+    }
+}
+
+impl std::fmt::Debug for FsEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File { content, metadata } => f
+                .debug_struct("File")
+                .field("content_len", &content.len())
+                .field("metadata", metadata)
+                .finish(),
+            Self::LazyFile { metadata, .. } => f
+                .debug_struct("LazyFile")
+                .field("metadata", metadata)
+                .finish(),
+            Self::Directory { metadata } => f
+                .debug_struct("Directory")
+                .field("metadata", metadata)
+                .finish(),
+            Self::Symlink { target, metadata } => f
+                .debug_struct("Symlink")
+                .field("target", target)
+                .field("metadata", metadata)
+                .finish(),
+            Self::Fifo { content, metadata } => f
+                .debug_struct("Fifo")
+                .field("content_len", &content.len())
+                .field("metadata", metadata)
+                .finish(),
+        }
+    }
+}
+
+/// A snapshot of the virtual filesystem state.
+///
+/// Captures all files, directories, and symlinks. Can be serialized with serde
+/// for persistence across sessions.
+///
+/// # Example
+///
+/// ```ignore
+/// use crate::bash::{FileSystem, InMemoryFs};
+/// use std::path::Path;
+///
+/// # #[tokio::main]
+/// # async fn main() -> bashkit::Result<()> {
+/// let fs = InMemoryFs::new();
+/// fs.write_file(Path::new("/tmp/test.txt"), b"hello").await?;
+///
+/// let snapshot = fs.snapshot();
+///
+/// // Serialize to JSON
+/// let json = serde_json::to_string(&snapshot).unwrap();
+///
+/// // Deserialize and restore
+/// let restored: bashkit::VfsSnapshot = serde_json::from_str(&json).unwrap();
+/// let fs2 = InMemoryFs::new();
+/// fs2.restore(&restored);
+///
+/// let content = fs2.read_file(Path::new("/tmp/test.txt")).await?;
+/// assert_eq!(content, b"hello");
+/// # Ok(())
+/// # }
+/// ```ignore
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VfsSnapshot {
+    entries: Vec<VfsEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct VfsEntry {
+    path: PathBuf,
+    kind: VfsEntryKind,
+    mode: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+enum VfsEntryKind {
+    File { content: Vec<u8> },
+    Directory,
+    Symlink { target: PathBuf },
+    Fifo,
+}
+
+impl Default for InMemoryFs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InMemoryFs {
+    // File-count quotas cover every non-directory entry. Use negation so new
+    // FsEntry variants are automatically counted without an explicit update here.
+    fn entry_counts_toward_file_count(entry: &FsEntry) -> bool {
+        !matches!(entry, FsEntry::Directory { .. })
+    }
+
+    fn snapshot_entry_counts_toward_file_count(kind: &VfsEntryKind) -> bool {
+        !matches!(kind, VfsEntryKind::Directory)
+    }
+
+    /// Create a new in-memory filesystem with default directories and default limits.
+    ///
+    /// Creates the following directory structure:
+    /// - `/` - Root directory
+    /// - `/tmp` - Temporary files
+    /// - `/home` - Home directories
+    /// - `/home/user` - Default user home
+    /// - `/dev` - Device files
+    /// - `/dev/null` - Null device (discards writes, returns empty)
+    ///
+    /// # Default Limits
+    ///
+    /// - Total filesystem: 100MB
+    /// - Single file: 10MB
+    /// - File count: 10,000
+    ///
+    /// Use [`InMemoryFs::with_limits`] for custom limits.
+    ///
+    /// # Example
+    ///
+    /// ```ignore    /// use crate::bash::{FileSystem, InMemoryFs};
+    /// use std::path::Path;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> bashkit::Result<()> {
+    /// let fs = InMemoryFs::new();
+    ///
+    /// // Default directories exist
+    /// assert!(fs.exists(Path::new("/tmp")).await?);
+    /// assert!(fs.exists(Path::new("/home/user")).await?);
+    /// assert!(fs.exists(Path::new("/dev/null")).await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new() -> Self {
+        Self::with_limits(FsLimits::default())
+    }
+
+    /// Create a new in-memory filesystem with custom limits.
+    ///
+    /// # Example
+    ///
+    /// ```ignore    /// use crate::bash::{FileSystem, InMemoryFs, FsLimits};
+    /// use std::path::Path;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> bashkit::Result<()> {
+    /// let limits = FsLimits::new()
+    ///     .max_total_bytes(50_000_000)  // 50MB
+    ///     .max_file_size(5_000_000);    // 5MB per file
+    ///
+    /// let fs = InMemoryFs::with_limits(limits);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_limits(limits: FsLimits) -> Self {
+        let mut entries = HashMap::new();
+
+        // Create root directory
+        entries.insert(
+            PathBuf::from("/"),
+            FsEntry::Directory {
+                metadata: Metadata {
+                    file_type: FileType::Directory,
+                    size: 0,
+                    mode: 0o755,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+
+        // Create common directories
+        for dir in &["/tmp", "/home", "/home/user", "/dev"] {
+            entries.insert(
+                PathBuf::from(dir),
+                FsEntry::Directory {
+                    metadata: Metadata {
+                        file_type: FileType::Directory,
+                        size: 0,
+                        mode: 0o755,
+                        modified: SystemTime::now(),
+                        created: SystemTime::now(),
+                    },
+                },
+            );
+        }
+
+        // Create special device files
+        // /dev/null - discards all writes, returns empty on read
+        entries.insert(
+            PathBuf::from("/dev/null"),
+            FsEntry::File {
+                content: Vec::new(),
+                metadata: Metadata {
+                    file_type: FileType::File,
+                    size: 0,
+                    mode: 0o666,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+
+        // /dev/urandom and /dev/random - random byte sources (bounded reads)
+        for dev in &["/dev/urandom", "/dev/random"] {
+            entries.insert(
+                PathBuf::from(dev),
+                FsEntry::File {
+                    content: Vec::new(),
+                    metadata: Metadata {
+                        file_type: FileType::File,
+                        size: 0,
+                        mode: 0o666,
+                        modified: SystemTime::now(),
+                        created: SystemTime::now(),
+                    },
+                },
+            );
+        }
+
+        // /dev/fd - directory for process substitution file descriptors
+        entries.insert(
+            PathBuf::from("/dev/fd"),
+            FsEntry::Directory {
+                metadata: Metadata {
+                    file_type: FileType::Directory,
+                    size: 0,
+                    mode: 0o755,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+
+        Self {
+            entries: RwLock::new(entries),
+            limits,
+        }
+    }
+
+    /// THREAT[TM-DOS-003]: Generate bounded random bytes for `/dev/urandom` and `/dev/random`.
+    /// Returns exactly 8192 bytes to prevent unbounded reads while
+    /// supporting common patterns like `od -N8 -tx1 /dev/urandom`.
+    fn generate_random_bytes() -> Result<Vec<u8>> {
+        const SIZE: usize = 8192;
+        let mut buf = vec![0; SIZE];
+        // Important decision: use the OS CSPRNG backing getrandom, not
+        // non-CSPRNG hasher seeds, because scripts commonly use these paths
+        // for tokens, salts, nonces, and keys.
+        getrandom::fill(&mut buf).map_err(|_| IoError::other("random device unavailable"))?;
+        Ok(buf)
+    }
+
+    /// Compute current usage statistics.
+    fn compute_usage(&self) -> FsUsage {
+        let entries = self.entries.read().unwrap();
+        let mut total_bytes = 0u64;
+        let mut file_count = 0u64;
+        let mut dir_count = 0u64;
+
+        for entry in entries.values() {
+            match entry {
+                FsEntry::File { content, .. } | FsEntry::Fifo { content, .. } => {
+                    total_bytes += content.len() as u64;
+                }
+                FsEntry::Directory { .. } => {
+                    dir_count += 1;
+                }
+                FsEntry::LazyFile { metadata, .. } => {
+                    // Lazy files count by their declared metadata size
+                    total_bytes += metadata.size;
+                }
+                FsEntry::Symlink { metadata, .. } => {
+                    // THREAT[TM-DOS-013]: Symlink target bytes count toward total usage
+                    total_bytes += metadata.size;
+                }
+            }
+            if Self::entry_counts_toward_file_count(entry) {
+                file_count += 1;
+            }
+        }
+
+        FsUsage::new(total_bytes, file_count, dir_count)
+    }
+
+    /// Check limits before writing. Returns error if limits exceeded.
+    fn check_write_limits(
+        &self,
+        entries: &HashMap<PathBuf, FsEntry>,
+        path: &Path,
+        new_size: usize,
+    ) -> Result<()> {
+        // Check single file size limit
+        self.limits
+            .check_file_size(new_size as u64)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        // Calculate current total and what the new total would be
+        let mut current_total = 0u64;
+        let mut current_file_count = 0u64;
+        let mut old_file_size = 0u64;
+        let mut is_new_file = true;
+
+        for (entry_path, entry) in entries.iter() {
+            let entry_size = match entry {
+                FsEntry::File { content, .. } | FsEntry::Fifo { content, .. } => {
+                    content.len() as u64
+                }
+                // THREAT[TM-DOS-013]: Symlink target bytes count toward total usage
+                FsEntry::LazyFile { metadata, .. } | FsEntry::Symlink { metadata, .. } => {
+                    metadata.size
+                }
+                FsEntry::Directory { .. } => 0,
+            };
+            current_total += entry_size;
+            if Self::entry_counts_toward_file_count(entry) {
+                current_file_count += 1;
+                if entry_path == path {
+                    old_file_size = entry_size;
+                    is_new_file = false;
+                }
+            }
+        }
+
+        // Check file count limit (only if this is a new file)
+        if is_new_file {
+            self.limits
+                .check_file_count(current_file_count)
+                .map_err(|e| IoError::other(e.to_string()))?;
+        }
+
+        // Check total bytes limit
+        // New total = current - old_file_size + new_size
+        let new_total = current_total - old_file_size + new_size as u64;
+        if new_total > self.limits.max_total_bytes {
+            return Err(IoError::other(format!(
+                "filesystem full: {} bytes would exceed {} byte limit",
+                new_total, self.limits.max_total_bytes
+            ))
+            .into());
+        }
+
+        Ok(())
+    }
+
+    /// Create a snapshot of the current filesystem state.
+    ///
+    /// Returns a `VfsSnapshot` that captures all files, directories, and symlinks.
+    /// The snapshot can be restored later with [`restore`](InMemoryFs::restore).
+    ///
+    /// # Example
+    ///
+    /// ```ignore    /// use crate::bash::{FileSystem, InMemoryFs};
+    /// use std::path::Path;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> bashkit::Result<()> {
+    /// let fs = InMemoryFs::new();
+    /// fs.write_file(Path::new("/tmp/test.txt"), b"hello").await?;
+    ///
+    /// // Take a snapshot
+    /// let snapshot = fs.snapshot();
+    ///
+    /// // Modify the filesystem
+    /// fs.write_file(Path::new("/tmp/test.txt"), b"modified").await?;
+    ///
+    /// // Restore to the snapshot
+    /// fs.restore(&snapshot);
+    ///
+    /// let content = fs.read_file(Path::new("/tmp/test.txt")).await?;
+    /// assert_eq!(content, b"hello");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn snapshot(&self) -> VfsSnapshot {
+        // Use write lock to materialize any lazy files before snapshotting
+        let mut entries = self.entries.write().unwrap();
+
+        // Materialize all lazy files
+        let lazy_paths: Vec<PathBuf> = entries
+            .iter()
+            .filter(|(_, e)| matches!(e, FsEntry::LazyFile { .. }))
+            .map(|(p, _)| p.clone())
+            .collect();
+        for path in lazy_paths {
+            if let Some(FsEntry::LazyFile { loader, metadata }) = entries.remove(&path) {
+                let content = loader();
+                if let Err(_err) = self.check_write_limits(&entries, &path, content.len()) {
+                    entries.insert(path, FsEntry::LazyFile { loader, metadata });
+                    continue;
+                }
+                let mut metadata = metadata;
+                metadata.size = content.len() as u64;
+                entries.insert(path, FsEntry::File { content, metadata });
+            }
+        }
+
+        let mut files = Vec::new();
+
+        for (path, entry) in entries.iter() {
+            match entry {
+                FsEntry::File { content, metadata } => {
+                    files.push(VfsEntry {
+                        path: path.clone(),
+                        kind: VfsEntryKind::File {
+                            content: content.clone(),
+                        },
+                        mode: metadata.mode,
+                    });
+                }
+                FsEntry::LazyFile { .. } => {
+                    // Lazy files that exceed limits stay lazy and are omitted.
+                }
+                FsEntry::Directory { metadata } => {
+                    files.push(VfsEntry {
+                        path: path.clone(),
+                        kind: VfsEntryKind::Directory,
+                        mode: metadata.mode,
+                    });
+                }
+                FsEntry::Symlink {
+                    target, metadata, ..
+                } => {
+                    files.push(VfsEntry {
+                        path: path.clone(),
+                        kind: VfsEntryKind::Symlink {
+                            target: target.clone(),
+                        },
+                        mode: metadata.mode,
+                    });
+                }
+                FsEntry::Fifo { metadata, .. } => {
+                    files.push(VfsEntry {
+                        path: path.clone(),
+                        kind: VfsEntryKind::Fifo,
+                        mode: metadata.mode,
+                    });
+                }
+            }
+        }
+
+        VfsSnapshot { entries: files }
+    }
+
+    /// Restore the filesystem to a previously captured snapshot.
+    ///
+    /// This replaces all current filesystem contents with the snapshot's state.
+    /// Any files created after the snapshot was taken will be removed.
+    ///
+    /// # Example
+    ///
+    /// ```ignore    /// use crate::bash::{FileSystem, InMemoryFs};
+    /// use std::path::Path;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> bashkit::Result<()> {
+    /// let fs = InMemoryFs::new();
+    /// fs.write_file(Path::new("/tmp/data.txt"), b"original").await?;
+    ///
+    /// let snapshot = fs.snapshot();
+    ///
+    /// // Make changes
+    /// fs.write_file(Path::new("/tmp/data.txt"), b"changed").await?;
+    /// fs.write_file(Path::new("/tmp/new.txt"), b"new file").await?;
+    ///
+    /// // Restore
+    /// fs.restore(&snapshot)?;
+    ///
+    /// // Original state is back
+    /// let content = fs.read_file(Path::new("/tmp/data.txt")).await?;
+    /// assert_eq!(content, b"original");
+    ///
+    /// // New file is gone
+    /// assert!(!fs.exists(Path::new("/tmp/new.txt")).await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any snapshot entry violates the configured VFS
+    /// limits (path validation, file size, total bytes, or file count). On
+    /// error the existing filesystem contents are left untouched (issue
+    /// #1576) so callers can refuse the restore atomically.
+    // THREAT[TM-ESC-012]: Enforce VFS limits to prevent bypass via restore()
+    pub fn restore(&self, snapshot: &VfsSnapshot) -> crate::bash::error::Result<()> {
+        // Validate ALL snapshot entries before clearing existing state.
+        // If any validation fails, return early WITHOUT clearing.
+        let mut total_bytes = 0u64;
+        let mut file_count = 0u64;
+
+        for entry in &snapshot.entries {
+            self.limits
+                .validate_path(&entry.path)
+                .map_err(|e| IoError::other(e.to_string()))?;
+            if let VfsEntryKind::File { content } = &entry.kind {
+                self.limits
+                    .check_file_size(content.len() as u64)
+                    .map_err(|e| IoError::other(e.to_string()))?;
+                total_bytes += content.len() as u64;
+            }
+            if Self::snapshot_entry_counts_toward_file_count(&entry.kind) {
+                file_count += 1;
+            }
+        }
+
+        if total_bytes > self.limits.max_total_bytes {
+            return Err(IoError::other("snapshot total bytes exceed limit").into());
+        }
+        self.limits
+            .check_final_file_count(file_count)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        let mut entries = self.entries.write().unwrap();
+        entries.clear();
+
+        let now = SystemTime::now();
+
+        for entry in &snapshot.entries {
+            match &entry.kind {
+                VfsEntryKind::File { content } => {
+                    entries.insert(
+                        entry.path.clone(),
+                        FsEntry::File {
+                            content: content.clone(),
+                            metadata: Metadata {
+                                file_type: FileType::File,
+                                size: content.len() as u64,
+                                mode: entry.mode,
+                                modified: now,
+                                created: now,
+                            },
+                        },
+                    );
+                }
+                VfsEntryKind::Directory => {
+                    entries.insert(
+                        entry.path.clone(),
+                        FsEntry::Directory {
+                            metadata: Metadata {
+                                file_type: FileType::Directory,
+                                size: 0,
+                                mode: entry.mode,
+                                modified: now,
+                                created: now,
+                            },
+                        },
+                    );
+                }
+                VfsEntryKind::Symlink { target } => {
+                    entries.insert(
+                        entry.path.clone(),
+                        FsEntry::Symlink {
+                            target: target.clone(),
+                            metadata: Metadata {
+                                file_type: FileType::Symlink,
+                                size: 0,
+                                mode: entry.mode,
+                                modified: now,
+                                created: now,
+                            },
+                        },
+                    );
+                }
+                VfsEntryKind::Fifo => {
+                    entries.insert(
+                        entry.path.clone(),
+                        FsEntry::Fifo {
+                            content: Vec::new(),
+                            metadata: Metadata {
+                                file_type: FileType::Fifo,
+                                size: 0,
+                                mode: entry.mode,
+                                modified: now,
+                                created: now,
+                            },
+                        },
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn normalize_path(path: &Path) -> PathBuf {
+        super::normalize_path(path)
+    }
+
+    /// Add a file with specific mode (synchronous, for initial setup).
+    ///
+    /// This method is primarily used by [`BashBuilder`](crate::bash::BashBuilder) to
+    /// pre-populate the filesystem during construction. For runtime file operations,
+    /// use the async [`FileSystem::write_file`] method instead.
+    ///
+    /// Parent directories are created automatically.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Absolute path where the file will be created
+    /// * `content` - File content (will be converted to bytes)
+    /// * `mode` - Unix permission mode (e.g., `0o644` for writable, `0o444` for readonly)
+    ///
+    /// # Example
+    ///
+    /// ```ignore    /// use crate::bash::InMemoryFs;
+    ///
+    /// let fs = InMemoryFs::new();
+    ///
+    /// // Add a writable config file
+    /// fs.add_file("/config/app.conf", "debug=true\n", 0o644);
+    ///
+    /// // Add a readonly file
+    /// fs.add_file("/etc/version", "1.0.0", 0o444);
+    /// ```
+    // THREAT[TM-ESC-012]: Enforce VFS limits to prevent bypass via add_file()
+    pub fn add_file(&self, path: impl AsRef<Path>, content: impl AsRef<[u8]>, mode: u32) {
+        let path = Self::normalize_path(path.as_ref());
+        let content = content.as_ref();
+
+        // Validate path before acquiring write lock
+        if self.limits.validate_path(&path).is_err() {
+            return;
+        }
+
+        let mut entries = self.entries.write().unwrap();
+
+        // Check write limits (file size, file count, total bytes)
+        if self
+            .check_write_limits(&entries, &path, content.len())
+            .is_err()
+        {
+            return;
+        }
+
+        // Ensure parent directories exist
+        if let Some(parent) = path.parent() {
+            let mut current = PathBuf::from("/");
+            for component in parent.components().skip(1) {
+                current.push(component);
+                if !entries.contains_key(&current) {
+                    entries.insert(
+                        current.clone(),
+                        FsEntry::Directory {
+                            metadata: Metadata {
+                                file_type: FileType::Directory,
+                                size: 0,
+                                mode: 0o755,
+                                modified: SystemTime::now(),
+                                created: SystemTime::now(),
+                            },
+                        },
+                    );
+                }
+            }
+        }
+
+        entries.insert(
+            path,
+            FsEntry::File {
+                content: content.to_vec(),
+                metadata: Metadata {
+                    file_type: FileType::File,
+                    size: content.len() as u64,
+                    mode,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+    }
+
+    /// Add a lazy file whose content is loaded on first read.
+    ///
+    /// The `loader` closure is called at most once when the file is first read.
+    /// If the file is overwritten before being read, the loader is never called.
+    /// `stat()` returns metadata without triggering the load.
+    ///
+    /// `size_hint` is used for metadata and resource-limit accounting before
+    /// the content is actually loaded.
+    ///
+    /// # Example
+    ///
+    /// ```ignore    /// use crate::bash::InMemoryFs;
+    /// use std::sync::Arc;
+    ///
+    /// let fs = InMemoryFs::new();
+    /// fs.add_lazy_file("/data/large.bin", 1024, 0o644, Arc::new(|| {
+    ///     vec![0u8; 1024]
+    /// }));
+    /// ```
+    pub fn add_lazy_file(
+        &self,
+        path: impl AsRef<Path>,
+        size_hint: u64,
+        mode: u32,
+        loader: LazyLoader,
+    ) {
+        let path = Self::normalize_path(path.as_ref());
+
+        if self.limits.validate_path(&path).is_err() {
+            return;
+        }
+
+        let mut entries = self.entries.write().unwrap();
+        let Ok(size_hint_usize) = usize::try_from(size_hint) else {
+            return;
+        };
+        if self
+            .check_write_limits(&entries, &path, size_hint_usize)
+            .is_err()
+        {
+            return;
+        }
+
+        // Ensure parent directories exist
+        if let Some(parent) = path.parent() {
+            let mut current = PathBuf::from("/");
+            for component in parent.components().skip(1) {
+                current.push(component);
+                if !entries.contains_key(&current) {
+                    entries.insert(
+                        current.clone(),
+                        FsEntry::Directory {
+                            metadata: Metadata {
+                                file_type: FileType::Directory,
+                                size: 0,
+                                mode: 0o755,
+                                modified: SystemTime::now(),
+                                created: SystemTime::now(),
+                            },
+                        },
+                    );
+                }
+            }
+        }
+
+        entries.insert(
+            path,
+            FsEntry::LazyFile {
+                loader,
+                metadata: Metadata {
+                    file_type: FileType::File,
+                    size: size_hint,
+                    mode,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+    }
+}
+
+#[async_trait]
+impl FileSystem for InMemoryFs {
+    async fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        // THREAT[TM-DOS-012, TM-DOS-013, TM-DOS-015]: Validate path before use
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        // Fail point: simulate read failures
+        #[cfg(feature = "failpoints")]
+        fail_point!("fs::read_file", |action| {
+            match action.as_deref() {
+                Some("io_error") => {
+                    return Err(IoError::other("injected I/O error").into());
+                }
+                Some("permission_denied") => {
+                    return Err(
+                        IoError::new(ErrorKind::PermissionDenied, "permission denied").into(),
+                    );
+                }
+                Some("corrupt_data") => {
+                    // Return garbage data instead of actual content
+                    return Ok(vec![0xFF, 0xFE, 0x00, 0x01]);
+                }
+                _ => {}
+            }
+            Err(IoError::other("fail point triggered").into())
+        });
+
+        let path = Self::normalize_path(path);
+
+        // /dev/urandom and /dev/random: return bounded random bytes
+        if path == Path::new("/dev/urandom") || path == Path::new("/dev/random") {
+            return Self::generate_random_bytes();
+        }
+
+        // First try with a read lock for the common (non-lazy) case
+        {
+            let entries = self.entries.read().unwrap();
+            match entries.get(&path) {
+                Some(FsEntry::File { content, .. }) | Some(FsEntry::Fifo { content, .. }) => {
+                    return Ok(content.clone());
+                }
+                Some(FsEntry::Directory { .. }) => {
+                    return Err(IoError::other("is a directory").into());
+                }
+                Some(FsEntry::Symlink { .. }) => {
+                    return Err(IoError::new(ErrorKind::NotFound, "file not found").into());
+                }
+                Some(FsEntry::LazyFile { .. }) => {
+                    // Need write lock to materialize — fall through
+                }
+                None => {
+                    return Err(IoError::new(ErrorKind::NotFound, "file not found").into());
+                }
+            }
+        }
+
+        // Materialize lazy file: acquire write lock
+        let mut entries = self.entries.write().unwrap();
+        match entries.get(&path) {
+            Some(FsEntry::LazyFile { .. }) => {
+                // Extract loader, call it, replace entry
+                if let Some(FsEntry::LazyFile { loader, metadata }) = entries.remove(&path) {
+                    let content = loader();
+                    if let Err(err) = self.check_write_limits(&entries, &path, content.len()) {
+                        entries.insert(path, FsEntry::LazyFile { loader, metadata });
+                        return Err(err);
+                    }
+                    let mut metadata = metadata;
+                    metadata.size = content.len() as u64;
+                    let result = content.clone();
+                    entries.insert(path, FsEntry::File { content, metadata });
+                    return Ok(result);
+                }
+                unreachable!()
+            }
+            // Another thread may have materialized it between lock releases
+            Some(FsEntry::File { content, .. }) | Some(FsEntry::Fifo { content, .. }) => {
+                return Ok(content.clone());
+            }
+            Some(FsEntry::Directory { .. }) => {
+                return Err(IoError::other("is a directory").into());
+            }
+            Some(FsEntry::Symlink { .. }) => {
+                // Symlinks are intentionally not followed for security (TM-ESC-002, TM-DOS-011)
+                Err(IoError::new(ErrorKind::NotFound, "file not found").into())
+            }
+            None => Err(IoError::new(ErrorKind::NotFound, "file not found").into()),
+        }
+    }
+
+    async fn write_file(&self, path: &Path, content: &[u8]) -> Result<()> {
+        // THREAT[TM-DOS-012, TM-DOS-013, TM-DOS-015]: Validate path before use
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        // Fail point: simulate write failures
+        #[cfg(feature = "failpoints")]
+        fail_point!("fs::write_file", |action| {
+            match action.as_deref() {
+                Some("io_error") => {
+                    return Err(IoError::other("injected I/O error").into());
+                }
+                Some("disk_full") => {
+                    return Err(IoError::other("no space left on device").into());
+                }
+                Some("permission_denied") => {
+                    return Err(
+                        IoError::new(ErrorKind::PermissionDenied, "permission denied").into(),
+                    );
+                }
+                Some("partial_write") => {
+                    // Simulate partial write - this tests data integrity handling
+                    // In a real scenario, this could corrupt data
+                    return Err(IoError::new(ErrorKind::Interrupted, "partial write").into());
+                }
+                _ => {}
+            }
+            Err(IoError::other("fail point triggered").into())
+        });
+
+        let path = Self::normalize_path(path);
+
+        // Special handling for /dev/null - discard all writes
+        if path == Path::new("/dev/null") {
+            return Ok(());
+        }
+
+        let mut entries = self.entries.write().unwrap();
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent()
+            && !entries.contains_key(parent)
+            && parent != Path::new("/")
+        {
+            return Err(IoError::new(ErrorKind::NotFound, "parent directory not found").into());
+        }
+
+        // Cannot write to a directory
+        if let Some(FsEntry::Directory { .. }) = entries.get(&path) {
+            return Err(IoError::other("is a directory").into());
+        }
+
+        // Check limits before writing
+        self.check_write_limits(&entries, &path, content.len())?;
+
+        // Preserve FIFO type when writing to a named pipe
+        let is_fifo = matches!(entries.get(&path), Some(FsEntry::Fifo { .. }));
+        if is_fifo {
+            entries.insert(
+                path,
+                FsEntry::Fifo {
+                    content: content.to_vec(),
+                    metadata: Metadata {
+                        file_type: FileType::Fifo,
+                        size: content.len() as u64,
+                        mode: 0o644,
+                        modified: SystemTime::now(),
+                        created: SystemTime::now(),
+                    },
+                },
+            );
+        } else {
+            entries.insert(
+                path,
+                FsEntry::File {
+                    content: content.to_vec(),
+                    metadata: Metadata {
+                        file_type: FileType::File,
+                        size: content.len() as u64,
+                        mode: 0o644,
+                        modified: SystemTime::now(),
+                        created: SystemTime::now(),
+                    },
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn append_file(&self, path: &Path, content: &[u8]) -> Result<()> {
+        // THREAT[TM-DOS-012, TM-DOS-013, TM-DOS-015]: Validate path before use
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        let path = Self::normalize_path(path);
+
+        // Special handling for /dev/null - discard all writes
+        if path == Path::new("/dev/null") {
+            return Ok(());
+        }
+
+        // THREAT[TM-DOS-034]: Single write lock for entire read-check-write to
+        // prevent TOCTOU race where file size changes between lock acquisitions.
+        let mut entries = self.entries.write().unwrap();
+
+        match entries.get(&path) {
+            Some(FsEntry::Directory { .. }) => {
+                return Err(IoError::other("is a directory").into());
+            }
+            Some(FsEntry::Symlink { .. }) => {
+                return Err(IoError::new(ErrorKind::NotFound, "file not found").into());
+            }
+            None => {
+                // File doesn't exist - create via check_write_limits + insert
+                // (inline instead of calling write_file to avoid deadlock on entries lock)
+                self.check_write_limits(&entries, &path, content.len())?;
+                if let Some(parent) = path.parent()
+                    && !entries.contains_key(parent)
+                    && parent != Path::new("/")
+                {
+                    return Err(
+                        IoError::new(ErrorKind::NotFound, "parent directory not found").into(),
+                    );
+                }
+                entries.insert(
+                    path,
+                    FsEntry::File {
+                        content: content.to_vec(),
+                        metadata: Metadata {
+                            file_type: FileType::File,
+                            size: content.len() as u64,
+                            mode: 0o644,
+                            modified: SystemTime::now(),
+                            created: SystemTime::now(),
+                        },
+                    },
+                );
+                return Ok(());
+            }
+            Some(FsEntry::LazyFile { .. }) => {
+                // Materialize lazy file before appending.
+                if let Some(FsEntry::LazyFile { loader, metadata }) = entries.remove(&path) {
+                    let loaded = loader();
+                    if let Err(err) = self.check_write_limits(&entries, &path, loaded.len()) {
+                        entries.insert(path, FsEntry::LazyFile { loader, metadata });
+                        return Err(err);
+                    }
+                    let mut metadata = metadata;
+                    metadata.size = loaded.len() as u64;
+                    entries.insert(
+                        path.clone(),
+                        FsEntry::File {
+                            content: loaded,
+                            metadata,
+                        },
+                    );
+                }
+                // Fall through to append logic below
+            }
+            Some(FsEntry::File { .. } | FsEntry::Fifo { .. }) => {
+                // Fall through to append logic below
+            }
+        }
+
+        // File exists - check limits with fresh data under the same write lock
+        let current_file_size = match entries.get(&path) {
+            Some(FsEntry::File {
+                content: existing, ..
+            })
+            | Some(FsEntry::Fifo {
+                content: existing, ..
+            }) => existing.len(),
+            _ => 0,
+        };
+        let new_file_size = current_file_size + content.len();
+
+        // Check per-file size limit
+        self.limits
+            .check_file_size(new_file_size as u64)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        // Check total bytes limit
+        let mut current_total = 0u64;
+        for entry in entries.values() {
+            match entry {
+                FsEntry::File {
+                    content: file_content,
+                    ..
+                }
+                | FsEntry::Fifo {
+                    content: file_content,
+                    ..
+                } => {
+                    current_total += file_content.len() as u64;
+                }
+                FsEntry::LazyFile { metadata, .. } => {
+                    current_total += metadata.size;
+                }
+                _ => {}
+            }
+        }
+        let new_total = current_total + content.len() as u64;
+        if new_total > self.limits.max_total_bytes {
+            return Err(IoError::other(format!(
+                "filesystem full: {} bytes would exceed {} byte limit",
+                new_total, self.limits.max_total_bytes
+            ))
+            .into());
+        }
+
+        // Actually append
+        if let Some(
+            FsEntry::File {
+                content: existing,
+                metadata,
+            }
+            | FsEntry::Fifo {
+                content: existing,
+                metadata,
+            },
+        ) = entries.get_mut(&path)
+        {
+            existing.extend_from_slice(content);
+            metadata.size = existing.len() as u64;
+            metadata.modified = SystemTime::now();
+        }
+
+        Ok(())
+    }
+
+    async fn mkdir(&self, path: &Path, recursive: bool) -> Result<()> {
+        // THREAT[TM-DOS-012, TM-DOS-013, TM-DOS-015]: Validate path before use
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        let path = Self::normalize_path(path);
+        let mut entries = self.entries.write().unwrap();
+
+        if recursive {
+            let mut current = PathBuf::from("/");
+            for component in path.components().skip(1) {
+                current.push(component);
+                match entries.get(&current) {
+                    Some(FsEntry::Directory { .. }) => {
+                        // Directory exists, continue to next component
+                    }
+                    Some(
+                        FsEntry::File { .. }
+                        | FsEntry::LazyFile { .. }
+                        | FsEntry::Symlink { .. }
+                        | FsEntry::Fifo { .. },
+                    ) => {
+                        // File, symlink, or fifo exists at path - cannot create directory
+                        return Err(IoError::new(ErrorKind::AlreadyExists, "file exists").into());
+                    }
+                    None => {
+                        // THREAT[TM-DOS-012]: Check dir count limit before creating
+                        let dir_count = entries
+                            .values()
+                            .filter(|e| matches!(e, FsEntry::Directory { .. }))
+                            .count() as u64;
+                        self.limits
+                            .check_dir_count(dir_count)
+                            .map_err(|e| IoError::other(e.to_string()))?;
+
+                        // Create the directory
+                        entries.insert(
+                            current.clone(),
+                            FsEntry::Directory {
+                                metadata: Metadata {
+                                    file_type: FileType::Directory,
+                                    size: 0,
+                                    mode: 0o755,
+                                    modified: SystemTime::now(),
+                                    created: SystemTime::now(),
+                                },
+                            },
+                        );
+                    }
+                }
+            }
+        } else {
+            // Check parent exists
+            if let Some(parent) = path.parent()
+                && !entries.contains_key(parent)
+                && parent != Path::new("/")
+            {
+                return Err(IoError::new(ErrorKind::NotFound, "parent directory not found").into());
+            }
+
+            if entries.contains_key(&path) {
+                return Err(IoError::new(ErrorKind::AlreadyExists, "directory exists").into());
+            }
+
+            // THREAT[TM-DOS-012]: Check dir count limit before creating
+            let dir_count = entries
+                .values()
+                .filter(|e| matches!(e, FsEntry::Directory { .. }))
+                .count() as u64;
+            self.limits
+                .check_dir_count(dir_count)
+                .map_err(|e| IoError::other(e.to_string()))?;
+
+            entries.insert(
+                path,
+                FsEntry::Directory {
+                    metadata: Metadata {
+                        file_type: FileType::Directory,
+                        size: 0,
+                        mode: 0o755,
+                        modified: SystemTime::now(),
+                        created: SystemTime::now(),
+                    },
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn remove(&self, path: &Path, recursive: bool) -> Result<()> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let mut entries = self.entries.write().unwrap();
+
+        match entries.get(&path) {
+            Some(FsEntry::Directory { .. }) => {
+                if recursive {
+                    // Remove all entries under this path
+                    let to_remove: Vec<PathBuf> = entries
+                        .keys()
+                        .filter(|p| p.starts_with(&path))
+                        .cloned()
+                        .collect();
+
+                    for p in to_remove {
+                        entries.remove(&p);
+                    }
+                } else {
+                    // Check if directory is empty
+                    let has_children = entries
+                        .keys()
+                        .any(|p| p != &path && p.parent() == Some(&path));
+
+                    if has_children {
+                        return Err(IoError::other("directory not empty").into());
+                    }
+
+                    entries.remove(&path);
+                }
+            }
+            Some(
+                FsEntry::File { .. }
+                | FsEntry::LazyFile { .. }
+                | FsEntry::Symlink { .. }
+                | FsEntry::Fifo { .. },
+            ) => {
+                entries.remove(&path);
+            }
+            None => {
+                return Err(IoError::new(ErrorKind::NotFound, "not found").into());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn stat(&self, path: &Path) -> Result<Metadata> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let entries = self.entries.read().unwrap();
+
+        match entries.get(&path) {
+            Some(FsEntry::File { metadata, .. })
+            | Some(FsEntry::LazyFile { metadata, .. })
+            | Some(FsEntry::Directory { metadata })
+            | Some(FsEntry::Symlink { metadata, .. })
+            | Some(FsEntry::Fifo { metadata, .. }) => Ok(metadata.clone()),
+            None => Err(IoError::new(ErrorKind::NotFound, "not found").into()),
+        }
+    }
+
+    async fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let entries = self.entries.read().unwrap();
+
+        match entries.get(&path) {
+            Some(FsEntry::Directory { .. }) => {
+                let mut result = Vec::new();
+
+                for (entry_path, entry) in entries.iter() {
+                    if entry_path.parent() == Some(&path) && entry_path != &path {
+                        let name = entry_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+
+                        let metadata = match entry {
+                            FsEntry::File { metadata, .. }
+                            | FsEntry::LazyFile { metadata, .. }
+                            | FsEntry::Directory { metadata }
+                            | FsEntry::Symlink { metadata, .. }
+                            | FsEntry::Fifo { metadata, .. } => metadata.clone(),
+                        };
+
+                        result.push(DirEntry { name, metadata });
+                    }
+                }
+
+                Ok(result)
+            }
+            Some(_) => Err(IoError::other("not a directory").into()),
+            None => Err(IoError::new(ErrorKind::NotFound, "not found").into()),
+        }
+    }
+
+    async fn exists(&self, path: &Path) -> Result<bool> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let entries = self.entries.read().unwrap();
+        Ok(entries.contains_key(&path))
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        self.limits
+            .validate_path(from)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        self.limits
+            .validate_path(to)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let from = Self::normalize_path(from);
+        let to = Self::normalize_path(to);
+        let mut entries = self.entries.write().unwrap();
+
+        let entry = entries
+            .remove(&from)
+            .ok_or_else(|| IoError::new(ErrorKind::NotFound, "not found"))?;
+
+        // THREAT[TM-DOS-048]: Reject renaming a file over a directory (POSIX requirement)
+        if matches!(
+            &entry,
+            FsEntry::File { .. } | FsEntry::Symlink { .. } | FsEntry::Fifo { .. }
+        ) && matches!(entries.get(&to), Some(FsEntry::Directory { .. }))
+        {
+            // Put back the source entry
+            entries.insert(from, entry);
+            return Err(IoError::other("cannot rename file over directory").into());
+        }
+
+        entries.insert(to, entry);
+        Ok(())
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        self.limits
+            .validate_path(from)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        self.limits
+            .validate_path(to)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let from = Self::normalize_path(from);
+        let to = Self::normalize_path(to);
+        let mut entries = self.entries.write().unwrap();
+
+        let entry = entries
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| IoError::new(ErrorKind::NotFound, "not found"))?;
+
+        // THREAT[TM-DOS-047]: Always check write limits, even on overwrite.
+        // check_write_limits handles the delta calculation for existing files.
+        let entry_size = match &entry {
+            FsEntry::File { content, .. } | FsEntry::Fifo { content, .. } => content.len() as u64,
+            _ => 0,
+        };
+        self.check_write_limits(&entries, &to, entry_size as usize)?;
+
+        entries.insert(to, entry);
+        Ok(())
+    }
+
+    async fn symlink(&self, target: &Path, link: &Path) -> Result<()> {
+        self.limits
+            .validate_path(link)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        self.limits
+            .validate_path(target)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let link = Self::normalize_path(link);
+        let target_size = target.as_os_str().as_encoded_bytes().len();
+        let mut entries = self.entries.write().unwrap();
+
+        // THREAT[TM-DOS-045]: Symlinks count toward file count.
+        // THREAT[TM-DOS-013]: Symlink target bytes count toward filesystem usage.
+        // check_write_limits enforces single-file size, total bytes, and file count.
+        self.check_write_limits(&entries, &link, target_size)?;
+
+        entries.insert(
+            link,
+            FsEntry::Symlink {
+                target: target.to_path_buf(),
+                metadata: Metadata {
+                    file_type: FileType::Symlink,
+                    size: target_size as u64,
+                    mode: 0o777,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+
+        Ok(())
+    }
+
+    async fn read_link(&self, path: &Path) -> Result<PathBuf> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let entries = self.entries.read().unwrap();
+
+        match entries.get(&path) {
+            Some(FsEntry::Symlink { target, .. }) => Ok(target.clone()),
+            Some(_) => Err(IoError::other("not a symlink").into()),
+            None => Err(IoError::new(ErrorKind::NotFound, "not found").into()),
+        }
+    }
+
+    async fn chmod(&self, path: &Path, mode: u32) -> Result<()> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let mut entries = self.entries.write().unwrap();
+
+        match entries.get_mut(&path) {
+            Some(FsEntry::File { metadata, .. })
+            | Some(FsEntry::LazyFile { metadata, .. })
+            | Some(FsEntry::Directory { metadata })
+            | Some(FsEntry::Symlink { metadata, .. })
+            | Some(FsEntry::Fifo { metadata, .. }) => {
+                metadata.mode = mode;
+                Ok(())
+            }
+            None => Err(IoError::new(ErrorKind::NotFound, "not found").into()),
+        }
+    }
+
+    async fn set_modified_time(&self, path: &Path, time: SystemTime) -> Result<()> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let mut entries = self.entries.write().unwrap();
+
+        match entries.get_mut(&path) {
+            Some(FsEntry::File { metadata, .. })
+            | Some(FsEntry::LazyFile { metadata, .. })
+            | Some(FsEntry::Directory { metadata })
+            | Some(FsEntry::Symlink { metadata, .. })
+            | Some(FsEntry::Fifo { metadata, .. }) => {
+                metadata.modified = time;
+                Ok(())
+            }
+            None => Err(IoError::new(ErrorKind::NotFound, "not found").into()),
+        }
+    }
+}
+
+#[async_trait]
+impl FileSystemExt for InMemoryFs {
+    async fn mkfifo(&self, path: &Path, mode: u32) -> Result<()> {
+        self.limits
+            .validate_path(path)
+            .map_err(|e| IoError::other(e.to_string()))?;
+        let path = Self::normalize_path(path);
+        let mut entries = self.entries.write().unwrap();
+
+        // Check parent directory exists
+        if let Some(parent) = path.parent()
+            && !entries.contains_key(parent)
+            && parent != Path::new("/")
+        {
+            return Err(IoError::new(ErrorKind::NotFound, "parent directory not found").into());
+        }
+
+        // Path must not already exist
+        if entries.contains_key(&path) {
+            return Err(IoError::new(ErrorKind::AlreadyExists, "file exists").into());
+        }
+
+        // THREAT[TM-DOS-012]: Enforce file count limit before creating FIFO
+        let file_count = entries
+            .values()
+            .filter(|e| {
+                matches!(
+                    e,
+                    FsEntry::File { .. }
+                        | FsEntry::LazyFile { .. }
+                        | FsEntry::Fifo { .. }
+                        | FsEntry::Symlink { .. }
+                )
+            })
+            .count() as u64;
+        self.limits
+            .check_file_count(file_count)
+            .map_err(|e| IoError::other(e.to_string()))?;
+
+        entries.insert(
+            path,
+            FsEntry::Fifo {
+                content: Vec::new(),
+                metadata: Metadata {
+                    file_type: FileType::Fifo,
+                    size: 0,
+                    mode,
+                    modified: SystemTime::now(),
+                    created: SystemTime::now(),
+                },
+            },
+        );
+
+        Ok(())
+    }
+
+    fn usage(&self) -> FsUsage {
+        self.compute_usage()
+    }
+
+    fn limits(&self) -> FsLimits {
+        self.limits.clone()
+    }
+
+    fn vfs_snapshot(&self) -> Option<VfsSnapshot> {
+        Some(self.snapshot())
+    }
+
+    fn vfs_restore(&self, snapshot: &VfsSnapshot) -> Result<()> {
+        self.restore(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_write_and_read_file() {
+        let fs = InMemoryFs::new();
+
+        fs.write_file(Path::new("/tmp/test.txt"), b"hello world")
+            .await
+            .unwrap();
+
+        let content = fs.read_file(Path::new("/tmp/test.txt")).await.unwrap();
+        assert_eq!(content, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_and_read_dir() {
+        let fs = InMemoryFs::new();
+
+        fs.mkdir(Path::new("/tmp/mydir"), false).await.unwrap();
+        fs.write_file(Path::new("/tmp/mydir/file.txt"), b"test")
+            .await
+            .unwrap();
+
+        let entries = fs.read_dir(Path::new("/tmp/mydir")).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "file.txt");
+    }
+
+    #[tokio::test]
+    async fn test_exists() {
+        let fs = InMemoryFs::new();
+
+        assert!(fs.exists(Path::new("/tmp")).await.unwrap());
+        assert!(!fs.exists(Path::new("/tmp/nonexistent")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_add_file_basic() {
+        let fs = InMemoryFs::new();
+        fs.add_file("/tmp/added.txt", "hello from add_file", 0o644);
+
+        let content = fs.read_file(Path::new("/tmp/added.txt")).await.unwrap();
+        assert_eq!(content, b"hello from add_file");
+    }
+
+    #[tokio::test]
+    async fn test_add_file_with_mode() {
+        let fs = InMemoryFs::new();
+        fs.add_file("/etc/readonly.conf", "secret", 0o444);
+
+        let stat = fs.stat(Path::new("/etc/readonly.conf")).await.unwrap();
+        assert_eq!(stat.mode, 0o444);
+    }
+
+    #[tokio::test]
+    async fn test_add_file_creates_parent_directories() {
+        let fs = InMemoryFs::new();
+        fs.add_file("/a/b/c/d/nested.txt", "deep content", 0o644);
+
+        // File should exist
+        assert!(fs.exists(Path::new("/a/b/c/d/nested.txt")).await.unwrap());
+
+        // Parent directories should exist
+        assert!(fs.exists(Path::new("/a")).await.unwrap());
+        assert!(fs.exists(Path::new("/a/b")).await.unwrap());
+        assert!(fs.exists(Path::new("/a/b/c")).await.unwrap());
+        assert!(fs.exists(Path::new("/a/b/c/d")).await.unwrap());
+
+        // Verify content
+        let content = fs
+            .read_file(Path::new("/a/b/c/d/nested.txt"))
+            .await
+            .unwrap();
+        assert_eq!(content, b"deep content");
+    }
+
+    #[tokio::test]
+    async fn test_add_file_binary() {
+        let fs = InMemoryFs::new();
+        let binary_data = vec![0x00, 0xFF, 0x89, 0x50, 0x4E, 0x47];
+        fs.add_file("/data/binary.bin", &binary_data, 0o644);
+
+        let content = fs.read_file(Path::new("/data/binary.bin")).await.unwrap();
+        assert_eq!(content, binary_data);
+    }
+    // ==================== Limit tests ====================
+
+    #[tokio::test]
+    async fn test_file_size_limit() {
+        let limits = FsLimits::new().max_file_size(100);
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Should succeed - under limit
+        fs.write_file(Path::new("/tmp/small.txt"), &[0u8; 50])
+            .await
+            .unwrap();
+
+        // Should succeed - at limit
+        fs.write_file(Path::new("/tmp/exact.txt"), &[0u8; 100])
+            .await
+            .unwrap();
+
+        // Should fail - over limit
+        let result = fs
+            .write_file(Path::new("/tmp/large.txt"), &[0u8; 101])
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("file too large") || err.contains("exceeds"));
+    }
+
+    #[tokio::test]
+    async fn test_total_bytes_limit() {
+        let limits = FsLimits::new().max_total_bytes(200);
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Should succeed
+        fs.write_file(Path::new("/tmp/file1.txt"), &[0u8; 100])
+            .await
+            .unwrap();
+
+        // Should succeed - still under total limit
+        fs.write_file(Path::new("/tmp/file2.txt"), &[0u8; 50])
+            .await
+            .unwrap();
+
+        // Should fail - would exceed total limit
+        let result = fs
+            .write_file(Path::new("/tmp/file3.txt"), &[0u8; 100])
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("filesystem full") || err.contains("exceeds"));
+    }
+
+    #[tokio::test]
+    async fn test_file_count_limit() {
+        // Note: InMemoryFs starts with 3 files: /dev/null, /dev/urandom, /dev/random
+        let limits = FsLimits::new().max_file_count(6); // 3 existing + 3 new
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Should succeed - under limit
+        fs.write_file(Path::new("/tmp/file1.txt"), b"1")
+            .await
+            .unwrap();
+        fs.write_file(Path::new("/tmp/file2.txt"), b"2")
+            .await
+            .unwrap();
+        fs.write_file(Path::new("/tmp/file3.txt"), b"3")
+            .await
+            .unwrap();
+
+        // Should fail - at limit (6 files: 3 dev + 3 new)
+        let result = fs.write_file(Path::new("/tmp/file4.txt"), b"4").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("too many files") || err.contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_does_not_increase_count() {
+        // Note: InMemoryFs starts with 3 files: /dev/null, /dev/urandom, /dev/random
+        let limits = FsLimits::new().max_file_count(5); // 3 existing + 2 new
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Create two files
+        fs.write_file(Path::new("/tmp/file1.txt"), b"original")
+            .await
+            .unwrap();
+        fs.write_file(Path::new("/tmp/file2.txt"), b"original")
+            .await
+            .unwrap();
+
+        // Overwrite existing file - should succeed
+        fs.write_file(Path::new("/tmp/file1.txt"), b"updated")
+            .await
+            .unwrap();
+
+        // New file should fail (we're at 5: 3 dev + 2 files)
+        let result = fs.write_file(Path::new("/tmp/file3.txt"), b"new").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_append_respects_limits() {
+        let limits = FsLimits::new().max_file_size(100);
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Create file
+        fs.write_file(Path::new("/tmp/append.txt"), &[0u8; 50])
+            .await
+            .unwrap();
+
+        // Append under limit - should succeed
+        fs.append_file(Path::new("/tmp/append.txt"), &[0u8; 30])
+            .await
+            .unwrap();
+
+        // Append over limit - should fail
+        let result = fs
+            .append_file(Path::new("/tmp/append.txt"), &[0u8; 50])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_usage_tracking() {
+        let fs = InMemoryFs::new();
+
+        // Initial usage (only default directories)
+        let usage = fs.usage();
+        assert_eq!(usage.total_bytes, 0); // No file content yet
+        assert_eq!(usage.file_count, 3); // /dev/null + /dev/urandom + /dev/random
+
+        // Add a file
+        fs.write_file(Path::new("/tmp/test.txt"), b"hello")
+            .await
+            .unwrap();
+
+        let usage = fs.usage();
+        assert_eq!(usage.total_bytes, 5);
+        assert_eq!(usage.file_count, 4); // 3 dev files + test.txt
+    }
+
+    #[tokio::test]
+    async fn test_limits_method() {
+        let limits = FsLimits::new()
+            .max_total_bytes(1000)
+            .max_file_size(500)
+            .max_file_count(10);
+        let fs = InMemoryFs::with_limits(limits.clone());
+
+        let returned = fs.limits();
+        assert_eq!(returned.max_total_bytes, 1000);
+        assert_eq!(returned.max_file_size, 500);
+        assert_eq!(returned.max_file_count, 10);
+    }
+
+    #[tokio::test]
+    async fn test_unlimited_fs() {
+        let fs = InMemoryFs::with_limits(FsLimits::unlimited());
+
+        // Should allow very large files
+        fs.write_file(Path::new("/tmp/large.txt"), &[0u8; 10_000_000])
+            .await
+            .unwrap();
+
+        let limits = fs.limits();
+        assert_eq!(limits.max_total_bytes, u64::MAX);
+    }
+
+    #[tokio::test]
+    async fn test_delete_frees_space() {
+        let limits = FsLimits::new().max_total_bytes(100);
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Fill up space
+        fs.write_file(Path::new("/tmp/file.txt"), &[0u8; 80])
+            .await
+            .unwrap();
+
+        // Can't add more
+        let result = fs.write_file(Path::new("/tmp/more.txt"), &[0u8; 80]).await;
+        assert!(result.is_err());
+
+        // Delete file
+        fs.remove(Path::new("/tmp/file.txt"), false).await.unwrap();
+
+        // Now we can add
+        fs.write_file(Path::new("/tmp/more.txt"), &[0u8; 80])
+            .await
+            .unwrap();
+    }
+
+    // ==================== Type conflict tests ====================
+
+    #[tokio::test]
+    async fn test_write_file_to_directory_fails() {
+        let fs = InMemoryFs::new();
+
+        // Create a directory
+        fs.mkdir(Path::new("/tmp/mydir"), false).await.unwrap();
+
+        // Attempt to write file at same path should fail
+        let result = fs.write_file(Path::new("/tmp/mydir"), b"content").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("directory"),
+            "Error should mention directory: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_append_file_to_directory_fails() {
+        let fs = InMemoryFs::new();
+
+        // Create a directory
+        fs.mkdir(Path::new("/tmp/appenddir"), false).await.unwrap();
+
+        // Attempt to append to directory should fail
+        let result = fs
+            .append_file(Path::new("/tmp/appenddir"), b"content")
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("directory"),
+            "Error should mention directory: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_on_existing_file_fails() {
+        let fs = InMemoryFs::new();
+
+        // Create a file
+        fs.write_file(Path::new("/tmp/myfile"), b"content")
+            .await
+            .unwrap();
+
+        // Attempt to mkdir at same path should fail
+        let result = fs.mkdir(Path::new("/tmp/myfile"), false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_recursive_on_existing_file_fails() {
+        let fs = InMemoryFs::new();
+
+        // Create a file
+        fs.write_file(Path::new("/tmp/myfile"), b"content")
+            .await
+            .unwrap();
+
+        // Attempt to mkdir -p at same path should also fail
+        let result = fs.mkdir(Path::new("/tmp/myfile"), true).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_on_existing_directory_fails() {
+        let fs = InMemoryFs::new();
+
+        // /tmp already exists as directory
+        let result = fs.mkdir(Path::new("/tmp"), false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_recursive_on_existing_directory_succeeds() {
+        let fs = InMemoryFs::new();
+
+        // mkdir -p on existing directory should succeed
+        let result = fs.mkdir(Path::new("/tmp"), true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_file_overwrites_existing_file() {
+        let fs = InMemoryFs::new();
+
+        // Create a file
+        fs.write_file(Path::new("/tmp/file.txt"), b"original")
+            .await
+            .unwrap();
+
+        // Overwrite should succeed
+        fs.write_file(Path::new("/tmp/file.txt"), b"updated")
+            .await
+            .unwrap();
+
+        let content = fs.read_file(Path::new("/tmp/file.txt")).await.unwrap();
+        assert_eq!(content, b"updated");
+    }
+
+    // --- #406: VFS limit bypass tests (TM-ESC-012) ---
+
+    #[tokio::test]
+    async fn test_add_file_respects_file_size_limit() {
+        let limits = FsLimits {
+            max_file_size: 100,
+            ..FsLimits::default()
+        };
+        let fs = InMemoryFs::with_limits(limits);
+        fs.add_file("/tmp/huge.bin", vec![0u8; 200], 0o644);
+        assert!(!fs.exists(Path::new("/tmp/huge.bin")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_add_file_respects_total_bytes_limit() {
+        let limits = FsLimits {
+            max_total_bytes: 50,
+            ..FsLimits::default()
+        };
+        let fs = InMemoryFs::with_limits(limits);
+        fs.add_file("/tmp/big.bin", vec![0u8; 60], 0o644);
+        assert!(!fs.exists(Path::new("/tmp/big.bin")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_restore_respects_file_size_limit() {
+        let unlimited = InMemoryFs::with_limits(FsLimits::unlimited());
+        unlimited.add_file("/tmp/huge.bin", vec![0u8; 200], 0o644);
+        let snapshot = unlimited.snapshot();
+
+        let limited = InMemoryFs::with_limits(FsLimits {
+            max_file_size: 100,
+            ..FsLimits::default()
+        });
+        // Issue #1576: restore must fail closed and not silently no-op.
+        let err = limited.restore(&snapshot);
+        assert!(err.is_err(), "restore must report the limit violation");
+        assert!(!limited.exists(Path::new("/tmp/huge.bin")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_restore_allows_exact_file_count_limit() {
+        // InMemoryFs starts with 3 device files. Add 2 user files so the
+        // snapshot's final file count exactly matches the configured limit.
+        let source = InMemoryFs::new();
+        source
+            .write_file(Path::new("/tmp/one.txt"), b"one")
+            .await
+            .unwrap();
+        source
+            .write_file(Path::new("/tmp/two.txt"), b"two")
+            .await
+            .unwrap();
+        let snapshot = source.snapshot();
+
+        let limited = InMemoryFs::with_limits(FsLimits::new().max_file_count(5));
+        limited
+            .write_file(Path::new("/tmp/stale.txt"), b"stale")
+            .await
+            .unwrap();
+
+        limited
+            .restore(&snapshot)
+            .expect("exact-limit snapshots should restore successfully");
+
+        assert!(!limited.exists(Path::new("/tmp/stale.txt")).await.unwrap());
+        assert_eq!(
+            limited.read_file(Path::new("/tmp/one.txt")).await.unwrap(),
+            b"one"
+        );
+        assert_eq!(
+            limited.read_file(Path::new("/tmp/two.txt")).await.unwrap(),
+            b"two"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restore_rejects_over_file_count_limit() {
+        let source = InMemoryFs::new();
+        for name in ["one", "two", "three"] {
+            source
+                .write_file(Path::new(&format!("/tmp/{name}.txt")), name.as_bytes())
+                .await
+                .unwrap();
+        }
+        let snapshot = source.snapshot();
+
+        let limited = InMemoryFs::with_limits(FsLimits::new().max_file_count(5));
+        limited
+            .write_file(Path::new("/tmp/stale.txt"), b"stale")
+            .await
+            .unwrap();
+
+        let err = limited.restore(&snapshot);
+
+        assert!(err.is_err(), "over-limit snapshots must fail closed");
+        assert_eq!(
+            limited
+                .read_file(Path::new("/tmp/stale.txt"))
+                .await
+                .unwrap(),
+            b"stale"
+        );
+        assert!(!limited.exists(Path::new("/tmp/three.txt")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_restore_respects_fifo_file_count_limit() {
+        // Default snapshots include 3 /dev files. Add two FIFOs so restore
+        // must count named pipes as file-count entries before clearing.
+        let unlimited = InMemoryFs::with_limits(FsLimits::unlimited());
+        unlimited
+            .mkfifo(Path::new("/tmp/fifo1"), 0o644)
+            .await
+            .unwrap();
+        unlimited
+            .mkfifo(Path::new("/tmp/fifo2"), 0o644)
+            .await
+            .unwrap();
+        let snapshot = unlimited.snapshot();
+
+        let limited = InMemoryFs::with_limits(FsLimits::new().max_file_count(4));
+        let err = limited.restore(&snapshot);
+
+        assert!(
+            err.is_err(),
+            "restore must count FIFOs toward file-count limits"
+        );
+        assert!(!limited.exists(Path::new("/tmp/fifo1")).await.unwrap());
+        assert!(!limited.exists(Path::new("/tmp/fifo2")).await.unwrap());
+    }
+
+    /// THREAT[TM-DOS-034]: Verify append_file uses single write lock,
+    /// preventing TOCTOU race where size checks use stale data.
+    #[tokio::test]
+    async fn test_append_file_no_toctou_race() {
+        use std::sync::Arc;
+
+        // Set up fs with tight file size limit: 100 bytes max
+        let limits = FsLimits::new().max_file_size(100);
+        let fs = Arc::new(InMemoryFs::with_limits(limits));
+
+        // Create initial file with 80 bytes
+        fs.write_file(Path::new("/tmp/race.txt"), &[b'A'; 80])
+            .await
+            .unwrap();
+
+        // Spawn multiple concurrent appends that would each push past the limit
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let fs_clone = fs.clone();
+            handles.push(tokio::spawn(async move {
+                fs_clone
+                    .append_file(Path::new("/tmp/race.txt"), &[b'B'; 25])
+                    .await
+            }));
+        }
+
+        let mut success_count = 0;
+        for handle in handles {
+            if handle.await.unwrap().is_ok() {
+                success_count += 1;
+            }
+        }
+
+        // No appends should succeed (80 + 25 = 105 > 100 byte file limit)
+        assert_eq!(
+            success_count, 0,
+            "no appends should succeed: 80+25=105 exceeds 100 byte file limit"
+        );
+
+        // Verify file unchanged
+        let content = fs.read_file(Path::new("/tmp/race.txt")).await.unwrap();
+        assert_eq!(content.len(), 80);
+    }
+
+    /// Verify append_file creates file when it doesn't exist (under write lock)
+    #[tokio::test]
+    async fn test_append_creates_new_file_atomic() {
+        let fs = InMemoryFs::new();
+        fs.append_file(Path::new("/tmp/new.txt"), b"hello")
+            .await
+            .unwrap();
+        let content = fs.read_file(Path::new("/tmp/new.txt")).await.unwrap();
+        assert_eq!(content, b"hello");
+    }
+
+    /// Verify append_file rejects append to directory
+    #[tokio::test]
+    async fn test_append_to_directory_fails() {
+        let fs = InMemoryFs::new();
+        fs.mkdir(Path::new("/tmp/dir"), false).await.unwrap();
+        let result = fs.append_file(Path::new("/tmp/dir"), b"data").await;
+        assert!(result.is_err());
+    }
+
+    // Issue #421: validate_path should be called on all methods
+    #[tokio::test]
+    async fn test_validate_path_on_copy() {
+        let limits = FsLimits::new().max_path_depth(3);
+        let fs = InMemoryFs::with_limits(limits);
+        fs.write_file(Path::new("/tmp/src.txt"), b"data")
+            .await
+            .unwrap();
+
+        let deep = Path::new("/a/b/c/d/e/f.txt");
+        let result = fs.copy(Path::new("/tmp/src.txt"), deep).await;
+        assert!(result.is_err(), "copy to deep path should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_validate_path_on_rename() {
+        let limits = FsLimits::new().max_path_depth(3);
+        let fs = InMemoryFs::with_limits(limits);
+        fs.write_file(Path::new("/tmp/src.txt"), b"data")
+            .await
+            .unwrap();
+
+        let deep = Path::new("/a/b/c/d/e/f.txt");
+        let result = fs.rename(Path::new("/tmp/src.txt"), deep).await;
+        assert!(result.is_err(), "rename to deep path should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_copy_respects_write_limits() {
+        let limits = FsLimits::new().max_file_count(10);
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Fill up to limit
+        for i in 0..10 {
+            let _ = fs
+                .write_file(Path::new(&format!("/tmp/f{i}.txt")), b"x")
+                .await;
+        }
+
+        // Copy should fail - at file count limit
+        let result = fs
+            .copy(Path::new("/tmp/f0.txt"), Path::new("/tmp/copy.txt"))
+            .await;
+        assert!(
+            result.is_err(),
+            "copy should respect file count write limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_path_on_chmod() {
+        let limits = FsLimits::new().max_path_depth(3);
+        let fs = InMemoryFs::with_limits(limits);
+
+        let deep = Path::new("/a/b/c/d/e/f.txt");
+        let result = fs.chmod(deep, 0o755).await;
+        assert!(result.is_err(), "chmod on deep path should be rejected");
+    }
+
+    // ==================== /dev/urandom tests ====================
+
+    #[tokio::test]
+    async fn test_dev_urandom_returns_bytes() {
+        let fs = InMemoryFs::new();
+        let content = fs.read_file(Path::new("/dev/urandom")).await.unwrap();
+        assert_eq!(content.len(), 8192);
+    }
+
+    #[test]
+    fn test_random_device_source_uses_csprng() {
+        let source = include_str!("memory.rs");
+        // Extract just the generate_random_bytes function body so the check
+        // is not brittle against imports, variable names, or other uses of
+        // RandomState elsewhere in the file.
+        let fn_body = source
+            .split("fn generate_random_bytes")
+            .nth(1)
+            .expect("generate_random_bytes must exist in memory.rs");
+        // Take up to the next top-level `fn ` at the same indentation level
+        // (four spaces + "fn "), which terminates the function block.
+        let fn_body = fn_body.split("\n    fn ").next().unwrap_or(fn_body);
+        assert!(
+            fn_body.contains("getrandom") && fn_body.contains("fill"),
+            "/dev/random devices must use the OS CSPRNG (getrandom::fill or use getrandom::fill)"
+        );
+        assert!(
+            !fn_body.contains("RandomState"),
+            "/dev/random devices must not use HashMap hasher seeds as randomness"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dev_random_returns_bytes() {
+        let fs = InMemoryFs::new();
+        let content = fs.read_file(Path::new("/dev/random")).await.unwrap();
+        assert_eq!(content.len(), 8192);
+    }
+
+    #[tokio::test]
+    async fn test_dev_urandom_returns_different_data() {
+        let fs = InMemoryFs::new();
+        let a = fs.read_file(Path::new("/dev/urandom")).await.unwrap();
+        let b = fs.read_file(Path::new("/dev/urandom")).await.unwrap();
+        // Extremely unlikely to be equal
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn test_dev_urandom_exists_in_fs() {
+        let fs = InMemoryFs::new();
+        let exists = fs.exists(Path::new("/dev/urandom")).await.unwrap();
+        assert!(exists, "/dev/urandom should exist in VFS");
+    }
+
+    #[tokio::test]
+    async fn test_dev_urandom_write_succeeds() {
+        let fs = InMemoryFs::new();
+        // Writing to /dev/urandom should succeed (like real device)
+        let result = fs.write_file(Path::new("/dev/urandom"), b"ignored").await;
+        assert!(result.is_ok());
+        // But reads still return random data, not what was written
+        let content = fs.read_file(Path::new("/dev/urandom")).await.unwrap();
+        assert_eq!(content.len(), 8192);
+    }
+
+    #[tokio::test]
+    async fn test_dev_urandom_path_normalization() {
+        let fs = InMemoryFs::new();
+        // Path traversal attempt should still resolve to /dev/urandom
+        let content = fs
+            .read_file(Path::new("/dev/../dev/urandom"))
+            .await
+            .unwrap();
+        assert_eq!(content.len(), 8192);
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_read() {
+        let fs = InMemoryFs::new();
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = Arc::clone(&called);
+        fs.add_lazy_file(
+            "/tmp/lazy.txt",
+            5,
+            0o644,
+            Arc::new(move || {
+                called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                b"hello".to_vec()
+            }),
+        );
+
+        // stat should not trigger loading
+        let meta = fs.stat(Path::new("/tmp/lazy.txt")).await.unwrap();
+        assert_eq!(meta.file_type, FileType::File);
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+
+        // read triggers loading
+        let content = fs.read_file(Path::new("/tmp/lazy.txt")).await.unwrap();
+        assert_eq!(content, b"hello");
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_write_before_read_skips_loader() {
+        let fs = InMemoryFs::new();
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = Arc::clone(&called);
+        fs.add_lazy_file(
+            "/tmp/lazy.txt",
+            5,
+            0o644,
+            Arc::new(move || {
+                called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                b"lazy".to_vec()
+            }),
+        );
+
+        // write before read replaces the lazy entry
+        fs.write_file(Path::new("/tmp/lazy.txt"), b"eager")
+            .await
+            .unwrap();
+        let content = fs.read_file(Path::new("/tmp/lazy.txt")).await.unwrap();
+        assert_eq!(content, b"eager");
+        // loader was never called
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_exists_and_readdir() {
+        let fs = InMemoryFs::new();
+        fs.add_lazy_file("/tmp/lazy.txt", 10, 0o644, Arc::new(|| b"content".to_vec()));
+
+        assert!(fs.exists(Path::new("/tmp/lazy.txt")).await.unwrap());
+
+        let entries = fs.read_dir(Path::new("/tmp")).await.unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"lazy.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_snapshot_materializes() {
+        let fs = InMemoryFs::new();
+        fs.add_lazy_file("/tmp/lazy.txt", 6, 0o644, Arc::new(|| b"snappy".to_vec()));
+
+        let snapshot = fs.snapshot();
+        // After snapshot, the entry should be a regular file
+        let content = fs.read_file(Path::new("/tmp/lazy.txt")).await.unwrap();
+        assert_eq!(content, b"snappy");
+
+        // Verify snapshot contains the file
+        let has_file = snapshot
+            .entries
+            .iter()
+            .any(|e| e.path == Path::new("/tmp/lazy.txt"));
+        assert!(has_file);
+    }
+
+    #[tokio::test]
+    async fn test_add_lazy_file_respects_limits() {
+        let limits = FsLimits::new().max_total_bytes(100);
+        let fs = InMemoryFs::with_limits(limits);
+        fs.add_lazy_file("/tmp/too-big.txt", 101, 0o644, Arc::new(|| vec![0; 101]));
+
+        assert!(!fs.exists(Path::new("/tmp/too-big.txt")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_materialization_respects_limits() {
+        let limits = FsLimits::new().max_file_size(5);
+        let fs = InMemoryFs::with_limits(limits);
+        fs.add_lazy_file("/tmp/lazy.txt", 1, 0o644, Arc::new(|| b"toolarge".to_vec()));
+
+        let result = fs.read_file(Path::new("/tmp/lazy.txt")).await;
+        assert!(result.is_err());
+        assert!(fs.exists(Path::new("/tmp/lazy.txt")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_snapshot_rejects_oversized_materialization() {
+        let limits = FsLimits::new().max_file_size(5);
+        let fs = InMemoryFs::with_limits(limits);
+        fs.add_lazy_file("/tmp/lazy.txt", 1, 0o644, Arc::new(|| b"toolarge".to_vec()));
+
+        let snapshot = fs.snapshot();
+        assert!(
+            !snapshot
+                .entries
+                .iter()
+                .any(|e| e.path == Path::new("/tmp/lazy.txt"))
+        );
+
+        let result = fs.read_file(Path::new("/tmp/lazy.txt")).await;
+        assert!(result.is_err());
+        assert!(fs.exists(Path::new("/tmp/lazy.txt")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_lazy_file_append_rejects_oversized_materialization() {
+        let limits = FsLimits::new().max_file_size(5);
+        let fs = InMemoryFs::with_limits(limits);
+        fs.add_lazy_file("/tmp/lazy.txt", 1, 0o644, Arc::new(|| b"toolarge".to_vec()));
+
+        let append_result = fs.append_file(Path::new("/tmp/lazy.txt"), b"!").await;
+        assert!(append_result.is_err());
+
+        let read_result = fs.read_file(Path::new("/tmp/lazy.txt")).await;
+        assert!(read_result.is_err());
+        assert!(fs.exists(Path::new("/tmp/lazy.txt")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_respects_dir_count_limit() {
+        // InMemoryFs starts with 6 dirs: /, /tmp, /home, /home/user, /dev, /dev/fd
+        let limits = FsLimits::new().max_dir_count(8); // 6 existing + 2 new
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Should succeed - under limit
+        fs.mkdir(Path::new("/tmp/dir1"), false).await.unwrap();
+        fs.mkdir(Path::new("/tmp/dir2"), false).await.unwrap();
+
+        // Should fail - at limit (8 dirs)
+        let result = fs.mkdir(Path::new("/tmp/dir3"), false).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("too many directories") || err.contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn test_mkdir_recursive_respects_dir_count_limit() {
+        // 6 default dirs; allow 1 more
+        let limits = FsLimits::new().max_dir_count(7);
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Creating /tmp/a succeeds (7th dir)
+        fs.mkdir(Path::new("/tmp/a"), true).await.unwrap();
+
+        // Creating /tmp/b requires an 8th dir - should fail
+        let result = fs.mkdir(Path::new("/tmp/b"), true).await;
+        assert!(result.is_err());
+
+        // Recursive deep path: second new dir should fail
+        let limits2 = FsLimits::new().max_dir_count(7);
+        let fs2 = InMemoryFs::with_limits(limits2);
+        let result = fs2.mkdir(Path::new("/tmp/a/b"), true).await;
+        // /tmp/a is the 7th dir (ok), /tmp/a/b would be the 8th (fail)
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_symlink_respects_file_count_limit() {
+        // InMemoryFs starts with 3 files: /dev/null, /dev/urandom, /dev/random
+        let limits = FsLimits::new().max_file_count(5); // 3 existing + 2 new
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Should succeed - under limit
+        fs.symlink(Path::new("/tmp/target1"), Path::new("/tmp/link1"))
+            .await
+            .unwrap();
+        fs.symlink(Path::new("/tmp/target2"), Path::new("/tmp/link2"))
+            .await
+            .unwrap();
+
+        // Should fail - at limit (5 files)
+        let result = fs
+            .symlink(Path::new("/tmp/target3"), Path::new("/tmp/link3"))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("too many files") || err.contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn test_symlink_validates_target_path_limits() {
+        let fs = InMemoryFs::new();
+        let long_component = "x".repeat(crate::bash::fs::limits::DEFAULT_MAX_FILENAME_LENGTH + 1);
+        let target = PathBuf::from(format!("/tmp/{long_component}"));
+
+        let result = fs.symlink(&target, Path::new("/tmp/link")).await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("filename too long")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_symlink_target_bytes_count_toward_total_limit() {
+        let limits = FsLimits::new().max_total_bytes(20);
+        let fs = InMemoryFs::with_limits(limits);
+
+        fs.symlink(Path::new("/target-one"), Path::new("/tmp/link1"))
+            .await
+            .unwrap();
+        let result = fs
+            .symlink(Path::new("/target-two"), Path::new("/tmp/link2"))
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("filesystem full"));
+    }
+
+    #[tokio::test]
+    async fn test_mkfifo_respects_file_count_limit() {
+        // InMemoryFs starts with 3 files: /dev/null, /dev/urandom, /dev/random
+        let limits = FsLimits::new().max_file_count(5); // 3 existing + 2 new
+        let fs = InMemoryFs::with_limits(limits);
+
+        // Should succeed - under limit
+        fs.mkfifo(Path::new("/tmp/fifo1"), 0o644).await.unwrap();
+        fs.mkfifo(Path::new("/tmp/fifo2"), 0o644).await.unwrap();
+
+        // Should fail - at limit (5 files)
+        let result = fs.mkfifo(Path::new("/tmp/fifo3"), 0o644).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("too many files") || err.contains("limit"));
+    }
+}

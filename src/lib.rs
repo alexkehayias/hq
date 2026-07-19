@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod anthropic;
 pub mod api;
+pub mod bash;
 pub mod cli;
 pub mod core;
 pub mod eval;

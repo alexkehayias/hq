@@ -1,0 +1,1186 @@
+//! Date builtin - display or format date and time
+//!
+//! SECURITY: Format strings are validated before use to prevent panics.
+//! Invalid format specifiers result in an error message, not a crash.
+//! Additionally, runtime format errors (e.g., timezone unavailable) are
+//! caught and return graceful errors.
+
+use std::fmt::Write;
+
+use async_trait::async_trait;
+use chrono::format::{Item, StrftimeItems};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
+
+use super::{Builtin, Context, resolve_path};
+use crate::bash::error::Result;
+use crate::bash::interpreter::ExecResult;
+
+/// The date builtin - display or set date and time.
+///
+/// Usage: date [+FORMAT] [-u] [-R] [-I[TIMESPEC]] [-r FILE]
+///
+/// Options:
+///   +FORMAT  Output date according to FORMAT
+///   -u       Display UTC time instead of local time
+///   -R       Output RFC 2822 formatted date
+///   -I[FMT]  Output ISO 8601 formatted date (FMT: date, hours, minutes, seconds)
+///   -r FILE  Display the last modification time of FILE
+///
+/// FORMAT specifiers:
+///   %Y  Year with century (e.g., 2024)
+///   %m  Month (01-12)
+///   %d  Day of month (01-31)
+///   %H  Hour (00-23)
+///   %M  Minute (00-59)
+///   %S  Second (00-59)
+///   %s  Seconds since Unix epoch
+///   %N  Nanoseconds (000000000-999999999)
+///   %a  Abbreviated weekday name
+///   %A  Full weekday name
+///   %b  Abbreviated month name
+///   %B  Full month name
+///   %c  Date and time representation
+///   %D  Date as %m/%d/%y
+///   %F  Date as %Y-%m-%d
+///   %T  Time as %H:%M:%S
+///   %n  Newline
+///   %t  Tab
+///   %%  Literal %
+/// THREAT[TM-INF-018]: Supports a fixed epoch OR a constant offset on
+/// the real clock so callers can blind absolute wall-clock time without
+/// breaking elapsed-time logic. The two modes are mutually exclusive
+/// — `fixed_epoch` wins if both are set.
+pub struct Date {
+    /// Fixed UTC epoch for virtualized time. None = use real system clock.
+    fixed_epoch: Option<DateTime<Utc>>,
+    /// Constant offset applied to `Utc::now()` when `fixed_epoch` is None.
+    offset_seconds: i64,
+}
+
+impl Date {
+    pub fn new() -> Self {
+        Self {
+            fixed_epoch: None,
+            offset_seconds: 0,
+        }
+    }
+
+    /// Create a Date builtin with a fixed epoch (for sandboxing).
+    pub fn with_fixed_epoch(epoch: DateTime<Utc>) -> Self {
+        Self {
+            fixed_epoch: Some(epoch),
+            offset_seconds: 0,
+        }
+    }
+
+    /// Create a Date builtin that offsets the real clock by the given
+    /// number of seconds. Useful when scripts need a ticking clock but
+    /// must not observe the host's exact wall-clock time.
+    pub fn with_offset_seconds(offset: i64) -> Self {
+        Self {
+            fixed_epoch: None,
+            offset_seconds: offset,
+        }
+    }
+
+    fn now(&self) -> DateTime<Utc> {
+        if let Some(t) = self.fixed_epoch {
+            return t;
+        }
+        if self.offset_seconds == 0 {
+            return Utc::now();
+        }
+        Utc::now()
+            .checked_add_signed(chrono::Duration::seconds(self.offset_seconds))
+            .unwrap_or_else(Utc::now)
+    }
+}
+
+/// Validate a strftime format string.
+/// Returns Ok(()) if valid, or an error message describing the issue.
+///
+/// THREAT[TM-INT-003]: chrono::format() can panic on invalid format specifiers
+/// Mitigation: Pre-validate format string and return human-readable error
+fn validate_format(format: &str) -> std::result::Result<(), String> {
+    // StrftimeItems parses the format string and yields Item::Error for invalid specifiers
+    for item in StrftimeItems::new(format) {
+        if let Item::Error = item {
+            return Err(format!("invalid format string: '{}'", format));
+        }
+    }
+    Ok(())
+}
+
+/// Strip surrounding quotes from a string (handles parser bug where
+/// `--date="value"` passes literal quotes to the builtin).
+fn strip_surrounding_quotes(s: &str) -> &str {
+    let s = s.trim();
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
+    {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+fn uses_epoch_input(s: &str) -> bool {
+    strip_surrounding_quotes(s).starts_with('@')
+}
+
+/// Parse a base date expression (no compound modifiers).
+fn parse_base_date(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTime<Utc>, String> {
+    let lower = s.to_lowercase();
+
+    // Epoch timestamp: @1234567890
+    if let Some(epoch_str) = s.strip_prefix('@') {
+        let ts: i64 = epoch_str
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid date '{}'", s))?;
+        return DateTime::from_timestamp(ts, 0).ok_or_else(|| format!("invalid date '{}'", s));
+    }
+
+    // Special words
+    match lower.as_str() {
+        "now" => return Ok(now),
+        "yesterday" => return Ok(now - Duration::days(1)),
+        "tomorrow" => return Ok(now + Duration::days(1)),
+        _ => {}
+    }
+
+    // Relative: "N unit(s) ago" or "+N unit(s)" or "-N unit(s)"
+    if let Some(duration) = parse_relative_date(&lower) {
+        return now
+            .checked_add_signed(duration)
+            .ok_or_else(|| format!("date out of range: '{}'", s));
+    }
+
+    // Try ISO-like formats: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return local_naive_to_utc(dt, s);
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return local_naive_to_utc(dt, s);
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        let dt = d
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| format!("invalid date '{}'", s))?;
+        return local_naive_to_utc(dt, s);
+    }
+
+    // Try "Mon DD, YYYY" format
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%b %d, %Y") {
+        let dt = d
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| format!("invalid date '{}'", s))?;
+        return local_naive_to_utc(dt, s);
+    }
+
+    // Try RFC 2822: "Mon, 06 Apr 2026 12:00:00 +0000"
+    // GNU date ignores incorrect day-of-week, so if strict parsing fails we
+    // strip the DOW prefix and retry — chrono validates DOW strictly.
+    if let Ok(dt) = DateTime::parse_from_rfc2822(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    if let Some((_, rest)) = s.split_once(", ") {
+        // Parse the date/time/tz portion directly, bypassing DOW validation.
+        if let Ok(dt) = DateTime::parse_from_str(rest.trim(), "%d %b %Y %H:%M:%S %z") {
+            return Ok(dt.with_timezone(&Utc));
+        }
+    }
+
+    // Try RFC 3339 / ISO 8601 with timezone: "2024-01-15T12:00:00+00:00"
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+
+    Err(format!("date: invalid date '{}'", s))
+}
+
+/// Parse a date string like GNU date's -d flag.
+///
+/// Supports simple expressions:
+///   "now", "yesterday", "tomorrow", "N days ago", "+N days",
+///   "N weeks ago", "N months ago", "N years ago", "N hours ago",
+///   "@EPOCH", "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS"
+///
+/// Supports compound expressions (base ± modifier):
+///   "2024-01-15 + 30 days", "yesterday - 2 hours",
+///   "@1700000000 + 1 week", "2024-01-15 - 1 month"
+fn parse_date_string(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTime<Utc>, String> {
+    let s = strip_surrounding_quotes(s.trim());
+
+    // Try compound expression: <base> [+-] <N unit(s)>
+    // Match patterns like "2024-01-15 + 30 days" or "yesterday - 2 hours"
+    // Use a regex that splits on ` + ` or ` - ` followed by a number and unit
+    let re_compound =
+        regex::Regex::new(r"^(.+?)\s+([+-])\s+(\d+)\s+(second|minute|hour|day|week|month|year)s?$")
+            .ok();
+
+    if let Some(ref re) = re_compound {
+        let lower = s.to_lowercase();
+        if let Some(caps) = re.captures(&lower)
+            && let Some(base_match) = caps.get(1)
+        {
+            let sign = if &caps[2] == "-" { -1i64 } else { 1i64 };
+            let n: i64 = caps[3].parse().unwrap_or(0);
+            let unit = &caps[4];
+
+            // Use original case for base string to handle epoch (@N)
+            // and ISO dates correctly.
+            let orig_base = s[..base_match.end()].trim();
+            if let Ok(base_dt) = parse_base_date(orig_base, now) {
+                let offset = unit_duration(
+                    unit,
+                    sign.checked_mul(n)
+                        .ok_or_else(|| format!("date out of range: '{}'", s))?,
+                )
+                .ok_or_else(|| format!("date out of range: '{}'", s))?;
+                return base_dt
+                    .checked_add_signed(offset)
+                    .ok_or_else(|| format!("date out of range: '{}'", s));
+            }
+        }
+    }
+
+    parse_base_date(s, now)
+}
+
+fn local_naive_to_utc(
+    dt: NaiveDateTime,
+    original: &str,
+) -> std::result::Result<DateTime<Utc>, String> {
+    Local
+        .from_local_datetime(&dt)
+        .single()
+        .or_else(|| Local.from_local_datetime(&dt).earliest())
+        .map(|local_dt| local_dt.with_timezone(&Utc))
+        .ok_or_else(|| format!("date: invalid date '{}'", original))
+}
+
+/// Parse relative date expressions like "30 days ago", "+2 weeks", "-1 month"
+fn parse_relative_date(s: &str) -> Option<Duration> {
+    // "N unit(s) ago"
+    let re_ago =
+        regex::Regex::new(r"^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$").ok()?;
+    if let Some(caps) = re_ago.captures(s) {
+        let n: i64 = caps[1].parse().ok()?;
+        return unit_duration(&caps[2], n.checked_neg()?);
+    }
+
+    // "+N unit(s)" or "-N unit(s)" or "N unit(s)"
+    let re_rel =
+        regex::Regex::new(r"^([+-]?)(\d+)\s+(second|minute|hour|day|week|month|year)s?$").ok()?;
+    if let Some(caps) = re_rel.captures(s) {
+        let sign = if &caps[1] == "-" { -1i64 } else { 1i64 };
+        let n: i64 = caps[2].parse().ok()?;
+        return unit_duration(&caps[3], sign.checked_mul(n)?);
+    }
+
+    // "next unit" / "last unit"
+    if let Some(unit) = s.strip_prefix("next ") {
+        let unit = unit.trim().trim_end_matches('s');
+        return unit_duration(unit, 1);
+    }
+    if let Some(unit) = s.strip_prefix("last ") {
+        let unit = unit.trim().trim_end_matches('s');
+        return unit_duration(unit, -1);
+    }
+
+    None
+}
+
+// Returns None when the requested offset overflows i64 (the multiply) or the
+// chrono Duration range, so callers can report "date out of range" instead of
+// panicking on inputs like `date -d "30000000000000000 years"`.
+fn unit_duration(unit: &str, n: i64) -> Option<Duration> {
+    match unit {
+        "second" => Duration::try_seconds(n),
+        "minute" => Duration::try_minutes(n),
+        "hour" => Duration::try_hours(n),
+        "day" => Duration::try_days(n),
+        "week" => Duration::try_weeks(n),
+        "month" => n.checked_mul(30).and_then(Duration::try_days), // Approximate
+        "year" => n.checked_mul(365).and_then(Duration::try_days), // Approximate
+        _ => Some(Duration::zero()),
+    }
+}
+
+/// Expand `%N` (nanoseconds) in a format string, replacing it with the
+/// zero-padded nanosecond value from the given datetime.
+fn expand_nanoseconds(format: &str, nanos: u32) -> String {
+    // Replace %N with the 9-digit nanosecond value
+    // Must not replace %%N (literal %N)
+    let mut result = String::with_capacity(format.len());
+    let mut chars = format.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            match chars.peek() {
+                Some(&'%') => {
+                    // %% → pass through both (chrono will render as literal %)
+                    result.push('%');
+                    result.push('%');
+                    chars.next();
+                }
+                Some(&'N') => {
+                    chars.next();
+                    let _ = write!(result, "{:09}", nanos);
+                }
+                _ => {
+                    result.push('%');
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Format an RFC 2822 date string from a UTC datetime.
+fn format_rfc2822(dt: &DateTime<Utc>, force_utc: bool) -> String {
+    if force_utc {
+        dt.format("%a, %d %b %Y %H:%M:%S +0000").to_string()
+    } else {
+        let local_dt: DateTime<Local> = (*dt).into();
+        local_dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()
+    }
+}
+
+/// Format an ISO 8601 date string.
+fn format_iso8601(dt: &DateTime<Utc>, force_utc: bool, precision: &str) -> String {
+    match precision {
+        "hours" => {
+            if force_utc {
+                dt.format("%Y-%m-%dT%H+00:00").to_string()
+            } else {
+                let local_dt: DateTime<Local> = (*dt).into();
+                local_dt.format("%Y-%m-%dT%H%:z").to_string()
+            }
+        }
+        "minutes" => {
+            if force_utc {
+                dt.format("%Y-%m-%dT%H:%M+00:00").to_string()
+            } else {
+                let local_dt: DateTime<Local> = (*dt).into();
+                local_dt.format("%Y-%m-%dT%H:%M%:z").to_string()
+            }
+        }
+        "seconds" | "s" => {
+            if force_utc {
+                dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+            } else {
+                let local_dt: DateTime<Local> = (*dt).into();
+                local_dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+            }
+        }
+        // "date" or default
+        _ => dt.format("%Y-%m-%d").to_string(),
+    }
+}
+
+#[async_trait]
+impl Builtin for Date {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = super::check_help_version(
+            ctx.args,
+            "Usage: date [+FORMAT] [-u] [-R] [-I[TIMESPEC]] [-d STRING] [-r FILE]\nDisplay the current time in the given FORMAT, or set the system date.\n\n  +FORMAT\toutput date according to FORMAT\n  -d, --date=STRING\tdisplay time described by STRING\n  -r, --reference=FILE\tdisplay the last modification time of FILE\n  -u, --utc\tprint Coordinated Universal Time (UTC)\n  -R, --rfc-email\toutput RFC 2822 formatted date\n  -I[FMT], --iso-8601[=FMT]\toutput ISO 8601 date/time (FMT: date, hours, minutes, seconds)\n  --help\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("date (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let mut utc = false;
+        let mut format_arg: Option<String> = None;
+        let mut date_str: Option<String> = None;
+        let mut ref_file: Option<String> = None;
+        let mut rfc2822 = false;
+        let mut iso8601: Option<String> = None;
+
+        let mut p = super::arg_parser::ArgParser::new(ctx.args);
+        while !p.is_done() {
+            if p.flag_any(&["-u", "--utc"]) {
+                utc = true;
+            } else if let Some(val) = p.current().and_then(|s| s.strip_prefix("--date=")) {
+                date_str = Some(strip_surrounding_quotes(val).to_string());
+                p.advance();
+            } else if let Some(val) = p.flag_value_opt("-d") {
+                date_str = Some(val.to_string());
+            } else if p.flag("--date") {
+                if let Some(val) = p.positional() {
+                    date_str = Some(val.to_string());
+                }
+            } else if let Some(val) = p.current().and_then(|s| s.strip_prefix("--reference=")) {
+                ref_file = Some(val.to_string());
+                p.advance();
+            } else if let Some(val) = p.flag_value_opt("-r") {
+                ref_file = Some(val.to_string());
+            } else if p.flag("--reference") {
+                if let Some(val) = p.positional() {
+                    ref_file = Some(val.to_string());
+                }
+            } else if p.flag_any(&["-R", "--rfc-2822", "--rfc-email"]) {
+                rfc2822 = true;
+            } else if let Some(val) = p.current().and_then(|s| s.strip_prefix("--iso-8601=")) {
+                iso8601 = Some(val.to_string());
+                p.advance();
+            } else if p.flag_any(&["-I", "--iso-8601"]) {
+                iso8601 = Some("date".to_string());
+            } else if let Some(val) = p.current().and_then(|s| s.strip_prefix("-I")) {
+                iso8601 = Some(val.to_string());
+                p.advance();
+            } else if let Some(arg) = p.current().filter(|s| s.starts_with('+')) {
+                format_arg = Some(arg.to_string());
+                p.advance();
+            } else {
+                p.advance();
+            }
+        }
+
+        // Get the datetime to format
+        // THREAT[TM-INF-018]: Use virtual time if configured
+        let now = self.now();
+
+        // Resolve the datetime: -r (file mtime) > -d (date string) > now
+        let epoch_input;
+        let dt_utc;
+        if let Some(ref file) = ref_file {
+            // -r / --reference: stat file to get modification time
+            // Resolve relative paths against CWD (fix for issue #1225)
+            let path = resolve_path(ctx.cwd, file);
+            match ctx.fs.stat(&path).await {
+                Ok(meta) => {
+                    dt_utc = meta.modified.into();
+                    epoch_input = false;
+                }
+                Err(_) => {
+                    return Ok(ExecResult::err(
+                        format!("date: cannot stat '{}': No such file or directory\n", file),
+                        1,
+                    ));
+                }
+            }
+        } else if let Some(ref ds) = date_str {
+            epoch_input = uses_epoch_input(ds);
+            dt_utc = match parse_date_string(ds, now) {
+                Ok(dt) => dt,
+                Err(e) => return Ok(ExecResult::err(format!("{}\n", e), 1)),
+            };
+        } else {
+            epoch_input = false;
+            dt_utc = now;
+        };
+
+        let virtualized_clock = self.fixed_epoch.is_some() || self.offset_seconds != 0;
+        let force_utc = utc || epoch_input || virtualized_clock;
+
+        // Handle -R (RFC 2822) output
+        if rfc2822 {
+            let output = format_rfc2822(&dt_utc, force_utc);
+            return Ok(ExecResult::ok(format!("{}\n", output)));
+        }
+
+        // Handle -I (ISO 8601) output
+        if let Some(ref precision) = iso8601 {
+            let output = format_iso8601(&dt_utc, force_utc, precision);
+            return Ok(ExecResult::ok(format!("{}\n", output)));
+        }
+
+        let default_format = "%a %b %e %H:%M:%S %Z %Y".to_string();
+        let format_owned;
+        let format = match &format_arg {
+            Some(fmt) => {
+                let without_plus = &fmt[1..]; // Strip leading '+'
+                format_owned = strip_surrounding_quotes(without_plus).to_string();
+                &format_owned
+            }
+            None => &default_format,
+        };
+
+        // Expand %N before chrono validation (chrono doesn't know %N)
+        let nanos = dt_utc.timestamp_subsec_nanos();
+        let format = expand_nanoseconds(format, nanos);
+
+        // SECURITY: Validate format string before use to prevent panics
+        // THREAT[TM-INT-003]: Invalid format strings could cause chrono to panic
+        if let Err(e) = validate_format(&format) {
+            return Ok(ExecResult {
+                stdout: String::new(),
+                stderr: format!("date: {}\n", e),
+                exit_code: 1,
+                control_flow: crate::bash::interpreter::ControlFlow::None,
+                ..Default::default()
+            });
+        }
+
+        // Format the date, handling potential errors gracefully.
+        let mut output = String::new();
+        let format_result = if force_utc {
+            write!(output, "{}", dt_utc.format(&format))
+        } else {
+            let local_dt: DateTime<Local> = dt_utc.into();
+            write!(output, "{}", local_dt.format(&format))
+        };
+
+        match format_result {
+            Ok(()) => Ok(ExecResult::ok(format!("{}\n", output))),
+            Err(_) => Ok(ExecResult::err(
+                format!("date: failed to format date with '{}'\n", format),
+                1,
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use crate::bash::fs::InMemoryFs;
+
+    async fn run_date(args: &[&str]) -> ExecResult {
+        let fs = Arc::new(InMemoryFs::new());
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin: None,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Date::new().execute(ctx).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_date_default() {
+        let result = run_date(&[]).await;
+        assert_eq!(result.exit_code, 0);
+        // Just check it outputs something with a newline
+        assert!(result.stdout.ends_with('\n'));
+        assert!(result.stdout.len() > 10);
+    }
+
+    /// TM-INF-018: fixed_epoch wins over real clock.
+    #[test]
+    fn date_fixed_epoch_returns_fixed_time() {
+        let fixed = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let d = Date::with_fixed_epoch(fixed);
+        assert_eq!(d.now(), fixed);
+    }
+
+    /// TM-INF-018: non-zero offset shifts the real clock without
+    /// freezing it. Verify the offset is applied within a sub-second
+    /// tolerance vs `Utc::now() + offset`.
+    #[test]
+    fn date_offset_seconds_shifts_real_clock() {
+        let offset: i64 = 365 * 24 * 60 * 60; // +1 year
+        let d = Date::with_offset_seconds(offset);
+        let before = Utc::now();
+        let observed = d.now();
+        let after = Utc::now();
+        let expected_low = before + chrono::Duration::seconds(offset);
+        let expected_high = after + chrono::Duration::seconds(offset);
+        assert!(
+            observed >= expected_low && observed <= expected_high,
+            "offset clock {observed} not in [{expected_low}, {expected_high}]"
+        );
+    }
+
+    /// TM-INF-018: fixed_epoch takes priority if both modes are set
+    /// (defensive — the builder enforces exclusivity but the struct
+    /// fields are pub(crate)-ish and could be combined directly).
+    #[test]
+    fn date_fixed_epoch_overrides_offset() {
+        let fixed = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let d = Date {
+            fixed_epoch: Some(fixed),
+            offset_seconds: 99_999,
+        };
+        assert_eq!(d.now(), fixed);
+    }
+
+    /// TM-INF-018: zero offset = real clock (no allocation overhead path).
+    #[test]
+    fn date_zero_offset_uses_real_clock() {
+        let d = Date::with_offset_seconds(0);
+        let before = Utc::now();
+        let observed = d.now();
+        let after = Utc::now();
+        assert!(observed >= before && observed <= after);
+    }
+
+    #[tokio::test]
+    async fn test_date_format_year() {
+        let result = run_date(&["+%Y"]).await;
+        assert_eq!(result.exit_code, 0);
+        // Should be a 4-digit year
+        let year = result.stdout.trim();
+        assert_eq!(year.len(), 4);
+        assert!(year.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[tokio::test]
+    async fn test_date_format_iso() {
+        let result = run_date(&["+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        // Should be like 2024-01-15
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+        assert!(date.chars().nth(4) == Some('-'));
+        assert!(date.chars().nth(7) == Some('-'));
+    }
+
+    #[tokio::test]
+    async fn test_date_epoch() {
+        let result = run_date(&["+%s"]).await;
+        assert_eq!(result.exit_code, 0);
+        // Should be a valid unix timestamp (10 digits or more)
+        let epoch = result.stdout.trim();
+        assert!(epoch.len() >= 10);
+        assert!(epoch.parse::<i64>().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_date_utc() {
+        let result = run_date(&["-u", "+%Z"]).await;
+        assert_eq!(result.exit_code, 0);
+        // Should show UTC timezone
+        let tz = result.stdout.trim();
+        assert!(tz.contains("UTC") || tz == "+0000" || tz == "+00:00");
+    }
+
+    #[tokio::test]
+    async fn test_date_time_format() {
+        let result = run_date(&["+%H:%M:%S"]).await;
+        assert_eq!(result.exit_code, 0);
+        // Should be like 12:34:56
+        let time = result.stdout.trim();
+        assert_eq!(time.len(), 8);
+        let parts: Vec<&str> = time.split(':').collect();
+        assert_eq!(parts.len(), 3);
+    }
+
+    // Tests from main: timezone handling
+    #[tokio::test]
+    async fn test_date_timezone_utc() {
+        // %Z with UTC should always work and produce "UTC"
+        let result = run_date(&["-u", "+%Z"]).await;
+        assert_eq!(result.exit_code, 0);
+        let tz = result.stdout.trim();
+        assert!(tz.contains("UTC") || tz == "+0000" || tz == "+00:00");
+    }
+
+    #[tokio::test]
+    async fn test_date_default_format_includes_timezone() {
+        // The default format includes %Z - this tests that it doesn't panic
+        let result = run_date(&[]).await;
+        assert_eq!(result.exit_code, 0);
+        // Default format: "%a %b %e %H:%M:%S %Z %Y"
+        // Should contain a year
+        let output = result.stdout.trim();
+        assert!(
+            output.len() > 15,
+            "Default format should produce substantial output"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_date_timezone_local() {
+        // %Z with local time - this is the case that can fail in some environments
+        // With our fix, it should either succeed or return a graceful error
+        let result = run_date(&["+%Z"]).await;
+        // Either succeeds with exit_code 0, or fails gracefully with exit_code 1
+        if result.exit_code == 0 {
+            // Successful: output should be non-empty
+            assert!(!result.stdout.trim().is_empty());
+        } else {
+            // Failed gracefully: should have error message
+            assert!(result.stderr.contains("date:"));
+            assert!(result.stderr.contains("failed to format"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_date_combined_format_with_timezone() {
+        // Test combination of formats including %Z
+        let result = run_date(&["-u", "+%Y-%m-%d %H:%M:%S %Z"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        // Should have date, time, and timezone
+        assert!(output.contains('-')); // Date separator
+        assert!(output.contains(':')); // Time separator
+    }
+
+    #[tokio::test]
+    async fn test_date_empty_format() {
+        // Empty format string (just "+")
+        let result = run_date(&["+"]).await;
+        assert_eq!(result.exit_code, 0);
+        // Should produce just a newline
+        assert_eq!(result.stdout, "\n");
+    }
+
+    #[tokio::test]
+    async fn test_date_literal_text_in_format() {
+        // Format with literal text
+        let result = run_date(&["+Today is %A"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.starts_with("Today is "));
+    }
+
+    // Tests for invalid format validation (TM-INT-003)
+    #[tokio::test]
+    async fn test_date_invalid_format_specifier() {
+        // Invalid format specifier should return error, not panic
+        let result = run_date(&["+%Q"]).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid format string"));
+        assert!(result.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_date_incomplete_format_specifier() {
+        // Incomplete specifier at end should return error, not panic
+        let result = run_date(&["+%Y-%m-%"]).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid format string"));
+    }
+
+    #[tokio::test]
+    async fn test_date_mixed_valid_invalid_format() {
+        // Mix of valid and invalid should still error
+        let result = run_date(&["+%Y-%Q-%d"]).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid format string"));
+    }
+
+    // === Tests for -d / --date flag ===
+
+    #[tokio::test]
+    async fn test_date_d_now() {
+        let result = run_date(&["-d", "now", "+%Y"]).await;
+        assert_eq!(result.exit_code, 0);
+        let year = result.stdout.trim();
+        assert_eq!(year.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_date_d_yesterday() {
+        let result = run_date(&["-d", "yesterday", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    /// Relative offsets that overflow i64 or the chrono range must report an
+    /// error, not panic (e.g. `n * 365` in unit_duration, then base + offset).
+    #[tokio::test]
+    async fn test_date_d_relative_overflow_no_panic() {
+        for spec in [
+            "30000000000000000 years",
+            "+9000000000000000000 days",
+            "300000000000000000 months ago",
+        ] {
+            let result = run_date(&["-d", spec, "+%Y"]).await;
+            assert_ne!(result.exit_code, 0, "spec '{spec}' should fail cleanly");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_date_d_tomorrow() {
+        let result = run_date(&["-d", "tomorrow", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_date_d_days_ago() {
+        let result = run_date(&["-d", "30 days ago", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_date_d_epoch() {
+        let result = run_date(&["-u", "-d", "@0", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1970-01-01");
+    }
+
+    #[tokio::test]
+    async fn test_date_d_epoch_defaults_to_utc() {
+        let result = run_date(&["-d", "@0", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1970-01-01");
+    }
+
+    #[tokio::test]
+    async fn test_date_d_iso_date() {
+        let result = run_date(&["-d", "2024-01-15", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2024-01-15");
+    }
+
+    #[tokio::test]
+    async fn test_date_d_iso_datetime() {
+        let result = run_date(&["-d", "2024-06-15 14:30:00", "+%H:%M"]).await;
+        assert_eq!(result.exit_code, 0);
+        // In UTC mode this is exact; in local mode it depends on timezone
+        assert!(result.stdout.trim().contains(':'));
+    }
+
+    #[tokio::test]
+    async fn test_date_d_invalid() {
+        let result = run_date(&["-d", "not a date"]).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid date"));
+    }
+
+    #[tokio::test]
+    async fn test_date_d_relative_weeks() {
+        let result = run_date(&["-d", "2 weeks ago", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_date_d_plus_days() {
+        let result = run_date(&["-d", "+7 days", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_date_long_date_flag() {
+        let result = run_date(&["--date=yesterday", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    // === Compound date expression tests ===
+
+    #[tokio::test]
+    async fn test_date_d_compound_date_minus_days() {
+        // GNU date supports: date -d "2024-06-15 - 30 days"
+        let result = run_date(&["-d", "2024-06-15 - 30 days", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2024-05-16");
+    }
+
+    #[tokio::test]
+    async fn test_date_d_compound_date_plus_days() {
+        // GNU date supports: date -d "2024-01-15 + 30 days"
+        let result = run_date(&["-d", "2024-01-15 + 30 days", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2024-02-14");
+    }
+
+    #[tokio::test]
+    async fn test_date_d_compound_date_minus_months() {
+        let result = run_date(&["-d", "2024-03-15 - 2 months", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        // 2 months ≈ 60 days, so 2024-03-15 - 60 days = 2024-01-15
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+        assert!(date.starts_with("2024-01"));
+    }
+
+    #[tokio::test]
+    async fn test_date_d_compound_epoch_minus_days() {
+        // date -d "@1700000000 - 1 day"
+        let result = run_date(&["-d", "@1700000000 - 1 day", "+%s"]).await;
+        assert_eq!(result.exit_code, 0);
+        let epoch: i64 = result.stdout.trim().parse().unwrap();
+        assert_eq!(epoch, 1700000000 - 86400);
+    }
+
+    #[tokio::test]
+    async fn test_date_d_compound_yesterday_plus_hours() {
+        // date -d "yesterday + 12 hours"
+        let result = run_date(&["-d", "yesterday + 12 hours", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    // === --date= quote stripping tests ===
+
+    #[tokio::test]
+    async fn test_date_long_date_with_double_quotes() {
+        // Parser bug: --date="30 days ago" passes literal quotes
+        // The date builtin should strip them
+        let result = run_date(&["--date=\"30 days ago\"", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_date_long_date_with_single_quotes() {
+        let result = run_date(&["--date='yesterday'", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_date_lone_single_quote_input_no_panic() {
+        let result = run_date(&["-d", "'", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid date"));
+    }
+
+    #[tokio::test]
+    async fn test_date_lone_double_quote_input_no_panic() {
+        let result = run_date(&["-d", "\"", "+%Y-%m-%d"]).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("invalid date"));
+    }
+
+    // === --date with RFC 2822 input ===
+
+    #[tokio::test]
+    async fn test_date_parse_rfc2822_input() {
+        let result = run_date(&["+%B %d, %Y", "--date=Mon, 06 Apr 2026 12:00:00 +0000"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "April 06, 2026");
+    }
+
+    #[tokio::test]
+    async fn test_date_parse_rfc2822_epoch_output() {
+        let result = run_date(&["+%s", "--date=Wed, 01 Jan 2020 00:00:00 +0000"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1577836800");
+    }
+
+    #[tokio::test]
+    async fn test_date_parse_rfc2822_mismatched_dow() {
+        // April 11, 2026 is Saturday, not Thursday — GNU date ignores wrong DOW
+        let result = run_date(&["+%Y-%m-%d", "--date=Thu, 11 Apr 2026 12:00:00 +0000"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2026-04-11");
+    }
+
+    #[tokio::test]
+    async fn test_date_parse_rfc3339_input() {
+        let result = run_date(&["+%Y", "--date=2024-06-15T12:00:00+00:00"]).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2024");
+    }
+
+    // === -R (RFC 2822) tests ===
+
+    #[tokio::test]
+    async fn test_date_rfc2822() {
+        let result = run_date(&["-R"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        // RFC 2822: "Mon, 15 Jan 2024 12:00:00 +0000"
+        assert!(output.contains(','), "RFC 2822 should contain comma");
+        assert!(output.len() > 20);
+    }
+
+    #[tokio::test]
+    async fn test_date_rfc2822_utc() {
+        let result = run_date(&["-u", "-R"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        assert!(output.ends_with("+0000"));
+    }
+
+    // === -I (ISO 8601) tests ===
+
+    #[tokio::test]
+    async fn test_date_iso8601_default() {
+        let result = run_date(&["-I"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        // Just date: YYYY-MM-DD
+        assert_eq!(output.len(), 10);
+        assert!(output.contains('-'));
+    }
+
+    #[tokio::test]
+    async fn test_date_iso8601_seconds() {
+        let result = run_date(&["-Iseconds"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        assert!(output.contains('T'));
+        assert!(output.contains(':'));
+    }
+
+    // === %N (nanoseconds) tests ===
+
+    #[tokio::test]
+    async fn test_date_nanoseconds() {
+        let result = run_date(&["+%N"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        assert_eq!(output.len(), 9, "nanoseconds should be 9 digits");
+        assert!(output.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[tokio::test]
+    async fn test_date_nanoseconds_in_format() {
+        let result = run_date(&["+%S.%N"]).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        assert!(output.contains('.'));
+        let parts: Vec<&str> = output.split('.').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1].len(), 9);
+    }
+
+    #[test]
+    fn test_expand_nanoseconds_basic() {
+        assert_eq!(expand_nanoseconds("%N", 123456789), "123456789");
+        assert_eq!(expand_nanoseconds("%N", 0), "000000000");
+        assert_eq!(expand_nanoseconds("%S.%N", 42), "%S.000000042");
+    }
+
+    #[test]
+    fn test_expand_nanoseconds_double_percent() {
+        // %%N should become %N (literal %) after chrono processes %%
+        // We only expand single %N, not %%N
+        assert_eq!(expand_nanoseconds("%%N", 123), "%%N");
+    }
+
+    // Helper to run date with a pre-configured filesystem
+    async fn run_date_with_fs(args: &[&str], fs: Arc<InMemoryFs>) -> ExecResult {
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin: None,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Date::new().execute(ctx).await.unwrap()
+    }
+
+    // === -r / --reference (file mtime) tests ===
+
+    #[tokio::test]
+    async fn test_date_r_file_mtime() {
+        use crate::bash::fs::FileSystem;
+
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir(std::path::Path::new("/tmp"), true).await.unwrap();
+        fs.write_file(std::path::Path::new("/tmp/test.txt"), b"hello")
+            .await
+            .unwrap();
+
+        // -r should return the file's mtime, not an error
+        let result = run_date_with_fs(&["-r", "/tmp/test.txt", "+%Y-%m-%d"], fs).await;
+        assert_eq!(result.exit_code, 0);
+        let date = result.stdout.trim();
+        // Should be a valid date (YYYY-MM-DD)
+        assert_eq!(date.len(), 10);
+        assert!(date.contains('-'));
+    }
+
+    #[tokio::test]
+    async fn test_date_r_file_not_found() {
+        let fs = Arc::new(InMemoryFs::new());
+        let result = run_date_with_fs(&["-r", "/nonexistent.txt"], fs).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("cannot stat"));
+        assert!(result.stderr.contains("/nonexistent.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_date_r_with_format() {
+        use crate::bash::fs::FileSystem;
+
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir(std::path::Path::new("/tmp"), true).await.unwrap();
+        fs.write_file(std::path::Path::new("/tmp/test.txt"), b"content")
+            .await
+            .unwrap();
+
+        let result = run_date_with_fs(&["-r", "/tmp/test.txt", "+%B"], fs).await;
+        assert_eq!(result.exit_code, 0);
+        // Should be a month name, non-empty
+        let month = result.stdout.trim();
+        assert!(!month.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_date_reference_long_flag() {
+        use crate::bash::fs::FileSystem;
+
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir(std::path::Path::new("/tmp"), true).await.unwrap();
+        fs.write_file(std::path::Path::new("/tmp/test.txt"), b"content")
+            .await
+            .unwrap();
+
+        let result = run_date_with_fs(&["--reference=/tmp/test.txt", "+%Y"], fs).await;
+        assert_eq!(result.exit_code, 0);
+        let year = result.stdout.trim();
+        assert_eq!(year.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_date_r_with_utc() {
+        use crate::bash::fs::FileSystem;
+
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir(std::path::Path::new("/tmp"), true).await.unwrap();
+        fs.write_file(std::path::Path::new("/tmp/test.txt"), b"content")
+            .await
+            .unwrap();
+
+        let result = run_date_with_fs(&["-u", "-r", "/tmp/test.txt", "+%Z"], fs).await;
+        assert_eq!(result.exit_code, 0);
+        let tz = result.stdout.trim();
+        assert!(tz.contains("UTC") || tz == "+0000" || tz == "+00:00");
+    }
+
+    // TM-INF-022: invalid-date stderr must not leak `chrono` Debug shapes.
+    #[tokio::test]
+    async fn no_leak_invalid_format() {
+        let r =
+            crate::bash::builtins::debug_leak_check::run(r#"date -d 'not a date in any format'"#).await;
+        crate::bash::builtins::debug_leak_check::assert_no_leak(
+            &r,
+            "date_invalid_format",
+            &["chrono::ParseError", "ParseError {"],
+        );
+    }
+}
