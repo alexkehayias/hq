@@ -1,5 +1,5 @@
 use crate::cli;
-use bashkit::{async_trait, Builtin, BuiltinContext, ExecResult, Result};
+use crate::bash::{async_trait, Builtin, BuiltinContext, ExecResult, Result};
 use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
 use std::time::Duration;
@@ -210,7 +210,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bashkit::Bash;
+    use crate::bash::Bash;
 
     /// Create a bash instance with the hq builtin registered.
     fn bash_with_hq() -> Bash {

@@ -2,7 +2,7 @@ use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use bashkit::{Bash, PosixFs, RealFs, RealFsMode};
+use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -277,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_filesystem() {
-        use bashkit::Bash;
+        use crate::bash::Bash;
 
         // Use a single Bash instance to persist virtual filesystem state
         let mut bash = Bash::new();
@@ -297,7 +297,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_mkdir() {
-        use bashkit::Bash;
+        use crate::bash::Bash;
 
         // Use a single Bash instance to persist virtual filesystem state
         let mut bash = Bash::new();

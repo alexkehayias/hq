@@ -1,0 +1,442 @@
+//! expand/unexpand builtin commands - convert between tabs and spaces
+
+use async_trait::async_trait;
+
+use super::limits::{
+    EXPAND_MAX_OUTPUT_BYTES as MAX_OUTPUT_BYTES, EXPAND_MAX_TAB_STOP as MAX_TAB_STOP,
+};
+use super::{Builtin, BuiltinHelper, Context, read_text_file, resolve_path};
+use crate::bash::error::Result;
+use crate::bash::interpreter::ExecResult;
+
+/// The expand builtin command.
+///
+/// Usage: expand [-t N] [FILE...]
+///
+/// Converts tabs to spaces. Default tab stop is 8.
+pub struct Expand;
+
+impl BuiltinHelper for Expand {
+    const NAME: &'static str = "expand";
+}
+
+#[async_trait]
+impl Builtin for Expand {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = Self::check_help(
+            ctx.args,
+            "Usage: expand [OPTION]... [FILE]...\nConvert tabs to spaces.\n\n  -t N\tuse N characters as tab size (default 8)\n  --help\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("expand (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let mut tab_stops: Vec<usize> = vec![8];
+        let mut files: Vec<&str> = Vec::new();
+
+        let mut i = 0;
+        while i < ctx.args.len() {
+            match ctx.args[i].as_str() {
+                "-t" => {
+                    i += 1;
+                    if i >= ctx.args.len() {
+                        return Ok(Self::err("option requires an argument -- 't'", 1));
+                    }
+                    tab_stops = match parse_tab_stops(&ctx.args[i]) {
+                        Ok(stops) => stops,
+                        Err(e) => return Ok(Self::err(e, 1)),
+                    };
+                }
+                s if s.starts_with("-t") && s.len() > 2 => {
+                    tab_stops = match parse_tab_stops(&s[2..]) {
+                        Ok(stops) => stops,
+                        Err(e) => return Ok(Self::err(e, 1)),
+                    };
+                }
+                _ => files.push(&ctx.args[i]),
+            }
+            i += 1;
+        }
+
+        let input = if files.is_empty() {
+            ctx.stdin.unwrap_or("").to_string()
+        } else {
+            let mut buf = String::new();
+            for file in &files {
+                let path = resolve_path(ctx.cwd, file);
+                match read_text_file(ctx.fs.as_ref(), &path, "expand").await {
+                    Ok(text) => buf.push_str(&text),
+                    Err(_) => {
+                        return Ok(Self::err_path(file, "No such file or directory", 1));
+                    }
+                }
+            }
+            buf
+        };
+
+        let mut output = String::new();
+        // Use split_terminator to avoid an extra empty segment (and trailing newline) when
+        // input ends with '\n'.
+        for line in input.split_terminator('\n') {
+            let mut col = 0;
+            for ch in line.chars() {
+                if ch == '\t' {
+                    let next_stop = next_tab_stop(col, &tab_stops);
+                    let spaces = next_stop - col;
+                    if output.len().saturating_add(spaces) > MAX_OUTPUT_BYTES {
+                        return Ok(Self::err(
+                            format!("output exceeds byte limit ({MAX_OUTPUT_BYTES})"),
+                            1,
+                        ));
+                    }
+                    output.extend(std::iter::repeat_n(' ', spaces));
+                    col = next_stop;
+                } else {
+                    if output.len() >= MAX_OUTPUT_BYTES {
+                        return Ok(Self::err(
+                            format!("output exceeds byte limit ({MAX_OUTPUT_BYTES})"),
+                            1,
+                        ));
+                    }
+                    output.push(ch);
+                    col += 1;
+                }
+            }
+            if output.len() >= MAX_OUTPUT_BYTES {
+                return Ok(Self::err(
+                    format!("output exceeds byte limit ({MAX_OUTPUT_BYTES})"),
+                    1,
+                ));
+            }
+            output.push('\n');
+        }
+
+        // Preserve trailing-newline behavior: split_terminator omits the final empty segment
+        // so we only have newlines after actual lines. If the input did NOT end with '\n',
+        // remove the last newline we added.
+        if !input.ends_with('\n') && output.ends_with('\n') {
+            output.pop();
+        }
+
+        Ok(ExecResult::ok(output))
+    }
+}
+
+/// The unexpand builtin command.
+///
+/// Usage: unexpand [-a] [-t N] [FILE...]
+///
+/// Converts spaces to tabs. By default, only converts leading spaces.
+pub struct Unexpand;
+
+impl BuiltinHelper for Unexpand {
+    const NAME: &'static str = "unexpand";
+}
+
+#[async_trait]
+impl Builtin for Unexpand {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = Self::check_help(
+            ctx.args,
+            "Usage: unexpand [OPTION]... [FILE]...\nConvert spaces to tabs.\n\n  -a, --all\tconvert all blanks, instead of just initial blanks\n  -t N\t\tuse N characters as tab size (default 8)\n  --help\t\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("unexpand (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let mut tab_stops: Vec<usize> = vec![8];
+        let mut all = false;
+        let mut files: Vec<&str> = Vec::new();
+
+        let mut i = 0;
+        while i < ctx.args.len() {
+            match ctx.args[i].as_str() {
+                "-a" | "--all" => all = true,
+                "-t" => {
+                    i += 1;
+                    if i >= ctx.args.len() {
+                        return Ok(Self::err("option requires an argument -- 't'", 1));
+                    }
+                    let parsed_tab_stops = match parse_tab_stops(&ctx.args[i]) {
+                        Ok(stops) => stops,
+                        Err(_) => {
+                            return Ok(Self::err(
+                                format!("invalid tab size: '{}'", ctx.args[i]),
+                                1,
+                            ));
+                        }
+                    };
+                    tab_stops = parsed_tab_stops;
+                    all = true; // -t implies -a
+                }
+                _ => files.push(&ctx.args[i]),
+            }
+            i += 1;
+        }
+
+        let input = if files.is_empty() {
+            ctx.stdin.unwrap_or("").to_string()
+        } else {
+            let mut buf = String::new();
+            for file in &files {
+                let path = resolve_path(ctx.cwd, file);
+                match read_text_file(ctx.fs.as_ref(), &path, "unexpand").await {
+                    Ok(text) => buf.push_str(&text),
+                    Err(_) => {
+                        return Ok(Self::err_path(file, "No such file or directory", 1));
+                    }
+                }
+            }
+            buf
+        };
+
+        let tab_size = tab_stops[0];
+        let mut output = String::new();
+
+        for line in input.split('\n') {
+            if all {
+                // Convert all sequences of spaces at tab stops
+                let mut col = 0;
+                let mut space_count = 0;
+                let mut result = String::new();
+
+                for ch in line.chars() {
+                    if ch == ' ' {
+                        space_count += 1;
+                        col += 1;
+                        if col % tab_size == 0 && space_count > 1 {
+                            result.push('\t');
+                            space_count = 0;
+                        }
+                    } else {
+                        for _ in 0..space_count {
+                            result.push(' ');
+                        }
+                        space_count = 0;
+                        result.push(ch);
+                        col += 1;
+                    }
+                }
+                for _ in 0..space_count {
+                    result.push(' ');
+                }
+                output.push_str(&result);
+            } else {
+                // Only convert leading spaces
+                let mut col = 0;
+                let chars: Vec<char> = line.chars().collect();
+                let mut pos = 0;
+                let mut result = String::new();
+
+                // Process leading spaces
+                while pos < chars.len() && chars[pos] == ' ' {
+                    col += 1;
+                    pos += 1;
+                    if col % tab_size == 0 {
+                        result.push('\t');
+                    }
+                }
+                // Add remaining leading spaces that didn't fill a tab
+                let remainder = col % tab_size;
+                if remainder > 0 && pos < chars.len() {
+                    // We consumed some spaces but not enough for a tab
+                    let tabs_written = col / tab_size;
+                    let spaces_accounted = tabs_written * tab_size;
+                    for _ in 0..(col - spaces_accounted) {
+                        // These are already handled by the tab pushes above
+                    }
+                }
+                // Append rest of line unchanged
+                for ch in &chars[pos..] {
+                    result.push(*ch);
+                }
+                output.push_str(&result);
+            }
+            output.push('\n');
+        }
+
+        if !input.ends_with('\n') && output.ends_with('\n') {
+            output.pop();
+        }
+
+        Ok(ExecResult::ok(output))
+    }
+}
+
+fn parse_tab_stops(s: &str) -> std::result::Result<Vec<usize>, String> {
+    let mut stops = Vec::new();
+    for part in s.split(',') {
+        let trimmed = part.trim();
+        let Ok(stop) = trimmed.parse::<usize>() else {
+            return Err(format!("invalid tab size: '{s}'"));
+        };
+        if stop == 0 || stop > MAX_TAB_STOP {
+            return Err(format!("invalid tab size: '{s}'"));
+        }
+        stops.push(stop);
+    }
+    if stops.is_empty() {
+        return Err(format!("invalid tab size: '{s}'"));
+    }
+    Ok(stops)
+}
+
+fn next_tab_stop(col: usize, tab_stops: &[usize]) -> usize {
+    if tab_stops.len() == 1 {
+        let ts = tab_stops[0];
+        ((col / ts) + 1) * ts
+    } else {
+        // Find the first tab stop > col
+        for &ts in tab_stops {
+            if ts > col {
+                return ts;
+            }
+        }
+        // Past all tab stops, use last interval
+        col + 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bash::fs::InMemoryFs;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    async fn run_expand(args: &[&str], stdin: Option<&str>) -> ExecResult {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let env = HashMap::new();
+        let mut variables = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+        let fs = Arc::new(InMemoryFs::new()) as Arc<dyn crate::bash::fs::FileSystem>;
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+        Expand.execute(ctx).await.expect("expand failed")
+    }
+
+    async fn run_unexpand(args: &[&str], stdin: Option<&str>) -> ExecResult {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let env = HashMap::new();
+        let mut variables = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+        let fs = Arc::new(InMemoryFs::new()) as Arc<dyn crate::bash::fs::FileSystem>;
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+        Unexpand.execute(ctx).await.expect("unexpand failed")
+    }
+
+    #[tokio::test]
+    async fn test_expand_default_tab() {
+        let result = run_expand(&[], Some("\thello")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "        hello");
+    }
+
+    #[tokio::test]
+    async fn test_expand_custom_tab() {
+        let result = run_expand(&["-t", "4"], Some("\thello")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "    hello");
+    }
+
+    #[tokio::test]
+    async fn test_expand_rejects_oversized_tab_stop() {
+        let result = run_expand(&["-t", "1000000000"], Some("\thello")).await;
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.stderr, "expand: invalid tab size: '1000000000'\n");
+    }
+
+    #[tokio::test]
+    async fn test_expand_rejects_output_amplification_over_cap() {
+        let input = "\t".repeat((MAX_OUTPUT_BYTES / MAX_TAB_STOP) + 1);
+        let result = run_expand(&["-t", &MAX_TAB_STOP.to_string()], Some(&input)).await;
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(
+            result.stderr,
+            format!("expand: output exceeds byte limit ({MAX_OUTPUT_BYTES})\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unexpand_rejects_oversized_tab_stop() {
+        let result = run_unexpand(&["-t", "1000000000"], Some("        hello")).await;
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.stderr, "unexpand: invalid tab size: '1000000000'\n");
+    }
+
+    #[tokio::test]
+    async fn test_expand_no_tabs() {
+        let result = run_expand(&[], Some("no tabs here")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "no tabs here");
+    }
+
+    #[tokio::test]
+    async fn test_expand_multiple_tabs() {
+        let result = run_expand(&["-t", "4"], Some("a\tb\tc")).await;
+        assert_eq!(result.exit_code, 0);
+        // 'a' at col 0, tab to col 4, 'b' at col 4, tab to col 8, 'c' at col 8
+        assert_eq!(result.stdout, "a   b   c");
+    }
+
+    #[tokio::test]
+    async fn test_unexpand_leading_spaces() {
+        let result = run_unexpand(&[], Some("        hello")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "\thello");
+    }
+
+    #[tokio::test]
+    async fn test_unexpand_all() {
+        let result = run_unexpand(&["-a"], Some("hello   world")).await;
+        assert_eq!(result.exit_code, 0);
+        // The spaces might not align to tab stops, so behavior varies
+        assert!(result.stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_expand_empty() {
+        let result = run_expand(&[], Some("")).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_unexpand_invalid_zero_tab_stop() {
+        let result = run_unexpand(&["-t", "0"], Some("        hello")).await;
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.stderr, "unexpand: invalid tab size: '0'\n");
+    }
+
+    #[tokio::test]
+    async fn test_unexpand_invalid_non_numeric_tab_stop() {
+        let result = run_unexpand(&["-t", "foo"], Some("        hello")).await;
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.stderr, "unexpand: invalid tab size: 'foo'\n");
+    }
+}

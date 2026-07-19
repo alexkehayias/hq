@@ -1,0 +1,1009 @@
+//! Sort and uniq builtins - sort lines and filter duplicates
+
+use async_trait::async_trait;
+
+use super::{Builtin, Context, read_text_file};
+use crate::bash::error::Result;
+use crate::bash::interpreter::ExecResult;
+
+/// The sort builtin - sort lines of text.
+///
+/// Usage: sort [-cfhnMruVs] [-t DELIM] [-k KEYDEF] [-o FILE] [FILE...]
+///
+/// Options:
+///   -f   Fold lower case to upper case characters (case insensitive)
+///   -n   Compare according to string numerical value
+///   -r   Reverse the result of comparisons
+///   -u   Output only unique lines (like sort | uniq)
+///   -V   Natural sort of version numbers
+///   -t   Field delimiter character
+///   -k   Sort key definition (e.g., -k2 or -k2,2)
+///   -s   Stable sort (preserve input order for equal keys)
+///   -c   Check if input is sorted; exit 1 if not
+///   -h   Human numeric sort (1K, 2M, 3G)
+///   -M   Month sort (JAN < FEB < ... < DEC)
+///   -o   Write output to FILE
+pub struct Sort;
+
+/// A parsed sort key definition from `-k KEYDEF`.
+/// Format: `START[.CHAR][FLAGS][,END[.CHAR][FLAGS]]`
+#[derive(Clone, Debug)]
+struct KeySpec {
+    start_field: usize,
+    start_char: usize, // 0 = whole field
+    end_field: usize,  // 0 = end of line
+    end_char: usize,   // 0 = end of field
+    numeric: bool,
+    reverse: bool,
+    fold_case: bool,
+    human_numeric: bool,
+    month_sort: bool,
+    #[allow(dead_code)] // Used when combined with sort -V feature
+    version_sort: bool,
+}
+
+impl KeySpec {
+    /// Parse a KEYDEF string like "2", "2,3", "2.3,3.4", "2n,2", "2nr"
+    fn parse(spec: &str) -> Self {
+        let (start_part, end_part) = if let Some(comma) = spec.find(',') {
+            (&spec[..comma], Some(&spec[comma + 1..]))
+        } else {
+            (spec, None)
+        };
+
+        let (start_field, start_char, start_flags) = Self::parse_field_spec(start_part);
+        let (end_field, end_char, end_flags) = if let Some(ep) = end_part {
+            let (f, c, fl) = Self::parse_field_spec(ep);
+            (f, c, fl)
+        } else {
+            // No comma: -k2 means "field 2 only" (same as -k2,2)
+            (start_field, 0, String::new())
+        };
+
+        // Merge flags from both start and end parts
+        let all_flags: String = format!("{}{}", start_flags, end_flags);
+
+        KeySpec {
+            start_field,
+            start_char,
+            end_field,
+            end_char,
+            numeric: all_flags.contains('n'),
+            reverse: all_flags.contains('r'),
+            fold_case: all_flags.contains('f'),
+            human_numeric: all_flags.contains('h'),
+            month_sort: all_flags.contains('M'),
+            version_sort: all_flags.contains('V'),
+        }
+    }
+
+    /// Parse "FIELD[.CHAR][FLAGS]" → (field, char_pos, flags_string)
+    fn parse_field_spec(s: &str) -> (usize, usize, String) {
+        let mut i = 0;
+        let chars: Vec<char> = s.chars().collect();
+        // Parse field number
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        let field: usize = s[..i].parse().unwrap_or(0);
+
+        // Parse optional .CHAR
+        let mut char_pos = 0;
+        if i < chars.len() && chars[i] == '.' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            char_pos = s[start..i].parse().unwrap_or(0);
+        }
+
+        // Remaining chars are flags
+        let flags = s[i..].to_string();
+        (field, char_pos, flags)
+    }
+}
+
+/// Split a line into fields using the given delimiter
+fn split_fields(line: &str, delimiter: Option<char>) -> Vec<&str> {
+    if let Some(delim) = delimiter {
+        line.split(delim).collect()
+    } else {
+        line.split_whitespace().collect()
+    }
+}
+
+/// Extract the sort key from a line based on field delimiter and key spec
+fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(s.len())
+}
+
+fn extract_key_spec(line: &str, delimiter: Option<char>, key: &KeySpec) -> String {
+    let fields = split_fields(line, delimiter);
+    if fields.is_empty() || key.start_field == 0 {
+        return line.to_string();
+    }
+
+    let start_idx = key.start_field.saturating_sub(1);
+    if start_idx >= fields.len() {
+        return String::new();
+    }
+
+    let end_idx = if key.end_field == 0 {
+        fields.len() - 1
+    } else {
+        (key.end_field.saturating_sub(1)).min(fields.len() - 1)
+    };
+
+    if start_idx > end_idx {
+        return String::new();
+    }
+
+    if start_idx == end_idx {
+        let field = fields[start_idx];
+        let field_char_len = field.chars().count();
+        let start_c = if key.start_char > 0 {
+            (key.start_char - 1).min(field_char_len)
+        } else {
+            0
+        };
+        let end_c = if key.end_char > 0 {
+            key.end_char.min(field_char_len)
+        } else {
+            field_char_len
+        };
+        if start_c >= end_c {
+            return String::new();
+        }
+        let start_b = char_to_byte_idx(field, start_c);
+        let end_b = char_to_byte_idx(field, end_c);
+        return field[start_b..end_b].to_string();
+    }
+
+    // Multi-field key
+    let mut result = String::new();
+    for (i, field) in fields.iter().enumerate().take(end_idx + 1).skip(start_idx) {
+        if i > start_idx {
+            result.push(delimiter.unwrap_or(' '));
+        }
+        if i == start_idx && key.start_char > 0 {
+            let field_char_len = field.chars().count();
+            let sc = (key.start_char - 1).min(field_char_len);
+            let start_b = char_to_byte_idx(field, sc);
+            result.push_str(&field[start_b..]);
+        } else if i == end_idx && key.end_char > 0 {
+            let field_char_len = field.chars().count();
+            let ec = key.end_char.min(field_char_len);
+            let end_b = char_to_byte_idx(field, ec);
+            result.push_str(&field[..end_b]);
+        } else {
+            result.push_str(field);
+        }
+    }
+    result
+}
+
+/// Extract leading numeric prefix from a string for `sort -n`.
+/// Real coreutils `sort -n` parses the leading numeric portion (optional sign,
+/// digits, optional decimal point and digits) and treats the rest as non-numeric.
+/// Non-numeric strings have value 0.
+fn extract_numeric_prefix(s: &str) -> f64 {
+    let s = s.trim_start();
+    if s.is_empty() {
+        return 0.0;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut end = 0;
+    // Optional sign
+    if end < chars.len() && (chars[end] == '+' || chars[end] == '-') {
+        end += 1;
+    }
+    // Digits
+    while end < chars.len() && chars[end].is_ascii_digit() {
+        end += 1;
+    }
+    // Optional decimal point + digits
+    if end < chars.len() && chars[end] == '.' {
+        end += 1;
+        while end < chars.len() && chars[end].is_ascii_digit() {
+            end += 1;
+        }
+    }
+    if end == 0 || (end == 1 && (chars[0] == '+' || chars[0] == '-')) {
+        return 0.0;
+    }
+    let num_str: String = chars[..end].iter().collect();
+    num_str.parse().unwrap_or(0.0)
+}
+
+/// Parse human-numeric value (e.g., "10K" → 10_000, "5M" → 5_000_000)
+fn parse_human_numeric(s: &str) -> f64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0.0;
+    }
+    let last = s.as_bytes().last().copied().unwrap_or(b'0');
+    let multiplier = match last {
+        b'K' | b'k' => 1_000.0,
+        b'M' | b'm' => 1_000_000.0,
+        b'G' | b'g' => 1_000_000_000.0,
+        b'T' | b't' => 1_000_000_000_000.0,
+        _ => return s.parse::<f64>().unwrap_or(0.0),
+    };
+    let num_part = &s[..s.len() - 1];
+    num_part.parse::<f64>().unwrap_or(0.0) * multiplier
+}
+
+/// Compare two strings using version/natural sort order.
+/// Splits strings into alternating non-digit and digit chunks and compares
+/// each: non-digit chunks lexically, digit chunks numerically.
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut ai = a.chars().peekable();
+    let mut bi = b.chars().peekable();
+
+    loop {
+        match (ai.peek(), bi.peek()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            _ => {}
+        }
+
+        // Collect non-digit prefix from both
+        let mut a_text = String::new();
+        let mut b_text = String::new();
+        while let Some(&c) = ai.peek() {
+            if c.is_ascii_digit() {
+                break;
+            }
+            a_text.push(c);
+            ai.next();
+        }
+        while let Some(&c) = bi.peek() {
+            if c.is_ascii_digit() {
+                break;
+            }
+            b_text.push(c);
+            bi.next();
+        }
+        if a_text != b_text {
+            return a_text.cmp(&b_text);
+        }
+
+        // Collect digit chunk from both
+        let mut a_num = String::new();
+        let mut b_num = String::new();
+        while let Some(&c) = ai.peek() {
+            if !c.is_ascii_digit() {
+                break;
+            }
+            a_num.push(c);
+            ai.next();
+        }
+        while let Some(&c) = bi.peek() {
+            if !c.is_ascii_digit() {
+                break;
+            }
+            b_num.push(c);
+            bi.next();
+        }
+        if a_num.is_empty() && b_num.is_empty() {
+            continue;
+        }
+        let an: u64 = a_num.parse().unwrap_or(0);
+        let bn: u64 = b_num.parse().unwrap_or(0);
+        if an != bn {
+            return an.cmp(&bn);
+        }
+        // Equal numeric value but different representations (e.g. "01" vs "1"):
+        // shorter string (fewer leading zeros) sorts first
+        if a_num.len() != b_num.len() {
+            return a_num.len().cmp(&b_num.len());
+        }
+    }
+}
+
+/// Parse month abbreviation to ordinal (1-12, 0 for unknown)
+fn month_ordinal(s: &str) -> u32 {
+    match s.trim().to_uppercase().as_str() {
+        "JAN" => 1,
+        "FEB" => 2,
+        "MAR" => 3,
+        "APR" => 4,
+        "MAY" => 5,
+        "JUN" => 6,
+        "JUL" => 7,
+        "AUG" => 8,
+        "SEP" => 9,
+        "OCT" => 10,
+        "NOV" => 11,
+        "DEC" => 12,
+        _ => 0,
+    }
+}
+
+#[async_trait]
+impl Builtin for Sort {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = super::check_help_version(
+            ctx.args,
+            "Usage: sort [OPTION]... [FILE]...\nWrite sorted concatenation of all FILE(s) to standard output.\n\n  -f\t\tfold lower case to upper case characters\n  -n\t\tcompare according to string numerical value\n  -r\t\treverse the result of comparisons\n  -u\t\toutput only unique lines\n  -V\t\tnatural sort of version numbers\n  -t DELIM\tuse DELIM as field separator\n  -k KEYDEF\tsort via a key definition\n  -s\t\tstable sort\n  -c\t\tcheck for sorted input\n  -h\t\thuman numeric sort (1K, 2M, 3G)\n  -M\t\tmonth sort\n  -m\t\tmerge already sorted files\n  -o FILE\twrite output to FILE\n  -z\t\tline delimiter is NUL, not newline\n  --help\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("sort (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let mut reverse = false;
+        let mut numeric = false;
+        let mut unique = false;
+        let mut fold_case = false;
+        let mut stable = false;
+        let mut check_sorted = false;
+        let mut human_numeric = false;
+        let mut month_sort = false;
+        let mut version_sort = false;
+        let mut merge = false;
+        let mut delimiter: Option<char> = None;
+        let mut key_specs: Vec<KeySpec> = Vec::new();
+        let mut output_file: Option<String> = None;
+        let mut zero_terminated = false;
+        let mut files = Vec::new();
+
+        let mut p = super::arg_parser::ArgParser::new(ctx.args);
+        while !p.is_done() {
+            if let Some(val) = p.flag_value_opt("-t") {
+                delimiter = val.chars().next();
+            } else if let Some(val) = p.flag_value_opt("-k") {
+                key_specs.push(KeySpec::parse(val));
+            } else if let Some(val) = p.flag_value_opt("-o") {
+                output_file = Some(val.to_string());
+            } else {
+                let flags = p.bool_flags("rnufscChMmVz");
+                if !flags.is_empty() {
+                    for c in flags {
+                        match c {
+                            'r' => reverse = true,
+                            'n' => numeric = true,
+                            'u' => unique = true,
+                            'f' => fold_case = true,
+                            's' => stable = true,
+                            'c' | 'C' => check_sorted = true,
+                            'h' => human_numeric = true,
+                            'V' => version_sort = true,
+                            'M' => month_sort = true,
+                            'm' => merge = true,
+                            'z' => zero_terminated = true,
+                            _ => {}
+                        }
+                    }
+                } else if let Some(arg) = p.positional() {
+                    files.push(arg.to_string());
+                }
+            }
+        }
+
+        // Collect all input
+        let mut all_lines = Vec::new();
+
+        let line_sep = if zero_terminated { '\0' } else { '\n' };
+
+        if files.is_empty() {
+            if let Some(stdin) = ctx.stdin {
+                for line in stdin.split(line_sep) {
+                    if !line.is_empty() {
+                        all_lines.push(line.to_string());
+                    }
+                }
+            }
+        } else {
+            for file in &files {
+                let path = if file.starts_with('/') {
+                    std::path::PathBuf::from(file)
+                } else {
+                    ctx.cwd.join(file)
+                };
+
+                let text = match read_text_file(&*ctx.fs, &path, "sort").await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(e),
+                };
+                for line in text.split(line_sep) {
+                    if !line.is_empty() {
+                        all_lines.push(line.to_string());
+                    }
+                }
+            }
+        }
+
+        // Merge mode: k-way merge of pre-sorted inputs
+        if merge && !files.is_empty() {
+            let mut streams: Vec<Vec<String>> = Vec::new();
+            for file in &files {
+                let path = if file.starts_with('/') {
+                    std::path::PathBuf::from(file)
+                } else {
+                    ctx.cwd.join(file)
+                };
+                let text = match read_text_file(&*ctx.fs, &path, "sort").await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(e),
+                };
+                let lines: Vec<String> = text
+                    .split(line_sep)
+                    .filter(|l| !l.is_empty())
+                    .map(|l| l.to_string())
+                    .collect();
+                streams.push(lines);
+            }
+            // k-way merge using indices
+            let mut indices: Vec<usize> = vec![0; streams.len()];
+            let mut merged = Vec::new();
+            loop {
+                let mut best: Option<(usize, &str)> = None;
+                for (i, stream) in streams.iter().enumerate() {
+                    if indices[i] < stream.len() {
+                        let line = &stream[indices[i]];
+                        if let Some((_, best_line)) = best {
+                            if line.as_str() < best_line {
+                                best = Some((i, line));
+                            }
+                        } else {
+                            best = Some((i, line));
+                        }
+                    }
+                }
+                if let Some((i, line)) = best {
+                    merged.push(line.to_string());
+                    indices[i] += 1;
+                } else {
+                    break;
+                }
+            }
+            let sep = if zero_terminated { "\0" } else { "\n" };
+            let mut output = merged.join(sep);
+            if !output.is_empty() {
+                output.push_str(sep);
+            }
+            return Ok(ExecResult::ok(output));
+        }
+
+        // Check sorted mode
+        if check_sorted {
+            for i in 1..all_lines.len() {
+                let cmp = if numeric {
+                    let a: f64 = all_lines[i - 1].trim().parse().unwrap_or(0.0);
+                    let b: f64 = all_lines[i].trim().parse().unwrap_or(0.0);
+                    a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
+                } else {
+                    all_lines[i - 1].cmp(&all_lines[i])
+                };
+                let out_of_order = if reverse {
+                    cmp == std::cmp::Ordering::Less
+                } else {
+                    cmp == std::cmp::Ordering::Greater
+                };
+                if out_of_order {
+                    return Ok(ExecResult::err(
+                        format!("sort: -:{}:disorder: {}\n", i + 1, all_lines[i]),
+                        1,
+                    ));
+                }
+            }
+            return Ok(ExecResult::ok(String::new()));
+        }
+
+        // Get the key extractor
+        /// Compare two keys using the specified sort mode flags
+        fn compare_keys(
+            ka: &str,
+            kb: &str,
+            is_numeric: bool,
+            is_human: bool,
+            is_month: bool,
+            is_fold_case: bool,
+        ) -> std::cmp::Ordering {
+            if is_human {
+                let na = parse_human_numeric(ka);
+                let nb = parse_human_numeric(kb);
+                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+            } else if is_month {
+                month_ordinal(ka).cmp(&month_ordinal(kb))
+            } else if is_numeric {
+                let na = extract_numeric_prefix(ka);
+                let nb = extract_numeric_prefix(kb);
+                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+            } else if is_fold_case {
+                ka.to_lowercase().cmp(&kb.to_lowercase())
+            } else {
+                ka.cmp(kb)
+            }
+        }
+
+        // Sort the lines
+        let sort_fn = |a: &String, b: &String| -> std::cmp::Ordering {
+            let ord = if !key_specs.is_empty() {
+                // Multi-key sort: compare by each key spec in order
+                let mut result = std::cmp::Ordering::Equal;
+                for key in &key_specs {
+                    let ka = extract_key_spec(a, delimiter, key);
+                    let kb = extract_key_spec(b, delimiter, key);
+                    // Per-key flags override global flags
+                    let ord = if key.version_sort || version_sort {
+                        version_cmp(&ka, &kb)
+                    } else {
+                        compare_keys(
+                            &ka,
+                            &kb,
+                            key.numeric || numeric,
+                            key.human_numeric || human_numeric,
+                            key.month_sort || month_sort,
+                            key.fold_case || fold_case,
+                        )
+                    };
+                    let ord = if key.reverse { ord.reverse() } else { ord };
+                    if ord != std::cmp::Ordering::Equal {
+                        result = ord;
+                        break;
+                    }
+                }
+                if result == std::cmp::Ordering::Equal && !stable {
+                    // GNU sort uses the full line as the final tie-breaker unless -s disables it.
+                    a.cmp(b)
+                } else {
+                    result
+                }
+            } else {
+                // No key specs — use global flags on whole line
+                let ord = if version_sort {
+                    version_cmp(a, b)
+                } else {
+                    compare_keys(a, b, numeric, human_numeric, month_sort, fold_case)
+                };
+                if ord == std::cmp::Ordering::Equal && !stable {
+                    // Without -s, equal mode-specific keys still fall back to lexical line order.
+                    a.cmp(b)
+                } else {
+                    ord
+                }
+            };
+
+            if reverse && ord != std::cmp::Ordering::Equal {
+                ord.reverse()
+            } else {
+                ord
+            }
+        };
+
+        if stable {
+            all_lines.sort_by(sort_fn);
+        } else {
+            all_lines.sort_unstable_by(sort_fn);
+        }
+
+        if unique {
+            // Use a HashSet so identical lines are removed even when not adjacent
+            // (can happen in stable mode when equal-key different-content lines interleave).
+            let mut seen = std::collections::HashSet::new();
+            all_lines.retain(|line| seen.insert(line.clone()));
+        }
+
+        let sep = if zero_terminated { "\0" } else { "\n" };
+        let mut output = all_lines.join(sep);
+        if !output.is_empty() {
+            output.push_str(sep);
+        }
+
+        // Write to output file if -o specified
+        if let Some(ref outfile) = output_file {
+            let path = if outfile.starts_with('/') {
+                std::path::PathBuf::from(outfile)
+            } else {
+                ctx.cwd.join(outfile)
+            };
+            if let Err(e) = ctx.fs.write_file(&path, output.as_bytes()).await {
+                return Ok(ExecResult::err(format!("sort: {}: {}\n", outfile, e), 1));
+            }
+            return Ok(ExecResult::ok(String::new()));
+        }
+
+        Ok(ExecResult::ok(output))
+    }
+}
+
+/// The uniq builtin - report or omit repeated lines.
+///
+/// Usage: uniq [-cdiu] [-f N] [INPUT [OUTPUT]]
+///
+/// Options:
+///   -c   Prefix lines by the number of occurrences
+///   -d   Only print duplicate lines
+///   -u   Only print unique lines
+///   -i   Case insensitive comparison
+///   -f N Skip N fields before comparing
+pub struct Uniq;
+
+/// Get the comparison key for a line, skipping fields and optionally case-folding
+fn uniq_key(line: &str, skip_fields: usize, case_insensitive: bool) -> String {
+    let key = if skip_fields > 0 {
+        line.split_whitespace()
+            .skip(skip_fields)
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        line.to_string()
+    };
+    if case_insensitive {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
+#[async_trait]
+impl Builtin for Uniq {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = super::check_help_version(
+            ctx.args,
+            "Usage: uniq [OPTION]... [INPUT [OUTPUT]]\nFilter adjacent matching lines from INPUT, writing to OUTPUT.\n\n  -c\t\tprefix lines by the number of occurrences\n  -d\t\tonly print duplicate lines\n  -u\t\tonly print unique lines\n  -i\t\tignore differences in case when comparing\n  -f NUM\tavoid comparing the first NUM fields\n  --help\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("uniq (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let mut count = false;
+        let mut only_duplicates = false;
+        let mut only_unique = false;
+        let mut case_insensitive = false;
+        let mut skip_fields: usize = 0;
+        let mut files = Vec::new();
+
+        let mut p = super::arg_parser::ArgParser::new(ctx.args);
+        while !p.is_done() {
+            if let Some(val) = p.flag_value_opt("-f") {
+                skip_fields = val.parse().unwrap_or(0);
+            } else {
+                let flags = p.bool_flags("cdui");
+                if !flags.is_empty() {
+                    for c in flags {
+                        match c {
+                            'c' => count = true,
+                            'd' => only_duplicates = true,
+                            'u' => only_unique = true,
+                            'i' => case_insensitive = true,
+                            _ => {}
+                        }
+                    }
+                } else if let Some(arg) = p.positional() {
+                    files.push(arg.to_string());
+                }
+            }
+        }
+
+        // Get input lines
+        let lines: Vec<String> = if files.is_empty() {
+            ctx.stdin
+                .map(|s| s.lines().map(|l| l.to_string()).collect())
+                .unwrap_or_default()
+        } else {
+            let file = &files[0];
+            let path = if file.starts_with('/') {
+                std::path::PathBuf::from(file)
+            } else {
+                ctx.cwd.join(file)
+            };
+
+            match read_text_file(&*ctx.fs, &path, "uniq").await {
+                Ok(text) => text.lines().map(|l| l.to_string()).collect(),
+                Err(e) => return Ok(e),
+            }
+        };
+
+        let mut result = Vec::new();
+        let mut prev_line: Option<String> = None;
+        let mut prev_key: Option<String> = None;
+        let mut current_count = 0usize;
+
+        for line in lines {
+            let key = uniq_key(&line, skip_fields, case_insensitive);
+            if let Some(ref pk) = prev_key {
+                if *pk == key {
+                    current_count += 1;
+                    continue;
+                } else {
+                    let should_output = if only_duplicates {
+                        current_count > 1
+                    } else if only_unique {
+                        current_count == 1
+                    } else {
+                        true
+                    };
+
+                    if should_output {
+                        if count {
+                            result.push(format!(
+                                "{:>7} {}",
+                                current_count,
+                                prev_line.as_deref().unwrap_or("")
+                            ));
+                        } else {
+                            result.push(prev_line.clone().unwrap_or_default());
+                        }
+                    }
+                }
+            }
+            prev_line = Some(line);
+            prev_key = Some(key);
+            current_count = 1;
+        }
+
+        // Last line
+        if let Some(prev) = prev_line {
+            let should_output = if only_duplicates {
+                current_count > 1
+            } else if only_unique {
+                current_count == 1
+            } else {
+                true
+            };
+
+            if should_output {
+                if count {
+                    result.push(format!("{:>7} {}", current_count, prev));
+                } else {
+                    result.push(prev);
+                }
+            }
+        }
+
+        let mut output = result.join("\n");
+        if !output.is_empty() {
+            output.push('\n');
+        }
+
+        Ok(ExecResult::ok(output))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use crate::bash::fs::InMemoryFs;
+
+    async fn run_sort(args: &[&str], stdin: Option<&str>) -> ExecResult {
+        let fs = Arc::new(InMemoryFs::new());
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Sort.execute(ctx).await.unwrap()
+    }
+
+    async fn run_uniq(args: &[&str], stdin: Option<&str>) -> ExecResult {
+        let fs = Arc::new(InMemoryFs::new());
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Uniq.execute(ctx).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_sort_basic() {
+        let result = run_sort(&[], Some("banana\napple\ncherry\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "apple\nbanana\ncherry\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_reverse() {
+        let result = run_sort(&["-r"], Some("apple\nbanana\ncherry\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "cherry\nbanana\napple\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_numeric() {
+        let result = run_sort(&["-n"], Some("10\n2\n1\n20\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "1\n2\n10\n20\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_unique() {
+        let result = run_sort(&["-u"], Some("apple\nbanana\napple\ncherry\nbanana\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "apple\nbanana\ncherry\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_fold_case() {
+        let result = run_sort(&["-f"], Some("Banana\napple\nCherry\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "apple\nBanana\nCherry\n");
+    }
+
+    #[tokio::test]
+    async fn test_uniq_basic() {
+        let result = run_uniq(&[], Some("a\na\nb\nb\nb\nc\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a\nb\nc\n");
+    }
+
+    #[tokio::test]
+    async fn test_uniq_count() {
+        let result = run_uniq(&["-c"], Some("a\na\nb\nc\nc\nc\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("2 a"));
+        assert!(result.stdout.contains("1 b"));
+        assert!(result.stdout.contains("3 c"));
+    }
+
+    #[tokio::test]
+    async fn test_uniq_duplicates_only() {
+        let result = run_uniq(&["-d"], Some("a\na\nb\nc\nc\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("a"));
+        assert!(result.stdout.contains("c"));
+        assert!(!result.stdout.contains("b\n"));
+    }
+
+    #[tokio::test]
+    async fn test_uniq_unique_only() {
+        let result = run_uniq(&["-u"], Some("a\na\nb\nc\nc\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("b"));
+        assert!(!result.stdout.contains("a\n"));
+        assert!(!result.stdout.contains("c\n"));
+    }
+
+    #[tokio::test]
+    async fn test_sort_key_field() {
+        let result = run_sort(&["-k2n"], Some("Bob 25\nAlice 30\nDavid 20\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "David 20\nBob 25\nAlice 30\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_delimiter_key() {
+        let result = run_sort(&["-t:", "-k2n"], Some("b:2\na:1\nc:3\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a:1\nb:2\nc:3\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_check_sorted() {
+        let result = run_sort(&["-c"], Some("a\nb\nc\n")).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sort_check_unsorted() {
+        let result = run_sort(&["-c"], Some("b\na\nc\n")).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_sort_human_numeric() {
+        let result = run_sort(&["-h"], Some("10K\n1K\n100M\n1G\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "1K\n10K\n100M\n1G\n");
+    }
+
+    #[tokio::test]
+    async fn test_sort_month() {
+        let result = run_sort(&["-M"], Some("Mar\nJan\nFeb\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "Jan\nFeb\nMar\n");
+    }
+
+    #[tokio::test]
+    async fn test_uniq_case_insensitive() {
+        let result = run_uniq(&["-i"], Some("a\nA\nb\nB\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a\nb\n");
+    }
+
+    #[tokio::test]
+    async fn test_uniq_skip_fields() {
+        let result = run_uniq(&["-f1"], Some("x a\ny a\nx b\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "x a\nx b\n");
+    }
+
+    #[tokio::test]
+    async fn test_extract_key_spec() {
+        let key = KeySpec::parse("2");
+        assert_eq!(extract_key_spec("a:b:c", Some(':'), &key), "b");
+        let key1 = KeySpec::parse("1");
+        assert_eq!(extract_key_spec("hello world", None, &key1), "hello");
+        let key2 = KeySpec::parse("2");
+        assert_eq!(extract_key_spec("hello world", None, &key2), "world");
+        let key5 = KeySpec::parse("5");
+        assert_eq!(extract_key_spec("x", None, &key5), "");
+
+        let utf8_single_field = KeySpec::parse("1.2,1.2");
+        assert_eq!(extract_key_spec("éa", None, &utf8_single_field), "a");
+
+        let utf8_multi_field = KeySpec::parse("1.2,2.1");
+        assert_eq!(extract_key_spec("éx yz", None, &utf8_multi_field), "x y");
+    }
+
+    #[tokio::test]
+    async fn test_keyspec_parse() {
+        let k = KeySpec::parse("2n,3r");
+        assert_eq!(k.start_field, 2);
+        assert_eq!(k.end_field, 3);
+        assert!(k.numeric);
+        assert!(k.reverse);
+
+        let k2 = KeySpec::parse("1.2,1.5f");
+        assert_eq!(k2.start_field, 1);
+        assert_eq!(k2.start_char, 2);
+        assert_eq!(k2.end_field, 1);
+        assert_eq!(k2.end_char, 5);
+        assert!(k2.fold_case);
+    }
+
+    #[tokio::test]
+    async fn test_version_cmp() {
+        assert_eq!(version_cmp("1.2", "1.10"), std::cmp::Ordering::Less);
+        assert_eq!(version_cmp("2.0", "1.9"), std::cmp::Ordering::Greater);
+        assert_eq!(version_cmp("1.0", "1.0"), std::cmp::Ordering::Equal);
+    }
+
+    #[tokio::test]
+    async fn test_parse_human_numeric() {
+        assert_eq!(parse_human_numeric("1K"), 1000.0);
+        assert_eq!(parse_human_numeric("5M"), 5_000_000.0);
+        assert_eq!(parse_human_numeric("2G"), 2_000_000_000.0);
+        assert_eq!(parse_human_numeric("42"), 42.0);
+        assert_eq!(parse_human_numeric(""), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_month_ordinal() {
+        assert_eq!(month_ordinal("JAN"), 1);
+        assert_eq!(month_ordinal("feb"), 2);
+        assert_eq!(month_ordinal("Dec"), 12);
+        assert_eq!(month_ordinal("xyz"), 0);
+    }
+}

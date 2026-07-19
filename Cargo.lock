@@ -488,40 +488,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bashkit"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1df73e492ac81310360b851abf4b5761df1a6292bd10b53b5589e17a2226880a"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bigdecimal",
- "bitflags",
- "chrono",
- "clap",
- "fancy-regex 0.18.0",
- "flate2",
- "futures-core",
- "futures-util",
- "getrandom 0.4.3",
- "hmac 0.13.0",
- "md-5",
- "num-traits",
- "os_display",
- "regex",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "unit-prefix",
- "url",
-]
-
-[[package]]
 name = "bigdecimal"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2136,21 +2102,28 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64 0.22.1",
- "bashkit",
+ "bigdecimal",
+ "bitflags",
  "chrono",
  "clap",
  "erased-serde",
+ "fancy-regex 0.18.0",
  "fastembed",
  "futures",
  "futures-util",
+ "getrandom 0.4.3",
  "handlebars",
+ "hmac 0.13.0",
  "htmd",
  "http 1.4.2",
  "itertools 0.15.0",
  "libc",
+ "md-5",
  "mockito",
+ "num-traits",
  "once_cell",
  "orgize",
+ "os_display",
  "regex",
  "reqwest 0.13.4",
  "rusqlite",
@@ -2159,6 +2132,8 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "sha1",
+ "sha2 0.11.0",
  "sqlite-vec",
  "tantivy",
  "tempfile",
@@ -2172,6 +2147,8 @@ dependencies = [
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
+ "unit-prefix",
+ "url",
  "urlencoding",
  "uuid",
  "web-push",

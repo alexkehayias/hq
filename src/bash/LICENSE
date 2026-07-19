@@ -1,0 +1,56 @@
+# bash module (vendored from bashkit)
+
+This directory contains a vendored copy of [bashkit](https://github.com/everruns/bashkit),
+trimmed to the subset used by `hq`.
+
+## Upstream attribution
+
+- Project: bashkit
+- Repository: https://github.com/everruns/bashkit
+- Upstream commit: d0e33843dead459c02ee2784e0282473b1ea2667 (bashkit v0.12.0)
+- Authors: Mykhailo Chaliy <mike@chaliy.name>, Everruns
+- License: MIT
+
+## MIT License (applies to all code in this directory)
+
+Copyright (c) bashkit authors — Mykhailo Chaliy and Everruns.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Trim notes
+
+The following bashkit modules/features were removed because `hq` does not use
+them (see `.claude/plans/warm-twirling-stonebraker.md` for the extraction plan):
+
+- Network builtins: `curl`, `wget`, `http`
+- Remote access: `git`/`ssh` builtins (scp, sftp)
+- Data stores: `sqlite`, `jq`
+- Embedding runtimes: python, typescript (zapcode)
+- Bot authentication / credential injection
+- Snapshot/restore virtualization
+- Interop layer (tokio bridge)
+- Scripted tool / tool_def AI framework (bashkit's `BashToolBuilder`)
+- Structured logging integration and trace collection
+- Job control (`kill`/`wait` real-process builtins)
+- Archive builtins (`tar`, `gzip`, `zip`) and exotic utilities (`parallel`,
+  `retry`, `rg`, `semver`, `template`, `compgen`, `caller`, `fc`,
+  `mapfile`, `watch`, `less`, `tree`)
+
+All remaining behavior is identical to bashkit v0.12 for the features that
+were kept.
