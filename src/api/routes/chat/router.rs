@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
+use crate::ai::chat::middleware::{ApprovalMiddleware, ApprovalRule};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, ToolSecurityMiddleware, find_chat_session_by_id,
@@ -617,6 +618,20 @@ async fn chat_handler(
         transcript.push(system_msg);
     }
 
+    // Pull the approval registry out of state so it can be shared
+    // between ApprovalMiddleware (which awaits decisions) and the
+    // /api/approval endpoint (which resolves them).
+    let approval_registry = state
+        .read()
+        .expect("Unable to read shared state")
+        .approval_registry
+        .clone();
+
+    // Tools the user must approve before running. Kept short on
+    // purpose: each entry adds friction, so only tools with real
+    // blast radius belong here.
+    let approval_rules = vec![ApprovalRule::new("bash")];
+
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
         .database(&db, Some(&session_id), None)
         .transcript(transcript)
@@ -625,6 +640,15 @@ async fn chat_handler(
         .middleware(vec![
             Box::new(InfiniteLoopDetector::new(3)),
             Box::new(ToolSecurityMiddleware::default()),
+            // Approval goes last so rejections from earlier middleware
+            // short-circuit before we ask the user. A blocked tool
+            // (security) or infinite loop doesn't need a prompt.
+            Box::new(ApprovalMiddleware::new(
+                approval_rules,
+                approval_registry,
+                &session_id,
+                tx.clone(),
+            )),
         ]);
 
     // Add skill management tools if the registry is available

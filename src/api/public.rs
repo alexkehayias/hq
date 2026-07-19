@@ -34,6 +34,10 @@ where
 
 // Re-export public types from each route
 
+pub mod approval {
+    pub use crate::api::routes::approval::public::*;
+}
+
 pub mod calendar {
     pub use crate::api::routes::calendar::public::*;
 }

@@ -1,5 +1,6 @@
 //! API routes module
 
+pub mod approval;
 pub mod calendar;
 pub mod chat;
 pub mod email;
@@ -41,4 +42,6 @@ pub fn router() -> Router<SharedState> {
         .nest("/skills", skills::router())
         // Webhook routes
         .nest("/webhook", webhook::router())
+        // Approval routes
+        .nest("/approval", approval::router())
 }

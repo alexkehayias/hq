@@ -1549,4 +1549,254 @@ data: [DONE]
             err
         );
     }
+
+    /// Integration test for the full approval flow:
+    ///
+    /// 1. Mock LLM returns a `bash` tool call.
+    /// 2. `ApprovalMiddleware` emits an approval_request chunk on
+    ///    the streaming channel and awaits a decision.
+    /// 3. Test reads that chunk, extracts `request_id`, and resolves
+    ///    it as Approved through the shared `ApprovalRegistry`.
+    /// 4. Chat loop runs `bash` (mocked), gets result, mock LLM
+    ///    returns a final assistant message.
+    ///
+    /// Verifies the wiring from `chat_handler` (with approval) all
+    /// the way down to tool execution, without requiring an HTTP layer.
+    #[tokio::test]
+    async fn test_approval_flow_end_to_end() {
+        use crate::ai::chat::approval::ApprovalRegistry;
+        use crate::ai::chat::middleware::{ApprovalMiddleware, ApprovalRule};
+        use std::time::Duration;
+
+        let mut server = mockito::Server::new_async().await;
+
+        // First response (SSE): model wants to run bash
+        let sse_tool_call = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_bash_1","index":0,"function":{"name":"bash","arguments":"{\"command\":\"echo hi\"}"},"type":"function"}]},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        // Final response (SSE): "Done!" after bash runs and approval granted
+        let sse_final = r#"data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"Done!"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call)
+            .create();
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_final)
+            .create();
+
+        // Mock bash tool that just returns a fixed result
+        #[derive(serde::Serialize)]
+        struct BashMock;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for BashMock {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("hi".to_string())
+            }
+            fn function_name(&self) -> String {
+                "bash".to_string()
+            }
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let registry = std::sync::Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let session_id = "test_session";
+
+        // Build the chat with approval middleware
+        let tools = vec![Box::new(BashMock) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&server.url(), "test-key", "gpt-4")
+            .tools(tools)
+            .streaming(tx.clone())
+            .middleware(vec![Box::new(ApprovalMiddleware::new(
+                vec![ApprovalRule::new("bash")],
+                registry.clone(),
+                session_id,
+                tx,
+            ))])
+            .build();
+
+        // Spawn chat.next_msg and drive it: as soon as the
+        // approval_request chunk is emitted, resolve with Approved.
+        let msg = Message::new(Role::User, "run bash");
+        let h = tokio::spawn(async move { chat.next_msg(msg).await });
+
+        // Read chunks until we see an approval_request, then resolve.
+        // LLM response chunks arrive on the same channel but don't
+        // match our "type":"approval_request" filter.
+        let mut resolved = false;
+        while let Some(chunk) = rx.recv().await {
+            // Chunks from the LLM stream are wrapped in "data: ...".
+            // The approval_request chunk is plain JSON without a
+            // "data:" prefix, so we only attempt to parse those.
+            if chunk.starts_with("data:") {
+                continue;
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&chunk) {
+                if parsed.get("type").and_then(|v| v.as_str()) == Some("approval_request") {
+                    let request_id = parsed["request_id"]
+                        .as_str()
+                        .expect("request_id present")
+                        .to_string();
+                    registry.resolve(
+                        session_id,
+                        &request_id,
+                        crate::ai::chat::ApprovalDecision::Approved,
+                    );
+                    resolved = true;
+                    break;
+                }
+            }
+        }
+        assert!(resolved, "expected an approval_request chunk to be emitted");
+
+        // Chat task should complete successfully
+        let result = h.await.expect("chat task panicked");
+        let messages = result.expect("chat returned error");
+
+        // Should contain: tool_call_request, tool_call_response (bash result),
+        // and final assistant message. The approval_request chunk went
+        // through the stream but is NOT one of these messages — it's
+        // emitted only to tx, not into the transcript.
+        assert_eq!(messages.len(), 3);
+        assert_eq!(*messages[0].role(), Role::Assistant); // tool call request
+        assert_eq!(*messages[1].role(), Role::Tool); // bash result
+        assert_eq!(*messages[2].role(), Role::Assistant); // "Done!"
+
+        let bash_result = messages[1].content.as_ref().expect("bash content");
+        assert_eq!(bash_result, "hi");
+
+        mock1.assert();
+        mock2.assert();
+
+        // Registry should be empty after the test
+        assert_eq!(registry.pending_count(), 0);
+    }
+
+    /// When approval is denied, the chat should still complete —
+    /// the model sees a rejection tool response and recovers with a
+    /// final message (mocked).
+    #[tokio::test]
+    async fn test_approval_denied_chat_continues() {
+        use crate::ai::chat::approval::ApprovalRegistry;
+        use crate::ai::chat::middleware::{ApprovalMiddleware, ApprovalRule};
+        use std::time::Duration;
+
+        let mut server = mockito::Server::new_async().await;
+
+        // First response (SSE): bash tool call
+        let sse_tool_call = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_bash_1","index":0,"function":{"name":"bash","arguments":"{\"command\":\"rm -rf /\"}"},"type":"function"}]},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        // Final response (SSE): model acknowledges denial
+        let sse_final = r#"data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"OK, I won't run that."},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call)
+            .create();
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_final)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct BashMock;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for BashMock {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                panic!("bash should not run when approval is denied");
+            }
+            fn function_name(&self) -> String {
+                "bash".to_string()
+            }
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let registry = std::sync::Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let session_id = "test_session_denied";
+
+        let tools = vec![Box::new(BashMock) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&server.url(), "test-key", "gpt-4")
+            .tools(tools)
+            .streaming(tx.clone())
+            .middleware(vec![Box::new(ApprovalMiddleware::new(
+                vec![ApprovalRule::new("bash")],
+                registry.clone(),
+                session_id,
+                tx,
+            ))])
+            .build();
+
+        let msg = Message::new(Role::User, "delete everything");
+        let h = tokio::spawn(async move { chat.next_msg(msg).await });
+
+        // Read the approval_request and deny it
+        let mut denied = false;
+        while let Some(chunk) = rx.recv().await {
+            if chunk.starts_with("data:") {
+                continue;
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&chunk) {
+                if parsed.get("type").and_then(|v| v.as_str()) == Some("approval_request") {
+                    let request_id = parsed["request_id"]
+                        .as_str()
+                        .expect("request_id present")
+                        .to_string();
+                    registry.resolve(
+                        session_id,
+                        &request_id,
+                        crate::ai::chat::ApprovalDecision::Denied("no way".to_string()),
+                    );
+                    denied = true;
+                    break;
+                }
+            }
+        }
+        assert!(denied, "expected an approval_request chunk");
+
+        let result = h.await.expect("chat task panicked");
+        let messages = result.expect("chat returned error");
+
+        // 1. tool_call_request (bash)
+        // 2. tool_call_response with denial message
+        // 3. final assistant message ("OK, I won't...")
+        assert_eq!(messages.len(), 3);
+        let tool_response = &messages[1];
+        assert_eq!(*tool_response.role(), Role::Tool);
+        let content = tool_response.content.as_ref().expect("content");
+        assert!(
+            content.contains("no way"),
+            "expected denial reason in tool response, got: {content}"
+        );
+
+        mock1.assert();
+        mock2.assert();
+    }
 }

@@ -1,8 +1,13 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::openai::{Message, Role};
 use anyhow::Error;
 use async_trait::async_trait;
+use serde_json::json;
+use tokio::sync::mpsc;
+
+use super::approval::{ApprovalDecision, ApprovalRegistry};
 
 /// The action a middleware wants to take after inspecting the transcript.
 #[derive(Debug)]
@@ -223,6 +228,180 @@ impl ToolCallMiddleware for ToolSecurityMiddleware {
         }
 
         MiddlewareAction::Continue
+    }
+}
+
+/// A rule describing which tool calls require user approval before
+/// running. Match is by exact tool name.
+#[derive(Clone, Debug)]
+pub struct ApprovalRule {
+    pub tool_name: String,
+}
+
+impl ApprovalRule {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            tool_name: name.into(),
+        }
+    }
+}
+
+/// Middleware that asks the user to approve certain tool calls before
+/// they execute.
+///
+/// When a pending batch includes a call matching an `ApprovalRule`,
+/// the middleware:
+///
+/// 1. Emits an `approval_request` chunk to the streaming sender so
+///    connected clients can render a prompt. The chunk includes a
+///    fresh `request_id` (UUID) the client uses when responding via
+///    `POST /api/approval/{session_id}`.
+/// 2. Registers a pending entry in the shared `ApprovalRegistry`,
+///    then awaits the user's decision (or timeout).
+/// 3. On `Approved`: returns `Continue` so the chat loop executes
+///    the tool normally.
+/// 4. On `Denied` or timeout: returns `Reject` with a tool-response
+///    message so the model can recover.
+///
+/// Calls in the batch that don't match any rule are not held up —
+/// only matching calls block. Mixed batches therefore still make
+/// progress on the non-matching tools, but today's chat loop runs
+/// tool calls for a single assistant message sequentially under one
+/// `Reject`/`Continue` decision, so in practice the whole batch
+/// waits on the first matching approval.
+pub struct ApprovalMiddleware {
+    rules: Vec<ApprovalRule>,
+    registry: Arc<ApprovalRegistry>,
+    session_id: String,
+    tx: mpsc::UnboundedSender<String>,
+}
+
+impl ApprovalMiddleware {
+    /// Construct a new approval middleware.
+    ///
+    /// `tx` is the same sender used to stream chat chunks back to the
+    /// client; approval-request chunks are emitted on it so a single
+    /// SSE stream carries both chat content and approval prompts.
+    pub fn new(
+        rules: Vec<ApprovalRule>,
+        registry: Arc<ApprovalRegistry>,
+        session_id: impl Into<String>,
+        tx: mpsc::UnboundedSender<String>,
+    ) -> Self {
+        Self {
+            rules,
+            registry,
+            session_id: session_id.into(),
+            tx,
+        }
+    }
+
+    /// True if `name` matches any rule in this middleware.
+    fn requires_approval(&self, name: &str) -> bool {
+        self.rules.iter().any(|r| r.tool_name == name)
+    }
+
+    /// Emit an approval-request chunk to the streaming sender so a
+    /// connected client can render a prompt. The `request_id` is the
+    /// key the client must use when responding via the approval API.
+    fn emit_approval_request(
+        &self,
+        request_id: &str,
+        calls: &[&crate::openai::FunctionCall],
+    ) {
+        // Describe each matching call. We include tool name, id, and
+        // raw arguments so the client can show what's being approved
+        // without having to re-fetch transcript state.
+        let summaries: Vec<serde_json::Value> = calls
+            .iter()
+            .map(|c| {
+                json!({
+                    "id": c.id,
+                    "name": c.function.name,
+                    "arguments": c.function.arguments,
+                })
+            })
+            .collect();
+
+        let chunk = json!({
+            "type": "approval_request",
+            "request_id": request_id,
+            "session_id": self.session_id,
+            "calls": summaries,
+        });
+        // Send error is ignored: if the client disconnected, the chat
+        // task will observe tx.is_closed() elsewhere; we don't want a
+        // failed send to panic here.
+        let _ = self.tx.send(chunk.to_string());
+    }
+
+    /// Build a rejection message for a denied/timeout decision.
+    fn rejection_message(decision: &ApprovalDecision) -> String {
+        match decision {
+            ApprovalDecision::Denied(reason) => {
+                format!("Tool call rejected by user: {reason}")
+            }
+            ApprovalDecision::Approved => "Tool call approved".to_string(),
+        }
+    }
+
+    /// Wait for the user's decision on a single request_id, then
+    /// translate it to a `MiddlewareAction`. On approval we return
+    /// `Continue`; on denial or timeout we return a `Reject` with one
+    /// rejection message per pending call so the model can recover.
+    async fn await_decision(
+        &self,
+        request_id: &str,
+        matching_calls: &[&crate::openai::FunctionCall],
+    ) -> MiddlewareAction {
+        let decision = self.registry.request(&self.session_id, request_id).await;
+        match decision {
+            ApprovalDecision::Approved => MiddlewareAction::Continue,
+            ApprovalDecision::Denied(_) => {
+                let msg = Self::rejection_message(&decision);
+                let rejections: Vec<Message> = matching_calls
+                    .iter()
+                    .map(|c| Message::new_tool_call_response(&msg, &c.id))
+                    .collect();
+                MiddlewareAction::Reject(rejections)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ToolCallMiddleware for ApprovalMiddleware {
+    async fn before_tool_calls(&self, transcript: &[Message]) -> MiddlewareAction {
+        // The pending tool calls live in the last assistant message.
+        let Some(pending_msg) = transcript.last() else {
+            return MiddlewareAction::Continue;
+        };
+        if *pending_msg.role() != Role::Assistant {
+            return MiddlewareAction::Continue;
+        }
+        let Some(pending_calls) = pending_msg.tool_calls.as_ref() else {
+            return MiddlewareAction::Continue;
+        };
+        if pending_calls.is_empty() {
+            return MiddlewareAction::Continue;
+        }
+
+        // Find the subset of pending calls that require approval.
+        let matching: Vec<&crate::openai::FunctionCall> = pending_calls
+            .iter()
+            .filter(|c| self.requires_approval(&c.function.name))
+            .collect();
+        if matching.is_empty() {
+            return MiddlewareAction::Continue;
+        }
+
+        // Generate a single request_id for this batch. The client
+        // responds once for the whole batch; we don't model per-call
+        // approvals because that would require multiple round-trips
+        // with the user and complicate the UX.
+        let request_id = uuid::Uuid::new_v4().to_string();
+        self.emit_approval_request(&request_id, &matching);
+        self.await_decision(&request_id, &matching).await
     }
 }
 
@@ -573,6 +752,211 @@ mod tests {
             Message::new(Role::User, "hi"),
             Message::new(Role::Assistant, "hello"),
         ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(matches!(action, MiddlewareAction::Continue));
+    }
+
+    // --- ApprovalMiddleware tests ---
+
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    fn bash_call(id: &str) -> FunctionCall {
+        FunctionCall {
+            function: crate::openai::FunctionCallFn {
+                name: "bash".into(),
+                arguments: r#"{"command":"rm -rf /tmp/cache"}"#.into(),
+            },
+            id: id.into(),
+            r#type: "function".into(),
+        }
+    }
+
+    fn harmless_call(id: &str) -> FunctionCall {
+        FunctionCall {
+            function: crate::openai::FunctionCallFn {
+                name: "datetime".into(),
+                arguments: "{}".into(),
+            },
+            id: id.into(),
+            r#type: "function".into(),
+        }
+    }
+
+    fn approval_mw(
+        rules: Vec<ApprovalRule>,
+        registry: Arc<ApprovalRegistry>,
+        session_id: &str,
+        tx: mpsc::UnboundedSender<String>,
+    ) -> ApprovalMiddleware {
+        ApprovalMiddleware::new(rules, registry, session_id, tx)
+    }
+
+    #[tokio::test]
+    async fn test_approval_no_matching_rule_continues() {
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(1)));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        // Rule targets "bash" but pending call is datetime
+        let mw = approval_mw(
+            vec![ApprovalRule::new("bash")],
+            registry,
+            "s1",
+            tx,
+        );
+        let transcript = vec![Message::new_tool_call_request(vec![harmless_call("c1")])];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(matches!(action, MiddlewareAction::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_approval_approved_emits_chunk_and_resolves() {
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mw = approval_mw(
+            vec![ApprovalRule::new("bash")],
+            registry.clone(),
+            "s1",
+            tx,
+        );
+        let transcript = vec![Message::new_tool_call_request(vec![bash_call("c1")])];
+
+        let h = tokio::spawn(async move { mw.before_tool_calls(&transcript).await });
+
+        // Read the approval-request chunk emitted by middleware
+        let chunk = rx.recv().await.expect("expected an approval_request chunk");
+        let parsed: serde_json::Value = serde_json::from_str(&chunk).expect("valid JSON");
+        assert_eq!(parsed["type"], "approval_request");
+        let request_id = parsed["request_id"]
+            .as_str()
+            .expect("request_id present")
+            .to_string();
+
+        // Resolve with approval
+        let resolved = registry.resolve("s1", &request_id, ApprovalDecision::Approved);
+        assert!(resolved, "resolve should find the pending entry");
+
+        let action = h.await.expect("middleware task panicked");
+        assert!(
+            matches!(action, MiddlewareAction::Continue),
+            "expected Continue on approval, got {action:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_approval_denied_rejects_with_message() {
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mw = approval_mw(
+            vec![ApprovalRule::new("bash")],
+            registry.clone(),
+            "s1",
+            tx,
+        );
+        let transcript = vec![Message::new_tool_call_request(vec![bash_call("c1")])];
+        let h = tokio::spawn(async move { mw.before_tool_calls(&transcript).await });
+
+        let chunk = rx.recv().await.expect("expected approval_request chunk");
+        let parsed: serde_json::Value = serde_json::from_str(&chunk).expect("valid JSON");
+        let request_id = parsed["request_id"].as_str().unwrap().to_string();
+
+        registry.resolve(
+            "s1",
+            &request_id,
+            ApprovalDecision::Denied("not on my watch".to_string()),
+        );
+
+        let action = h.await.expect("middleware task panicked");
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs.len(), 1);
+                let content = msgs[0].content.as_ref().expect("content present");
+                assert!(
+                    content.contains("not on my watch"),
+                    "expected denial reason in message, got: {content}"
+                );
+            }
+            other => panic!("expected Reject on denial, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_timeout_denies() {
+        // Very short timeout so the test doesn't wait long
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_millis(50)));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mw = approval_mw(
+            vec![ApprovalRule::new("bash")],
+            registry,
+            "s1",
+            tx,
+        );
+        let transcript = vec![Message::new_tool_call_request(vec![bash_call("c1")])];
+        let action = mw.before_tool_calls(&transcript).await;
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                let content = msgs[0].content.as_ref().expect("content present");
+                assert!(
+                    content.contains("timed out"),
+                    "expected timeout message, got: {content}"
+                );
+            }
+            other => panic!("expected Reject on timeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_mixed_batch_only_matching_blocks() {
+        // Pending batch has bash (requires approval) and datetime (doesn't).
+        // Both become rejections if user denies, but the test verifies
+        // that approval is requested at all.
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mw = approval_mw(
+            vec![ApprovalRule::new("bash")],
+            registry.clone(),
+            "s1",
+            tx,
+        );
+        let transcript = vec![Message::new_tool_call_request(vec![
+            bash_call("c1"),
+            harmless_call("c2"),
+        ])];
+        let h = tokio::spawn(async move { mw.before_tool_calls(&transcript).await });
+
+        let chunk = rx.recv().await.expect("expected approval_request chunk");
+        let parsed: serde_json::Value = serde_json::from_str(&chunk).expect("valid JSON");
+        // Only bash should appear in the approval request
+        let calls = parsed["calls"].as_array().expect("calls array");
+        assert_eq!(calls.len(), 1, "only matching call should be in request");
+        assert_eq!(calls[0]["name"], "bash");
+
+        // Approve — middleware should Continue (the whole batch is
+        // approved together; the datetime call isn't gated by approval)
+        let request_id = parsed["request_id"].as_str().unwrap().to_string();
+        registry.resolve("s1", &request_id, ApprovalDecision::Approved);
+        let action = h.await.expect("middleware task panicked");
+        assert!(
+            matches!(action, MiddlewareAction::Continue),
+            "approved batch should Continue, got {action:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_approval_empty_transcript_continues() {
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(1)));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mw = approval_mw(vec![ApprovalRule::new("bash")], registry, "s1", tx);
+        let action = mw.before_tool_calls(&[]).await;
+        assert!(matches!(action, MiddlewareAction::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_approval_no_pending_calls_continues() {
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(1)));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mw = approval_mw(vec![ApprovalRule::new("bash")], registry, "s1", tx);
+        // Last message has no tool_calls
+        let transcript = vec![Message::new(Role::User, "hi")];
         let action = mw.before_tool_calls(&transcript).await;
         assert!(matches!(action, MiddlewareAction::Continue));
     }
