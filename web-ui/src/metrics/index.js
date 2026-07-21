@@ -12,17 +12,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const estCostEl = document.getElementById('estCost');
 
   // Per-bucket cost rates (USD per million tokens), based on Anthropic
-  // Sonnet 4.5 pricing — the local LLM maps to roughly that capability.
-  // Cache reads are heavily discounted (replaying cached context is
-  // cheap); cache writes carry a 1.25x premium over fresh input (the
-  // provider charges more to populate the cache). Reasoning tokens are
-  // billed at output rates (OpenAI o1-style).
+  // Claude Opus 4.7 pricing. Cache reads are heavily discounted (replaying
+  // cached context is cheap — 10% of input); cache writes carry a 1.25x
+  // premium over fresh input (the provider charges more to populate the
+  // cache, using the 5-minute write rate). Reasoning tokens are billed at
+  // output rates (OpenAI o1-style).
   const COST_PER_MILLION = {
-    input: 3.0,
-    output: 15.0,
-    cache_read: 0.3,
-    cache_write: 3.75,
-    reasoning: 15.0,
+    input: 5.0,
+    output: 25.0,
+    cache_read: 0.5,
+    cache_write: 6.25,
+    reasoning: 25.0,
   };
 
   // Bucket labels + colors for the stacked chart (in display order).
