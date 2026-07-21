@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
 
-use crate::ai::chat::ChatBuilder;
+use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
 use crate::ai::chat::db::find_chat_session_by_id;
 use crate::core::AppConfig;
 use crate::openai::{Message, Role};
@@ -93,6 +93,7 @@ async fn generate_and_update_session_info(
         &config.openai_model,
     )
     .transcript(vec![Message::new(Role::System, system_prompt)])
+    .middleware(vec![Box::new(InvisibleCharFilter)])
     .build();
 
     let response = chat.next_msg(Message::new(Role::User, &prompt)).await?;

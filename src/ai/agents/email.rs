@@ -1,6 +1,6 @@
 use tokio_rusqlite::Connection;
 
-use crate::ai::chat::ChatBuilder;
+use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
 use crate::ai::tools::EmailUnreadTool;
 use crate::openai::{BoxedToolCall, Message, Role};
 
@@ -26,6 +26,7 @@ pub async fn email_chat_response(
         .transcript(vec![Message::new(Role::System, &system_msg)])
         .database(db, None, Some(vec![String::from("background")]))
         .tools(tools)
+        .middleware(vec![Box::new(InvisibleCharFilter)])
         .build();
 
     let response = chat.next_msg(user_msg).await.expect("Chat session failed");

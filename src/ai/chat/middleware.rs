@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::openai::{Message, Role};
+use crate::openai::{FunctionCall, Message, Role};
 use anyhow::Error;
 use async_trait::async_trait;
 
@@ -17,24 +17,44 @@ pub enum MiddlewareAction {
     Reject(Vec<Message>),
 }
 
-/// Middleware that runs before each batch of tool calls.
+/// Middleware that runs around each batch of tool calls.
 ///
-/// Implementations receive the full chat transcript and can decide
-/// whether to allow the tool calls to proceed, stop with an error, or
-/// inject messages into the transcript before stopping.
+/// Implementations receive the chat transcript (in `before_tool_calls`)
+/// or the tool call results (in `after_tool_calls`) and can decide
+/// whether to allow the calls to proceed, stop with an error, or
+/// inject messages into the transcript.
 ///
 /// Each middleware owns its own private state — no shared state is
-/// provided beyond the transcript.
+/// provided beyond what each hook receives.
 #[async_trait]
 pub trait ToolCallMiddleware: Send + Sync {
     /// Called before a batch of tool calls is executed.
     ///
     /// `transcript` contains the full chat history up to and including
     /// the latest assistant message with the pending tool call requests.
-    async fn before_tool_calls(
+    ///
+    /// Default implementation continues without intervention.
+    async fn before_tool_calls(&self, _transcript: &[Message]) -> MiddlewareAction {
+        MiddlewareAction::Continue
+    }
+
+    /// Called after a batch of tool calls completes.
+    ///
+    /// `tool_calls` and `results` are parallel slices —
+    /// `results[i]` is the response produced for `tool_calls[i]`.
+    ///
+    /// Returning `Reject(replacements)` substitutes `replacements`
+    /// for the actual results. The vec must contain one message per
+    /// tool call, in order, so the chat loop can swap them in.
+    ///
+    /// Default implementation continues without intervention.
+    async fn after_tool_calls(
         &self,
-        transcript: &[Message],
-    ) -> MiddlewareAction;
+        _tool_calls: &[FunctionCall],
+        _results: &[Message],
+    ) -> MiddlewareAction {
+        MiddlewareAction::Continue
+    }
 }
 
 /// Detects when the LLM repeatedly calls the same tool with the same
@@ -223,6 +243,112 @@ impl ToolCallMiddleware for ToolSecurityMiddleware {
         }
 
         MiddlewareAction::Continue
+    }
+}
+
+/// Returns `true` if `c` is an invisible character that should be
+/// filtered from tool call results.
+///
+/// Common ASCII whitespace (`\t`, `\n`, `\r`) is **not** considered
+/// invisible — these are legitimate content in tool output. Printable
+/// text (letters, digits, punctuation, normal spaces) is also allowed.
+///
+/// The invisible set:
+/// - C0 control characters `U+0000`..`U+001F` (NUL, BEL, BS, …)
+///   except for the allowed whitespace above
+/// - DEL `U+007F`
+/// - C1 control characters `U+0080`..`U+009F`
+/// - Soft hyphen `U+00AD` (invisible except at line breaks)
+/// - Zero-width spaces and joiners: `U+200B`, `U+200C`, `U+200D`,
+///   `U+2060` (word joiner)
+/// - BOM / zero-width no-break space `U+FEFF`
+/// - Bidirectional formatting characters: `U+202A`..`U+202E`,
+///   `U+2066`..`U+2069`
+fn is_invisible_char(c: char) -> bool {
+    let code = c as u32;
+    if matches!(c, '\t' | '\n' | '\r') {
+        return false;
+    }
+    if code <= 0x1F {
+        return true;
+    }
+    if code == 0x7F {
+        return true;
+    }
+    if (0x80..=0x9F).contains(&code) {
+        return true;
+    }
+    if code == 0xAD {
+        return true;
+    }
+    if matches!(code, 0x200B | 0x200C | 0x200D | 0x2060 | 0xFEFF) {
+        return true;
+    }
+    if (0x202A..=0x202E).contains(&code) {
+        return true;
+    }
+    if (0x2066..=0x2069).contains(&code) {
+        return true;
+    }
+    false
+}
+
+/// Returns `true` if `s` contains any invisible characters.
+fn contains_invisible_chars(s: &str) -> bool {
+    s.chars().any(is_invisible_char)
+}
+
+/// Middleware that filters invisible characters from tool call results.
+///
+/// "Invisible characters" are Unicode code points with no visible
+/// representation — zero-width spaces, BOM, bidirectional formatting,
+/// soft hyphens, and C0/C1 control codes (excluding common whitespace
+/// like `\t`, `\n`, `\r`).
+///
+/// On each batch of tool calls, the middleware inspects the actual
+/// results **after** tools execute. For any result whose content
+/// contains invisible characters, the middleware substitutes a
+/// rejection message (preserving the `tool_call_id` so the LLM can
+/// correlate it) and lets clean results pass through unchanged.
+///
+/// This runs in the `after_tool_calls` hook so it sees real tool
+/// output, not pre-execution predictions.
+#[derive(Default)]
+pub struct InvisibleCharFilter;
+
+#[async_trait]
+impl ToolCallMiddleware for InvisibleCharFilter {
+    async fn after_tool_calls(
+        &self,
+        tool_calls: &[FunctionCall],
+        results: &[Message],
+    ) -> MiddlewareAction {
+        let mut out: Vec<Message> = Vec::with_capacity(results.len());
+        let mut any_rejected = false;
+        for (call, result) in tool_calls.iter().zip(results.iter()) {
+            let content = result.content.as_deref().unwrap_or("");
+            if !contains_invisible_chars(content) {
+                out.push(result.clone());
+                continue;
+            }
+            let msg = format!(
+                "Tool call result rejected: contained invisible characters \
+                 (zero-width spaces, control codes, or bidirectional formatting). \
+                 Tool: '{}'. Please adjust your approach — for example, by stripping \
+                 these characters from any input you pass to tools.",
+                call.function.name,
+            );
+            out.push(Message::new_tool_call_response(
+                &msg,
+                result.tool_call_id().unwrap_or(""),
+            ));
+            any_rejected = true;
+        }
+        if any_rejected {
+            MiddlewareAction::Reject(out)
+        } else {
+            MiddlewareAction::Continue
+        }
     }
 }
 
@@ -574,6 +700,187 @@ mod tests {
             Message::new(Role::Assistant, "hello"),
         ];
         let action = mw.before_tool_calls(&transcript).await;
+        assert!(matches!(action, MiddlewareAction::Continue));
+    }
+
+    // --- InvisibleCharFilter tests ---
+
+    fn tool_call(name: &str, id: &str) -> FunctionCall {
+        FunctionCall {
+            function: crate::openai::FunctionCallFn {
+                name: name.into(),
+                arguments: r#"{}"#.into(),
+            },
+            id: id.into(),
+            r#type: "function".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_clean_result_continues() {
+        let mw = InvisibleCharFilter;
+        let calls = vec![tool_call("search", "call_1")];
+        let results = vec![Message::new_tool_call_response("clean result", "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(matches!(action, MiddlewareAction::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_detects_zero_width_space() {
+        let mw = InvisibleCharFilter;
+        let calls = vec![tool_call("bash", "call_1")];
+        // \u{200B} is a zero-width space
+        let results = vec![Message::new_tool_call_response("clean\u{200B}result", "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs.len(), 1);
+                assert_eq!(*msgs[0].role(), Role::Tool);
+                assert_eq!(msgs[0].tool_call_id(), Some("call_1"));
+                let content = msgs[0].content.as_ref().expect("missing content");
+                assert!(
+                    content.contains("invisible characters"),
+                    "expected rejection message, got: {content}",
+                );
+            }
+            other => panic!("Expected Reject, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_detects_bom() {
+        let mw = InvisibleCharFilter;
+        let calls = vec![tool_call("web_search", "call_1")];
+        // \u{FEFF} is BOM / zero-width no-break space
+        let results = vec![Message::new_tool_call_response("\u{FEFF}result", "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for BOM, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_detects_c0_control_chars() {
+        let mw = InvisibleCharFilter;
+        // Bell + backspace (C0 controls)
+        let bad_result = "result\u{0007}\u{0008}";
+        let calls = vec![tool_call("bash", "call_1")];
+        let results = vec![Message::new_tool_call_response(bad_result, "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for C0 control chars, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_detects_c1_control_chars() {
+        let mw = InvisibleCharFilter;
+        // U+0085 (NEL) is in the C1 range
+        let bad_result = "result\u{0085}";
+        let calls = vec![tool_call("bash", "call_1")];
+        let results = vec![Message::new_tool_call_response(bad_result, "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for C1 control chars, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_detects_bidi_formatting() {
+        let mw = InvisibleCharFilter;
+        // LRE (U+202A) is a bidirectional formatting character
+        let bad_result = "\u{202A}text\u{202C}";
+        let calls = vec![tool_call("bash", "call_1")];
+        let results = vec![Message::new_tool_call_response(bad_result, "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for bidi formatting, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_allows_common_whitespace() {
+        let mw = InvisibleCharFilter;
+        // Tab, newline, carriage return — all allowed
+        let clean_result = "line1\n\tindented\r\nmore";
+        let calls = vec![tool_call("bash", "call_1")];
+        let results = vec![Message::new_tool_call_response(clean_result, "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(
+            matches!(action, MiddlewareAction::Continue),
+            "Common whitespace should not trigger rejection, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_mixed_batch_passthrough() {
+        let mw = InvisibleCharFilter;
+        // One clean result, one with invisible chars
+        let calls = vec![tool_call("search", "call_1"), tool_call("bash", "call_2")];
+        let results = vec![
+            Message::new_tool_call_response("clean result", "call_1"),
+            Message::new_tool_call_response("dirty\u{200B}result", "call_2"),
+        ];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs.len(), 2, "expected one msg per result");
+                // First message: clean — passed through unchanged
+                assert_eq!(msgs[0].tool_call_id(), Some("call_1"));
+                assert_eq!(
+                    msgs[0].content.as_ref().expect("missing content"),
+                    "clean result",
+                );
+                // Second message: dirty — replaced with rejection
+                assert_eq!(msgs[1].tool_call_id(), Some("call_2"));
+                let content = msgs[1].content.as_ref().expect("missing content");
+                assert!(
+                    content.contains("invisible characters"),
+                    "expected rejection message for call_2, got: {content}",
+                );
+            }
+            other => panic!("Expected Reject, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_rejection_includes_tool_name() {
+        let mw = InvisibleCharFilter;
+        let calls = vec![tool_call("my_special_tool", "call_1")];
+        let results = vec![Message::new_tool_call_response("bad\u{200B}", "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                let content = msgs[0].content.as_ref().expect("missing content");
+                assert!(
+                    content.contains("my_special_tool"),
+                    "rejection should name the tool, got: {content}",
+                );
+            }
+            other => panic!("Expected Reject, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_empty_results_continues() {
+        let mw = InvisibleCharFilter;
+        let calls: Vec<FunctionCall> = vec![];
+        let results: Vec<Message> = vec![];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        assert!(matches!(action, MiddlewareAction::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_default_default() {
+        // The default impl should construct a working filter.
+        let mw = InvisibleCharFilter::default();
+        let calls = vec![tool_call("search", "call_1")];
+        let results = vec![Message::new_tool_call_response("clean", "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
         assert!(matches!(action, MiddlewareAction::Continue));
     }
 }

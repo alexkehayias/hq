@@ -3,7 +3,7 @@ use tokio_rusqlite::Connection;
 use uuid::Uuid;
 use anyhow::{anyhow, Result};
 
-use crate::ai::chat::ChatBuilder;
+use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
 use crate::eval::models::{EvalCase, EvalExpected, EvalRun};
 use crate::eval::db::{get_run, get_run_results, insert_result, insert_run, update_run_status};
 use crate::openai::{Message, Role};
@@ -42,6 +42,7 @@ async fn run_case(
     let msg = Message::new(Role::User, &case.prompt);
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)
         .transcript(vec![msg.clone()])
+        .middleware(vec![Box::new(InvisibleCharFilter)])
         .build();
 
     let messages = chat.next_msg(msg).await?;
