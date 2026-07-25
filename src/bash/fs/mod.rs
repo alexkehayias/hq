@@ -90,7 +90,7 @@
 //! | [`OverlayFs`] | Copy-on-write layered filesystem | Templates, immutable bases |
 //! | [`MountableFs`] | Multiple filesystems at mount points | Complex multi-source setups |
 //! | [`ReadOnlyFs`] | Mutation-denying wrapper around another filesystem | Inspection-only sessions |
-//! | [`RealFs`] | Host directory access (`realfs` feature) | Expose host files to scripts |
+//! | [`RealFs`] | Host directory access (async `tokio::fs`) | Expose host files to scripts |
 //!
 //! All implementations are thread-safe (`Send + Sync`) and fully async.
 //!
@@ -181,46 +181,29 @@
 //!
 //! ## Using RealFs (Host Filesystem Access)
 //!
-//! [`RealFs`] exposes a host directory inside the VFS. It requires the `realfs`
-//! feature flag. Two access modes are available:
+//! [`RealFs`] exposes a host directory inside the VFS. Two access modes are
+//! available:
 //!
 //! - **ReadOnly** — scripts can read host files but writes go to an in-memory overlay
 //! - **ReadWrite** — scripts can modify host files directly (breaks sandbox)
 //!
-//! The easiest way to use it is through [`BashBuilder`](crate::bash::BashBuilder):
+//! Unlike upstream bashkit, this project's trimmed [`BashBuilder`](crate::bash::BashBuilder)
+//! does **not** carry the `mount_real_*` helpers. Construct a [`RealFs`],
+//! wrap it with [`PosixFs`], and mount it on a built [`Bash`] via [`Bash::mount`]:
 //!
-//! ```ignore
-//! use crate::bash::Bash;
-//!
-//! // Readonly overlay at root — host files visible at /
-//! let mut bash = Bash::builder()
-//!     .mount_real_readonly("/path/to/project")
-//!     .build();
-//!
-//! // Readonly mount at a specific path
-//! let mut bash = Bash::builder()
-//!     .mount_real_readonly_at("/path/to/data", "/mnt/data")
-//!     .build();
-//!
-//! // Read-write mount (WARNING: breaks sandbox)
-//! let mut bash = Bash::builder()
-//!     .mount_real_readwrite_at("/path/to/workspace", "/mnt/ws")
-//!     .build();
-//! ```
-//!
-//! You can also use [`RealFs`] directly as an [`FsBackend`] with [`PosixFs`]:
-//!
-//! ```ignore
-//! use crate::bash::{Bash, PosixFs};
-//! use crate::bash::fs::{RealFs, RealFsMode};
-//! use std::sync::Arc;
-//!
-//! let backend = RealFs::new("/path/to/dir", RealFsMode::ReadOnly).unwrap();
+//! ```no_run
+//! # use std::sync::Arc;
+//! # use hq::bash::{Bash, PosixFs, RealFs, RealFsMode};
+//! # #[tokio::main]
+//! # async fn main() -> hq::bash::Result<()> {
+//! // Read-only: host files visible at /, writes go to the in-memory overlay
+//! let backend = RealFs::new("/path/to/dir", RealFsMode::ReadOnly).await?;
 //! let fs = Arc::new(PosixFs::new(backend));
-//! let mut bash = Bash::builder().fs(fs).build();
+//! let mut bash = Bash::builder().build();
+//! bash.mount("/", fs)?;
+//! # Ok(())
+//! # }
 //! ```
-//!
-//! See `examples/realfs_readonly.rs` and `examples/realfs_readwrite.rs`.
 //!
 //! # Direct Filesystem Access
 //!

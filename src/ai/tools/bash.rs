@@ -106,50 +106,36 @@ impl BashTool {
 /// Creates the workspace directory if it doesn't exist, mounts it at the
 /// sandbox root, and returns the command output. This is idempotent.
 ///
-/// bashkit's `RealFs` backend uses synchronous `std::fs` calls (canonicalize,
-/// exists, etc.) in its `resolve()` method, which blocks the async worker
-/// thread. On a single-CPU server (one tokio worker thread), this causes
-/// hangs when combined with `HqBuiltin`'s `capture_async` pipe mechanism.
-/// We run the entire bashkit execution on a blocking thread with its own
-/// runtime to avoid stalling the main runtime.
+/// `RealFs` routes all host I/O through `tokio::fs`, which offloads each
+/// syscall to Tokio's blocking thread pool — so the async worker is never
+/// blocked even on a single-CPU runtime. This lets `run_in_sandbox` execute
+/// directly on the caller's runtime instead of needing a nested blocking-thread
+/// workaround.
 pub async fn run_in_sandbox(command: &str, workspace_path: &Path) -> Result<BashOutput> {
     fs::create_dir_all(workspace_path).await?;
 
-    let command = command.to_string();
-    let workspace_path = workspace_path.to_path_buf();
+    let backend = RealFs::new(workspace_path, RealFsMode::ReadWrite)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
+    let fs = Arc::new(PosixFs::new(backend));
 
-    let result = tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create bashkit runtime: {e}"))?;
+    let mut bash = Bash::builder()
+        .builtin("hq", Box::new(HqBuiltin))
+        .build();
+    bash.mount(SANDBOX_ROOT, fs)
+        .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
 
-        rt.block_on(async {
-            let backend = RealFs::new(&workspace_path, RealFsMode::ReadWrite)
-                .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
-            let fs = Arc::new(PosixFs::new(backend));
+    let output = bash
+        .exec(command)
+        .await
+        .map_err(|e| anyhow::anyhow!("bash exec failed: {e}"))?;
 
-            let mut bash = Bash::builder()
-                .builtin("hq", Box::new(HqBuiltin))
-                .build();
-            bash.mount(SANDBOX_ROOT, fs)
-                .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
-
-            let output = bash.exec(&command).await
-                .map_err(|e| anyhow::anyhow!("bash exec failed: {e}"))?;
-
-            Ok::<_, anyhow::Error>(BashOutput {
-                exit_code: output.exit_code,
-                stdout: output.stdout,
-                stderr: output.stderr,
-                truncated: output.stdout_truncated || output.stderr_truncated,
-            })
-        })
+    Ok(BashOutput {
+        exit_code: output.exit_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        truncated: output.stdout_truncated || output.stderr_truncated,
     })
-    .await
-    .map_err(|e| anyhow::anyhow!("bashkit blocking task failed: {e}"))??;
-
-    Ok(result)
 }
 
 #[cfg(test)]
