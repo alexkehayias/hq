@@ -4,7 +4,8 @@ pub use db::*;
 pub mod core;
 pub mod middleware;
 pub use middleware::{
-    InfiniteLoopDetector, MiddlewareAction, ToolCallMiddleware, ToolSecurityMiddleware,
+    InfiniteLoopDetector, InvisibleCharFilter, MiddlewareAction, ToolCallMiddleware,
+    ToolSecurityMiddleware,
 };
 pub mod models;
 pub use core::{Chat, ChatBuilder};

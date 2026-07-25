@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::PeriodicJob;
 use crate::{
     ai::{
-        chat::ChatBuilder,
+        chat::{ChatBuilder, InvisibleCharFilter},
         tools::{CalendarTool, WebSearchTool, WebsiteViewTool},
     },
     core::AppConfig,
@@ -93,6 +93,7 @@ Frank is the VP of People at Acme. He was previously HR Manager at Acme and befo
         let mut chat = ChatBuilder::new(openai_api_hostname, openai_api_key, openai_model)
             .database(db, None, Some(vec![String::from("background")]))
             .tools(tools)
+            .middleware(vec![Box::new(InvisibleCharFilter)])
             .build();
 
         // Create a new chat session with the tools
