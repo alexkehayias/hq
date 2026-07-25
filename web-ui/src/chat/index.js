@@ -225,6 +225,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 try {
                   const parsed = JSON.parse(data);
+
+                  // Approval request chunks (from ApprovalMiddleware
+                  // on the server) ride the same SSE stream as LLM
+                  // response chunks — both are wrapped in "data: "
+                  // by axum's SSE formatter. They don't have a
+                  // `choices` field, so check for them first.
+                  if (parsed.type === 'approval_request') {
+                    renderApprovalCard(parsed, sessionId);
+                    return;
+                  }
+
                   const content = parsed.choices[0].delta.content;
                   const reasoning =
                     parsed.choices[0].delta.reasoning ||
@@ -256,20 +267,6 @@ document.addEventListener('DOMContentLoaded', () => {
                   }
                 } catch (e) {
                   console.error('Error parsing JSON:', e);
-                }
-              } else if (line.trim() !== '') {
-                // Non-SSE line: could be an approval_request chunk
-                // emitted by ApprovalMiddleware. These are plain JSON
-                // objects (no "data: " prefix) sent on the same tx
-                // channel as the LLM stream.
-                try {
-                  const parsed = JSON.parse(line.trim());
-                  if (parsed.type === 'approval_request') {
-                    renderApprovalCard(parsed, sessionId);
-                  }
-                } catch (_e) {
-                  // Not JSON — ignore. The stream can contain
-                  // stray whitespace or other non-JSON content.
                 }
               }
             });
