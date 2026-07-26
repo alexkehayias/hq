@@ -16,6 +16,7 @@ pub mod projects;
 pub mod query;
 pub mod rebuild;
 pub mod serve;
+pub mod session;
 pub mod tasks;
 pub mod web;
 
@@ -129,6 +130,11 @@ enum Command {
         #[command(subcommand)]
         command: TasksCommand,
     },
+    /// Manage chat sessions
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -174,6 +180,15 @@ enum TasksCommand {
         id: String,
         #[arg(long)]
         project: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionCommand {
+    /// Delete a chat session, its messages, search index entries, and
+    /// workspace directory
+    Delete {
+        id: String,
     },
 }
 
@@ -310,6 +325,11 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             }
         }
         }
+        Some(Command::Session { command }) => match command {
+            SessionCommand::Delete { id } => {
+                session::run_delete(&vec_db_path, &index_path, &storage_path, &id).await?;
+            }
+        },
         None => {}
     }
 

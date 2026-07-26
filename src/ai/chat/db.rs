@@ -301,3 +301,220 @@ pub async fn set_session_mode(
     .await
     .map_err(anyhow::Error::from)
 }
+
+/// Result of deleting a chat session from the database.
+#[derive(Serialize)]
+pub struct DeletedChatSession {
+    /// Number of chat_message rows removed.
+    pub messages_deleted: usize,
+    /// Whether a session row existed in the `session` table.
+    pub session_existed: bool,
+}
+
+/// Delete a chat session and all its messages from the database.
+///
+/// Deletes in dependency order inside a transaction: `chat_message` rows
+/// first (FK reference to session), then `session_tag` links (linking
+/// table cleanup), then the `session` row itself. SQLite FKs are off in
+/// this codebase (no `PRAGMA foreign_keys`), so manual ordering is
+/// required to avoid orphaned rows.
+///
+/// Returns counts so the caller can report what was deleted. Does not
+/// error if the session doesn't exist — `session_existed: false` signals
+/// that case. The caller decides whether to treat that as an error.
+pub async fn delete_chat_session(
+    db: &Connection,
+    session_id: &str,
+) -> Result<DeletedChatSession, Error> {
+    let s_id = session_id.to_owned();
+    let result: DeletedChatSession = db
+        .call(move |conn| {
+            let tx = conn.transaction()?;
+
+            // 1. Delete chat messages (FK reference to session)
+            let messages_deleted = tx.execute(
+                "DELETE FROM chat_message WHERE session_id = ?",
+                [&s_id],
+            )?;
+
+            // 2. Delete session_tag links (linking table cleanup)
+            tx.execute("DELETE FROM session_tag WHERE session_id = ?", [&s_id])?;
+
+            // 3. Delete the session row itself
+            let sessions_deleted = tx.execute("DELETE FROM session WHERE id = ?", [&s_id])?;
+
+            tx.commit()?;
+
+            Ok(DeletedChatSession {
+                messages_deleted,
+                session_existed: sessions_deleted > 0,
+            })
+        })
+        .await?;
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db::{async_db, initialize_db};
+    use crate::openai::Role;
+    use tempfile::TempDir;
+
+    /// Set up a test database in a temp directory. Returns the async
+    /// connection and the temp dir guard (kept alive to retain files).
+    async fn test_db() -> (Connection, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let vec_db_path = dir.path().to_str().unwrap().to_string();
+        let db = async_db(&vec_db_path).await.unwrap();
+        db.call(|conn| {
+            initialize_db(conn).unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (db, dir)
+    }
+
+    /// Count rows in a table matching a WHERE clause.
+    async fn count_rows(db: &Connection, sql: &str, param: &str) -> i64 {
+        let p = param.to_string();
+        let sql_owned = sql.to_string();
+        db.call(move |conn| {
+            let count: i64 =
+                conn.query_row(&sql_owned, rusqlite::params![p], |row| row.get(0))?;
+            Ok(count)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_delete_chat_session_with_messages() {
+        let (db, _dir) = test_db().await;
+
+        // Create a session with messages
+        get_or_create_session(&db, "test-session-1", &[], SessionMode::Chat)
+            .await
+            .unwrap();
+        let msg1 = Message::new(Role::User, "Hello");
+        let msg2 = Message::new(Role::Assistant, "Hi there!");
+        insert_chat_message(&db, "test-session-1", &msg1)
+            .await
+            .unwrap();
+        insert_chat_message(&db, "test-session-1", &msg2)
+            .await
+            .unwrap();
+
+        // Verify setup: 1 session, 2 messages
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM session WHERE id = ?", "test-session-1").await,
+            1
+        );
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM chat_message WHERE session_id = ?",
+                "test-session-1"
+            )
+            .await,
+            2
+        );
+
+        // Delete the session
+        let result = delete_chat_session(&db, "test-session-1").await.unwrap();
+
+        assert!(result.session_existed);
+        assert_eq!(result.messages_deleted, 2);
+
+        // Session and messages are gone
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM session WHERE id = ?", "test-session-1").await,
+            0
+        );
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM chat_message WHERE session_id = ?",
+                "test-session-1"
+            )
+            .await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_chat_session_nonexistent() {
+        let (db, _dir) = test_db().await;
+
+        // Delete a session that doesn't exist — should not error
+        let result = delete_chat_session(&db, "nonexistent-id").await.unwrap();
+
+        assert!(!result.session_existed);
+        assert_eq!(result.messages_deleted, 0);
+
+        // DB is still empty
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM session WHERE id = ?", "nonexistent-id").await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_chat_session_cleans_up_tag_links() {
+        let (db, _dir) = test_db().await;
+
+        // Create a session with tags (background + custom tag)
+        get_or_create_session(
+            &db,
+            "test-session-2",
+            &["background", "custom-tag"],
+            SessionMode::Chat,
+        )
+        .await
+        .unwrap();
+        let msg = Message::new(Role::User, "Tagged session");
+        insert_chat_message(&db, "test-session-2", &msg).await.unwrap();
+
+        // Verify session_tag links exist (2 tags)
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM session_tag WHERE session_id = ?",
+                "test-session-2"
+            )
+            .await,
+            2
+        );
+
+        // Delete the session
+        let result = delete_chat_session(&db, "test-session-2").await.unwrap();
+
+        assert!(result.session_existed);
+        assert_eq!(result.messages_deleted, 1);
+
+        // session_tag links are cleaned up
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM session_tag WHERE session_id = ?",
+                "test-session-2"
+            )
+            .await,
+            0
+        );
+
+        // Tag rows themselves are NOT deleted (shared lookup table)
+        let total_tags: i64 = db
+            .call(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM tag", [], |row| row.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert!(
+            total_tags >= 2,
+            "tags should be preserved (shared across sessions), got {total_tags}"
+        );
+    }
+}
