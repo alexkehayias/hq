@@ -856,6 +856,72 @@ pub async fn index_chat_messages(
     Ok(())
 }
 
+/// Delete all chat messages for a session from the tantivy full-text search
+/// index.
+///
+/// The FTS schema has no `session_id` field — chat messages are indexed by
+/// their message UUID (`id`, a STRING field). To delete a session's messages,
+/// we first look up all `chat_message.id` values for the session from the
+/// database, then call `delete_term` on each one. Must be called BEFORE
+/// `delete_chat_session`, while the message rows still exist in the DB.
+///
+/// Returns early with `Ok(())` if the session has no messages — tantivy
+/// has nothing to delete.
+pub async fn delete_chat_session_index(
+    db: &Connection,
+    index_dir_path: &str,
+    session_id: &str,
+) -> Result<()> {
+    let s_id = session_id.to_string();
+    let message_ids: Vec<String> = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare("SELECT id FROM chat_message WHERE session_id = ?")?;
+            let ids: Vec<String> = stmt
+                .query_map([&s_id], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(ids)
+        })
+        .await?;
+
+    if message_ids.is_empty() {
+        return Ok(());
+    }
+
+    let index_path = tantivy::directory::MmapDirectory::open(index_dir_path)
+        .context("Failed to open tantivy index directory")?;
+    let schema = note_schema();
+    let idx = Index::open_or_create(index_path, schema.clone())
+        .context("Unable to open or create tantivy index")?;
+    let mut index_writer: IndexWriter = idx
+        .writer(50_000_000)
+        .context("Tantivy index writer failed to initialize")?;
+
+    let id_field = schema
+        .get_field("id")
+        .context("Failed to get 'id' field from schema")?;
+    for message_id in &message_ids {
+        let term = Term::from_field_text(id_field, message_id);
+        index_writer.delete_term(term);
+    }
+
+    tokio::task::spawn_blocking(move || {
+        index_writer
+            .commit()
+            .expect("Tantivy delete for chat session failed to commit");
+    })
+    .await
+    .context("Tantivy delete task failed")?;
+
+    tracing::info!(
+        "Deleted {} chat message(s) from tantivy index for session {}",
+        message_ids.len(),
+        session_id
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,5 +953,177 @@ mod tests {
         }
 
         assert!(tested > 0, "No .org files found in examples/notes/");
+    }
+
+    /// ===== Tests for `delete_chat_session_index` =====
+
+    use crate::ai::chat::db::{get_or_create_session, insert_chat_message};
+    use crate::ai::chat::models::SessionMode;
+    use crate::core::db::{async_db, initialize_db};
+    use tantivy::ReloadPolicy;
+    use tempfile::TempDir;
+
+    /// Set up a test DB with chat schema initialized, in a temp dir.
+    async fn test_db() -> (Connection, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let vec_db_path = dir.path().to_str().unwrap().to_string();
+        let db = async_db(&vec_db_path).await.unwrap();
+        db.call(|conn| {
+            initialize_db(conn).unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (db, dir)
+    }
+
+    /// Count tantivy docs by message ID. Returns the number of hits.
+    ///
+    /// Forces a reader reload so we see committed deletes; we want to
+    /// verify that docs are actually gone after `delete_chat_session_index`
+    /// commits, not just queued for deletion.
+    fn count_docs_by_id(idx: &Index, message_ids: &[String]) -> usize {
+        let reader = idx
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .unwrap();
+        reader.reload().unwrap();
+        let searcher = reader.searcher();
+
+        let id_field = idx.schema().get_field("id").unwrap();
+        let mut total = 0;
+        for mid in message_ids {
+            let term = tantivy::Term::from_field_text(id_field, mid);
+            let query = tantivy::query::TermQuery::new(
+                term,
+                tantivy::schema::IndexRecordOption::Basic,
+            );
+            total += searcher
+                .search(&query, &tantivy::collector::Count)
+                .unwrap();
+        }
+        total
+    }
+
+    /// Set up a chat session with two messages and index them.
+    async fn setup_session_with_messages(
+        db: &Connection,
+        session_id: &str,
+    ) -> Vec<Message> {
+        get_or_create_session(db, session_id, &[], SessionMode::Chat)
+            .await
+            .unwrap();
+        let msg1 = Message::new(Role::User, "Hello world");
+        let msg2 = Message::new(Role::Assistant, "Hi there!");
+        insert_chat_message(db, session_id, &msg1).await.unwrap();
+        insert_chat_message(db, session_id, &msg2).await.unwrap();
+
+        // Return the messages in insertion order for `index_chat_messages`
+        vec![msg1, msg2]
+    }
+
+    #[tokio::test]
+    async fn test_delete_chat_session_index_removes_messages() {
+        let (db, db_dir) = test_db().await;
+        // Index directory is a separate temp dir (matches production layout
+        // where DB and index live under $HQ_STORAGE_PATH/{db,index})
+        let idx_dir = TempDir::new().unwrap();
+        let index_dir_path = idx_dir.path().to_str().unwrap().to_string();
+
+        // Set up session and index its messages
+        let session_id = "test-session-index-1";
+        let messages = setup_session_with_messages(&db, session_id).await;
+
+        // Index the messages — this writes their IDs (from DB) to tantivy
+        index_chat_messages(&db, &index_dir_path, session_id, messages)
+            .await
+            .unwrap();
+
+        // Get the message IDs from DB so we can search for them in tantivy
+        let s_id = session_id.to_string();
+        let message_ids: Vec<String> = db
+            .call(move |conn| {
+                let mut stmt =
+                    conn.prepare("SELECT id FROM chat_message WHERE session_id = ?")?;
+                let ids: Vec<String> = stmt
+                    .query_map([&s_id], |row| row.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(ids)
+            })
+            .await
+            .unwrap();
+        assert_eq!(message_ids.len(), 2, "expected 2 message IDs from DB");
+
+        // Open the index and verify docs are present
+        let idx_path = tantivy::directory::MmapDirectory::open(&index_dir_path).unwrap();
+        let idx = Index::open_or_create(idx_path, note_schema()).unwrap();
+        // Need to reload reader after the index_chat_messages commit
+        let initial_count = count_docs_by_id(&idx, &message_ids);
+        // Note: index_chat_messages uses spawn_blocking for commit; reader
+        // should see it after reload. Count may be 2 (both messages present).
+        assert!(
+            initial_count > 0,
+            "expected docs in index after indexing, got {initial_count}"
+        );
+
+        // Now delete the session's messages from tantivy
+        delete_chat_session_index(&db, &index_dir_path, session_id)
+            .await
+            .unwrap();
+
+        // Verify docs are gone from tantivy
+        let final_count = count_docs_by_id(&idx, &message_ids);
+        assert_eq!(
+            final_count, 0,
+            "expected 0 docs after delete, got {final_count}"
+        );
+
+        // The DB rows are untouched (delete_chat_session_index doesn't touch DB)
+        let remaining: i64 = db
+            .call(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM chat_message WHERE session_id = ?",
+                    rusqlite::params![session_id],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(remaining, 2, "DB rows should be untouched by index delete");
+
+        drop(db_dir);
+    }
+
+    #[tokio::test]
+    async fn test_delete_chat_session_index_no_messages() {
+        let (db, _db_dir) = test_db().await;
+        let idx_dir = TempDir::new().unwrap();
+        let index_dir_path = idx_dir.path().to_str().unwrap().to_string();
+
+        // Session exists but has no messages — should be a no-op
+        let session_id = "test-session-no-messages";
+        get_or_create_session(&db, session_id, &[], SessionMode::Chat)
+            .await
+            .unwrap();
+
+        // Should succeed without indexing anything
+        let result = delete_chat_session_index(&db, &index_dir_path, session_id).await;
+        assert!(result.is_ok(), "expected Ok for empty session, got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_delete_chat_session_index_nonexistent_session() {
+        let (db, _db_dir) = test_db().await;
+        let idx_dir = TempDir::new().unwrap();
+        let index_dir_path = idx_dir.path().to_str().unwrap().to_string();
+
+        // Session doesn't exist — no messages, so this is a no-op
+        let result = delete_chat_session_index(&db, &index_dir_path, "nonexistent-session").await;
+        assert!(
+            result.is_ok(),
+            "expected Ok for nonexistent session, got {result:?}"
+        );
     }
 }
