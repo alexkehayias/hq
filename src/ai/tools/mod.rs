@@ -14,7 +14,7 @@ pub mod calendar;
 pub use calendar::CalendarTool;
 
 pub mod email;
-pub use email::EmailUnreadTool;
+pub use email::{EmailSearchTool, EmailUnreadTool};
 
 pub mod website_view;
 pub use website_view::WebsiteViewTool;

@@ -7,6 +7,12 @@ pub struct EmailUnreadQuery {
     pub limit: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct EmailSearchQuery {
+    pub email: String,
+    pub query: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EmailMessage {
     pub id: String,
