@@ -17,6 +17,7 @@ handlebars_helper!(inc: |v: i64| format!("{}", v + 1));
 pub enum Prompt {
     NoteSummary,
     UnreadEmails,
+    EmailSearch,
 }
 
 impl fmt::Display for Prompt {
@@ -68,6 +69,35 @@ The following is a list of unread emails and their related email thread in rever
 {{/each}}
 ";
 
+const EMAIL_SEARCH_PROMPT: &str = r"
+The following is a list of emails matching the search query and their related email threads in reverse chronological order.
+
+# Email Search Results
+{{#each email_threads}}
+
+## {{subject}}
+
+**ID:** {{id}}
+**From:** {{from}}
+**To:** {{to}}
+**Subject:** {{subject}}
+
+{{#each messages}}
+### Message {{inc @index}}
+
+**From:** {{from}}
+**To:** {{to}}
+**Date:** {{received}}
+**Subject:** {{subject}}
+**Body:**
+{{body}}
+
+---
+
+{{/each}}
+{{/each}}
+";
+
 pub fn templates<'a>() -> Handlebars<'a> {
     let mut registry = Handlebars::new();
     registry.set_strict_mode(true);
@@ -77,6 +107,9 @@ pub fn templates<'a>() -> Handlebars<'a> {
         .expect("Failed to register template");
     registry
         .register_template_string(&Prompt::UnreadEmails.to_string(), UNREAD_EMAILS_PROMPT)
+        .expect("Failed to register template");
+    registry
+        .register_template_string(&Prompt::EmailSearch.to_string(), EMAIL_SEARCH_PROMPT)
         .expect("Failed to register template");
     registry
 }

@@ -1,7 +1,7 @@
 use tokio_rusqlite::Connection;
 
 use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
-use crate::ai::tools::EmailUnreadTool;
+use crate::ai::tools::{EmailSearchTool, EmailUnreadTool};
 use crate::openai::{BoxedToolCall, Message, Role};
 
 /// Email reader and responder agent.
@@ -14,7 +14,8 @@ pub async fn email_chat_response(
     openai_model: &str,
 ) -> (String, Vec<Message>) {
     let email_unread_tool = EmailUnreadTool::new(api_base_url);
-    let tools: Vec<BoxedToolCall> = vec![Box::new(email_unread_tool)];
+    let email_search_tool = EmailSearchTool::new(api_base_url);
+    let tools: Vec<BoxedToolCall> = vec![Box::new(email_unread_tool), Box::new(email_search_tool)];
 
     let system_msg = format!(
         "You are an email assistant AI. Summarize, search, and analyze emails on behalf of the user for the following users: {}",

@@ -29,9 +29,9 @@ use crate::ai::chat::{
     find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
 };
 use crate::ai::tools::{
-    BashTool, CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool,
-    NoteSearchTool, NotifyTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool,
-    WebsiteViewTool, run_in_sandbox,
+    BashTool, CalendarTool, DateTimeTool, EmailSearchTool, EmailUnreadTool, MeetingSearchTool,
+    MemoryTool, NoteSearchTool, NotifyTool, TasksDueTodayTool, TasksScheduledTodayTool,
+    WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -222,6 +222,7 @@ async fn chat_handler(
         meeting_search_tool,
         web_search_tool,
         email_unread_tool,
+        email_search_tool,
         calendar_tool,
         website_view_tool,
         tasks_due_today_tool,
@@ -254,6 +255,7 @@ async fn chat_handler(
             MeetingSearchTool::new(note_search_api_url),
             WebSearchTool::new(note_search_api_url),
             EmailUnreadTool::new(note_search_api_url),
+            EmailSearchTool::new(note_search_api_url),
             CalendarTool::new(db.clone(), note_search_api_url),
             WebsiteViewTool::new(storage_path, &session_id),
             TasksDueTodayTool::new(note_search_api_url),
@@ -277,6 +279,7 @@ async fn chat_handler(
         Box::new(meeting_search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
+        Box::new(email_search_tool),
         Box::new(calendar_tool),
         Box::new(website_view_tool),
         Box::new(tasks_due_today_tool),

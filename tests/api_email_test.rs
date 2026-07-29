@@ -96,4 +96,89 @@ mod tests {
         // Negative limit results in a server error (not 400) since it's parsed as i64
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
+
+    /// Tests the email search endpoint returns 400 when email is missing
+    #[tokio::test]
+    #[serial]
+    async fn it_search_returns_400_for_missing_email_param() {
+        let app = test_app().await;
+
+        // Request without email query param should return error
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/email/search?query=from:alice")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Missing required parameter should return 400 Bad Request
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Tests the email search endpoint returns 400 when query is missing
+    #[tokio::test]
+    #[serial]
+    async fn it_search_returns_400_for_missing_query_param() {
+        let app = test_app().await;
+
+        // Request with email but no query param should return error
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/email/search?email=test@test.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Missing required parameter should return 400 Bad Request
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Tests the email search endpoint returns 500 when no refresh token exists
+    #[tokio::test]
+    #[serial]
+    async fn it_search_returns_500_for_missing_refresh_token() {
+        let app = test_app().await;
+
+        // Request with email and query but no refresh token in DB
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/email/search?email=nonexistent@test.com&query=from:alice")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return 500 when no refresh token found for the email
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// Tests the email search endpoint accepts complex Gmail search queries
+    #[tokio::test]
+    #[serial]
+    async fn it_search_accepts_complex_queries() {
+        let app = test_app().await;
+
+        // A complex query with multiple operators — no refresh token means
+        // a 500 response, but the request itself parses fine.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/email/search?email=test@test.com&query=from%3Aalice%20has%3Aattachment%20after%3A2024%2F01%2F01")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return 500 because no refresh token, but it accepts the query
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

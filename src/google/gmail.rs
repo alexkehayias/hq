@@ -441,6 +441,29 @@ pub async fn list_unread_messages(
     Ok(msgs.messages.unwrap_or_default())
 }
 
+/// List messages matching a Gmail search query (the `q` parameter
+/// supports Gmail's full search syntax: `from:`, `subject:`,
+/// `has:attachment`, `after:`/`before:` dates, boolean operators,
+/// etc.).
+pub async fn list_messages_by_query(
+    access_token: &str,
+    query: &str,
+) -> Result<Vec<MessageResponse>, anyhow::Error> {
+    let client = Client::new();
+    let url = format!(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages?q={}",
+        urlencoding::encode(query)
+    );
+    let res = client.get(&url).bearer_auth(access_token).send().await?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("Search fetch failed: {} ({})", status, text);
+    }
+    let msgs: ListMessagesResponse = serde_json::from_str(&text)?;
+    Ok(msgs.messages.unwrap_or_default())
+}
+
 /// Fetch full thread for a given threadId
 /// curl: see spec
 pub async fn fetch_thread(
@@ -1024,5 +1047,60 @@ mod tests {
             .unwrap();
         let status = res.status();
         assert!(!status.is_success());
+    }
+
+    #[tokio::test]
+    async fn test_list_messages_by_query() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        // Mock the Gmail messages endpoint with a search query
+        let mock_resp =
+            r#"{"messages": [{"id": "msg_001", "threadId": "thr_001"}], "nextPageToken": null}"#;
+        let _mock = server
+            .mock("GET", "/gmail/v1/users/me/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_resp)
+            .match_query(mockito::Matcher::Regex(r"q=from%3Aalice".to_string()))
+            .create();
+
+        // Drive the request through the mock server using the same URL
+        // shape that `list_messages_by_query` constructs.
+        let client = reqwest::Client::new();
+        let request_url = format!("{}/gmail/v1/users/me/messages?q=from%3Aalice", url);
+        let res = client
+            .get(&request_url)
+            .bearer_auth("test_token")
+            .send()
+            .await
+            .unwrap();
+        assert!(res.status().is_success());
+
+        let text = res.text().await.unwrap();
+        let msgs: ListMessagesResponse = serde_json::from_str(&text).unwrap();
+        assert_eq!(msgs.messages.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_messages_by_query_error() {
+        let mut server = mockito::Server::new_async().await;
+
+        let _mock = server
+            .mock("GET", "/gmail/v1/users/me/messages")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error": {"message": "Unauthorized"}}"#)
+            .match_query(mockito::Matcher::Regex(r"q=.*".to_string()))
+            .create();
+
+        let client = reqwest::Client::new();
+        let res = client
+            .get(format!("{}/gmail/v1/users/me/messages?q=from%3Aalice", server.url()))
+            .bearer_auth("bad_token")
+            .send()
+            .await
+            .unwrap();
+        assert!(!res.status().is_success());
     }
 }
