@@ -14,7 +14,7 @@ use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::core::{AppConfig, db::async_db};
 use crate::jobs::{
-    DailyAgenda, GenerateSessionTitles, ResearchMeetingAttendees, spawn_periodic_job,
+    DailyAgenda, GenerateSessionTitles, GitSync, ResearchMeetingAttendees, spawn_periodic_job,
 };
 
 async fn set_static_cache_control(request: Request, next: middleware::Next) -> Response {
@@ -88,6 +88,7 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
     // in a loop.
     spawn_periodic_job(config.clone(), db.clone(), DailyAgenda);
     spawn_periodic_job(config.clone(), db.clone(), ResearchMeetingAttendees);
+    spawn_periodic_job(config.clone(), db.clone(), GitSync);
     spawn_periodic_job(config, db, GenerateSessionTitles);
 
     axum::serve(listener, app).await.unwrap();

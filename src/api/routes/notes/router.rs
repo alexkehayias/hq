@@ -57,6 +57,14 @@ async fn note_search(
 }
 
 // Index notes endpoint
+//
+// Non-destructively pulls (rebase local commits on top of origin), then reindexes
+// only the files that changed as a result of the pull. This replaces the old
+// destructive `git reset --hard origin/main` behavior that clobbered local changes.
+//
+// The GitSync periodic job also does this every 5 min, so this endpoint is mainly
+// for manual triggering (e.g., after the user knows a remote change happened and
+// wants to refresh the index immediately).
 async fn index_notes(
     State(state): State<SharedState>,
 ) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
@@ -70,16 +78,43 @@ async fn index_notes(
         )
     };
     tokio::spawn(async move {
-        crate::core::git::maybe_pull_and_reset_repo(&deploy_key_path, &notes_path).await;
-        let diff = crate::core::git::diff_last_commit_files(&deploy_key_path, &notes_path).await;
-        let paths: Vec<std::path::PathBuf> = diff
-            .iter()
-            .map(|f| std::path::PathBuf::from(format!("{}/{}", &notes_path, f)))
-            .collect();
-        let filter_paths = if paths.is_empty() { None } else { Some(paths) };
-        index_all(&a_db, &index_path, &notes_path, true, true, filter_paths)
-            .await
-            .unwrap();
+        // Capture HEAD before pull so we can identify files that changed
+        let pre_head = match crate::core::git::head_sha(&notes_path).await {
+            Ok(sha) => sha,
+            Err(e) => {
+                tracing::error!("index_notes: head_sha failed (is notes_path a git repo?): {e}");
+                return;
+            }
+        };
+
+        // Non-destructive pull (rebase local commits on top of origin)
+        if let Err(e) = crate::core::git::maybe_pull_rebase(&deploy_key_path, &notes_path).await {
+            tracing::error!("index_notes: pull/rebase failed: {e}");
+        }
+
+        // Reindex only files that changed as a result of the rebase
+        match crate::core::git::changed_files_between(&notes_path, &pre_head, "HEAD").await {
+            Ok(changed) if !changed.is_empty() => {
+                let paths: Vec<std::path::PathBuf> = changed
+                    .iter()
+                    .map(|f| std::path::PathBuf::from(format!("{}/{}", &notes_path, f)))
+                    .collect();
+                if let Err(e) = index_all(
+                    &a_db,
+                    &index_path,
+                    &notes_path,
+                    true,
+                    true,
+                    Some(paths),
+                )
+                .await
+                {
+                    tracing::error!("index_notes: reindex failed: {e}");
+                }
+            }
+            Ok(_) => tracing::debug!("index_notes: no files changed after rebase"),
+            Err(e) => tracing::error!("index_notes: changed_files_between failed: {e}"),
+        }
     });
     Ok(axum::Json(json!({ "success": true })))
 }
