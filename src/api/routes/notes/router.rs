@@ -127,7 +127,7 @@ async fn update_note(
     }
 
     let file_path = std::path::PathBuf::from(&notes_path).join(&note.file_name);
-    core_org::update_task_in_file(&file_path, &id, None, None, Some(&body.status)).await?;
+    core_org::update_task_in_file(&file_path, &id, None, None, Some(&body.status), &[], &[]).await?;
 
     // Re-index only the file that was modified
     index_all(&db, &index_path, &notes_path, true, true, Some(vec![file_path])).await?;

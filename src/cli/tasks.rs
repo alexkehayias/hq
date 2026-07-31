@@ -10,6 +10,16 @@ use crate::cli::projects;
 use crate::core::orgmode;
 use crate::org;
 
+/// Parse a comma-separated list of tags (e.g. `"urgent, errands"`) into
+/// trimmed, non-empty tag strings. Empty entries (`a,,b`) and surrounding
+/// whitespace are stripped.
+pub(crate) fn parse_tag_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 /// Create a new project file on disk and register it in the database.
 async fn create_project_file(db: &Connection, notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
@@ -123,14 +133,26 @@ pub async fn run_update(
     body: Option<&str>,
     status: Option<&str>,
     project: Option<&str>,
+    add_tags: &[String],
+    remove_tags: &[String],
 ) -> Result<()> {
     if let Some(project_ref) = project {
         let path = projects::db::find_project_file(db, notes_path, project_ref).await?
             .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
         let filename = path.file_name().and_then(|s| s.to_str()).unwrap();
-        orgmode::update_task(notes_path, id, Some(filename), title, body, status).await?;
+        orgmode::update_task(
+            notes_path,
+            id,
+            Some(filename),
+            title,
+            body,
+            status,
+            add_tags,
+            remove_tags,
+        )
+        .await?;
     } else {
-        orgmode::update_task(notes_path, id, None, title, body, status).await?;
+        orgmode::update_task(notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
     }
     println!("Task {id} updated");
     Ok(())
@@ -492,7 +514,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)            .await
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -512,7 +534,7 @@ mod tests {
         let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
         let id = content[id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, Some("New title"), Some("New body"), None, None)            .await
+        run_update(&db, &notes, &id, Some("New title"), Some("New body"), None, None, &[], &[])            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -539,7 +561,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)            .await
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -557,7 +579,7 @@ mod tests {
     async fn test_update_nonexistent_task() {
         let (db, _dir, notes) = test_env().await;
 
-        let result = run_update(&db, &notes, "nonexistent-uuid", None, None, Some("DONE"), None).await;
+        let result = run_update(&db, &notes, "nonexistent-uuid", None, None, Some("DONE"), None, &[], &[]).await;
         assert!(result.is_err());
     }
 
@@ -583,7 +605,7 @@ mod tests {
         let (db, _dir, notes) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes).await;
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
@@ -607,7 +629,7 @@ mod tests {
         let (db, _dir, notes) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes).await;
 
-        run_update(&db, &notes, &id, None, None, Some("CANCELED"), None)
+        run_update(&db, &notes, &id, None, None, Some("CANCELED"), None, &[], &[])
             .await
             .unwrap();
 
@@ -627,7 +649,7 @@ mod tests {
         let (db, _dir, notes) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes).await;
 
-        run_update(&db, &notes, &id, None, None, Some("SOMEDAY"), None)
+        run_update(&db, &notes, &id, None, None, Some("SOMEDAY"), None, &[], &[])
             .await
             .unwrap();
 
@@ -648,14 +670,14 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes).await;
 
         // Close the task first
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
         let closed_content = fs::read_to_string(&path).unwrap();
         assert!(closed_content.contains("CLOSED:"));
 
         // Reopen it
-        run_update(&db, &notes, &id, None, None, Some("NEXT"), None)
+        run_update(&db, &notes, &id, None, None, Some("NEXT"), None, &[], &[])
             .await
             .unwrap();
 
@@ -690,12 +712,12 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes).await;
 
         // Close the task to populate CLOSED + LOGBOOK
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
         // Now update the title only, status unchanged (status=None means preserve)
-        run_update(&db, &notes, &id, Some("New title"), None, None, None)
+        run_update(&db, &notes, &id, Some("New title"), None, None, None, &[], &[])
             .await
             .unwrap();
 
@@ -729,12 +751,12 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes).await;
 
         // Close the task
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
         // "Update" to the same status (DONE -> DONE)
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None)
+        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
@@ -1188,7 +1210,7 @@ Investigate the redirect
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
 
         // Update using --project with filename
-        run_update(&db, &notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename))            .await
+        run_update(&db, &notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[])            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1219,7 +1241,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some(&project_id))            .await
+        run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some(&project_id), &[], &[])            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1258,7 +1280,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Updating scoped to a project where the task doesn't exist should error
-        let result = run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some("my-project")).await;
+        let result = run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some("my-project"), &[], &[]).await;
         assert!(result.is_err(), "should error when task not found in scoped project file");
     }
 
@@ -1266,7 +1288,7 @@ Investigate the redirect
     async fn test_update_project_task_nonexistent_project() {
         let (db, _dir, notes) = test_env().await;
 
-        let result = run_update(&db, &notes, "some-id", None, None, Some("DONE"), Some("nonexistent")).await;
+        let result = run_update(&db, &notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), &[], &[]).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 
@@ -1510,5 +1532,384 @@ Need to check the middleware changes.
         assert!(project_content.contains("Review PR"));
         assert!(project_content.contains("middleware changes"));
         assert_eq!(headline_count(&project_path), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tag operations (run_update with add_tags / remove_tags)
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a TODO task and return (path, id) so tag tests can drive
+    /// subsequent updates without re-deriving the ID. Mirrors `create_todo_task` above
+    /// but kept separate so existing tests don't depend on a helper defined further down.
+    async fn create_task_for_tags(db: &Connection, notes: &str) -> (PathBuf, String) {
+        run_create(db, notes, "Tag test task", None, None, "TODO")
+            .await
+            .unwrap();
+        let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        (path, id)
+    }
+
+    /// Read a task file and return the headline's tags as a Vec<String> (in order).
+    fn read_headline_tags(path: &std::path::Path) -> Vec<String> {
+        let content = fs::read_to_string(path).unwrap();
+        let config = parsing_config();
+        let org = config.parse(&content);
+        org.document()
+            .headlines()
+            .next()
+            .expect("task file should have at least one headline")
+            .tags()
+            .map(|t| t.to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_update_add_tag_to_task_without_tags() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Task starts with no tags
+        assert!(read_headline_tags(&path).is_empty());
+
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert_eq!(tags, vec!["urgent".to_string()], "added tag should appear, got: {tags:?}");
+    }
+
+    #[tokio::test]
+    async fn test_update_remove_tag() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Add a tag first
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Then remove it
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["urgent".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert!(tags.is_empty(), "after removing the only tag, headline should have no tags, got: {tags:?}");
+    }
+
+    #[tokio::test]
+    async fn test_update_add_and_remove_in_one_call() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Start with tags a and b
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["a".to_string(), "b".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // In one call: add c, remove a — result should be b and c.
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["c".to_string()],
+            &["a".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert_eq!(tags, vec!["b".to_string(), "c".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_update_remove_nonexistent_tag_silent() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Add one tag so we have something to verify
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Removing a tag that isn't set should be a silent no-op (no error).
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["nonexistent".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert_eq!(tags, vec!["urgent".to_string()], "nonexistent removal should leave existing tags unchanged, got: {tags:?}");
+    }
+
+    #[tokio::test]
+    async fn test_update_preserves_tags_when_updating_title() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Add a tag
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Update the title only (no add/remove tag flags) — existing tags should be preserved.
+        run_update(
+            &db,
+            &notes,
+            &id,
+            Some("Renamed task"),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Title should be updated AND tags should still be present.
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Renamed task"), "title should be updated");
+        let tags = read_headline_tags(&path);
+        assert_eq!(
+            tags,
+            vec!["urgent".to_string()],
+            "title-only update should preserve existing tags, got: {tags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_add_duplicate_tag_dedup() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Add the same tag that's already present — should dedupe to one.
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        // Add the same tag again — should NOT result in two "urgent" entries.
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert_eq!(tags, vec!["urgent".to_string()], "duplicate add should be deduped to a single entry, got: {tags:?}");
+    }
+
+    #[tokio::test]
+    async fn test_update_add_tag_with_spaces_errors() {
+        let (db, _dir, notes) = test_env().await;
+        let (_path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Adding a tag with spaces should error (validation runs in compute_new_tags).
+        let result = run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["ur gent".to_string()],
+            &[],
+        )
+        .await;
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("spaces"),
+            "error should mention spaces, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_add_tag_with_special_chars_errors() {
+        let (db, _dir, notes) = test_env().await;
+        let (_path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Adding a tag with special chars should error.
+        let result = run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent!".to_string()],
+            &[],
+        )
+        .await;
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("special character"),
+            "error should mention special character, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_add_tag_uppercase_auto_lowercased() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Uppercase tags should be auto-lowercased (not rejected).
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["URGENT".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert_eq!(tags, vec!["urgent".to_string()], "uppercase should be auto-lowercased, got: {tags:?}");
+    }
+
+    #[tokio::test]
+    async fn test_update_add_tag_with_underscore_allowed() {
+        let (db, _dir, notes) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes).await;
+
+        // Underscores are allowed (per user's custom choice).
+        run_update(
+            &db,
+            &notes,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["work_project".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let tags = read_headline_tags(&path);
+        assert_eq!(tags, vec!["work_project".to_string()], "underscores should be allowed, got: {tags:?}");
+    }
+
+    #[test]
+    fn test_parse_tag_list_basic() {
+        assert_eq!(parse_tag_list("urgent,errands"), vec!["urgent", "errands"]);
+    }
+
+    #[test]
+    fn test_parse_tag_list_trims_whitespace() {
+        assert_eq!(
+            parse_tag_list(" urgent , errands "),
+            vec!["urgent", "errands"],
+            "each entry should be trimmed of surrounding whitespace"
+        );
+    }
+
+    #[test]
+    fn test_parse_tag_list_drops_empty_entries() {
+        assert_eq!(parse_tag_list("a,,b"), vec!["a", "b"]);
+        assert_eq!(parse_tag_list(""), Vec::<String>::new());
+        assert_eq!(parse_tag_list(",,,"), Vec::<String>::new());
     }
 }
