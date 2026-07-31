@@ -162,6 +162,12 @@ enum TasksCommand {
         /// Project ID or filename (skips slug-based lookup)
         #[arg(long)]
         project: Option<String>,
+        /// Tags to add (comma-separated, e.g. "urgent,errands")
+        #[arg(long)]
+        add_tag: Option<String>,
+        /// Tags to remove (comma-separated, e.g. "low-priority")
+        #[arg(long)]
+        remove_tag: Option<String>,
     },
     /// Delete a task by UUID
     Delete {
@@ -302,7 +308,17 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 body,
                 status,
                 project,
+                add_tag,
+                remove_tag,
             } => {
+                let add_tags = add_tag
+                    .as_deref()
+                    .map(tasks::parse_tag_list)
+                    .unwrap_or_default();
+                let remove_tags = remove_tag
+                    .as_deref()
+                    .map(tasks::parse_tag_list)
+                    .unwrap_or_default();
                 tasks::run_update(
                     &task_db,
                     &notes_path,
@@ -311,6 +327,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     body.as_deref(),
                     status.as_deref(),
                     project.as_deref(),
+                    &add_tags,
+                    &remove_tags,
                 )
                 .await?;
             }

@@ -84,6 +84,10 @@ pub struct Headline {
     /// like `- State "DONE"       from "TODO"       [TS]`). The drawer is
     /// emitted after the property drawer and before the body.
     logbook: Vec<String>,
+    /// Headline-level tags rendered at the end of the title line in org-mode
+    /// syntax (e.g. `* TODO Buy groceries :errands:urgent:`). Each entry is one
+    /// tag name (no surrounding colons); — the builder wraps them with `:...:` when rendering.
+    tags: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +167,7 @@ pub struct HeadlineBuilder {
     body: Option<String>,
     closed: Option<String>,
     logbook: Vec<String>,
+    tags: Vec<String>,
 }
 
 impl HeadlineBuilder {
@@ -216,6 +221,17 @@ impl HeadlineBuilder {
         self
     }
 
+    /// Set the headline-level tags (e.g. `["errands", "urgent"]`).
+    ///
+    /// Each entry is one tag name without surrounding colons. When rendered, the
+    /// builder emits ` :tag1:tag2:` at the end of the title line (single
+    /// leading space, colons separating tags, trailing colons). Replaces any
+    /// previously-set tags. Empty Vec means no tag suffix is emitted.
+    pub fn tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
     /// Consume the builder and produce a `Headline`.
     pub fn build(self) -> Headline {
         Headline {
@@ -226,6 +242,7 @@ impl HeadlineBuilder {
             body: self.body.filter(|b| !b.is_empty()),
             closed: self.closed,
             logbook: self.logbook,
+            tags: self.tags,
         }
     }
 }
@@ -253,7 +270,13 @@ impl fmt::Display for Headline {
         if let Some(status) = &self.status {
             write!(f, " {status}")?;
         }
-        writeln!(f, " {}", self.title)?;
+        // Title (and optional tag suffix on the same line)
+        if self.tags.is_empty() {
+            writeln!(f, " {}", self.title)?;
+        } else {
+            let joined = self.tags.join(":");
+            writeln!(f, " {} :{}:", self.title, joined)?;
+        }
 
         // CLOSED: planning line (between headline title and property drawer)
         if let Some(closed) = &self.closed {

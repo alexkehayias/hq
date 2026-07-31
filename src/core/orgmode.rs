@@ -104,6 +104,9 @@ pub struct TaskLocation {
     /// Existing state-change lines from the headline's `:LOGBOOK:` drawer,
     /// preserved verbatim. Empty if no LOGBOOK drawer is present.
     pub current_logbook: Vec<String>,
+    /// Existing headline-level tags parsed from the headline (e.g. `["errands", "urgent"]`
+    /// for a headline written as `* TODO Buy groceries :errands:urgent:`).
+    pub current_tags: Vec<String>,
 }
 
 pub fn build_headline(id: &str, title: &str, body: &str, status: &str, level: usize) -> String {
@@ -132,6 +135,7 @@ fn build_updated_headline(
     level: usize,
     closed: Option<&str>,
     logbook: &[String],
+    tags: &[String],
 ) -> String {
     let mut h = org::Headline::builder()
         .level(level)
@@ -147,7 +151,83 @@ fn build_updated_headline(
     for entry in logbook {
         h = h.logbook_entry(entry);
     }
+    if !tags.is_empty() {
+        h = h.tags(tags.to_vec());
+    }
     h.build().to_string()
+}
+
+/// Validate and normalize a tag being added to an org-mode headline.
+///
+/// Tags must be lowercase, with no spaces or special characters. Allowed
+/// characters: `a-z`, `0-9`, hyphens (`-`), and underscores (`_`). The input
+/// is lowercased before validation so `Urgent` becomes `urgent`. Tags with
+/// spaces or other special characters (e.g. `!`, `@`, `.`) are rejected with
+/// a clear error message.
+///
+/// Existing tags read from files are NOT passed through this function — only
+/// tags being newly added via `--add-tag` (or programmatic equivalents) are
+/// validated. This lets users clean up messy existing data without being blocked.
+pub(crate) fn validate_tag(tag: &str) -> Result<String> {
+    let normalized = tag.trim().to_lowercase();
+    if normalized.is_empty() {
+        anyhow::bail!("tag cannot be empty");
+    }
+    for c in normalized.chars() {
+        if c.is_ascii_whitespace() {
+            anyhow::bail!(
+                "tag '{tag}' contains spaces; tags must be lowercase with no spaces (allowed: a-z, 0-9, hyphens, underscores)"
+            );
+        }
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' && c != '_' {
+            anyhow::bail!(
+                "tag '{tag}' contains special character '{}'; tags must be lowercase with no spaces or special characters (allowed: a-z, 0-9, hyphens, underscores)",
+                c
+            );
+        }
+    }
+    Ok(normalized)
+}
+
+/// Compute the new tag list for a headline update.
+///
+/// Starts from `current_tags` (lowercased for output consistency), appends any
+/// `add_tags` that aren't already present (deduped, first-seen order preserved),
+/// then removes any in `remove_tags`. Removing a tag not currently set is a
+/// silent no-op (idempotent).
+///
+/// `add_tags` are validated via `validate_tag` — tags with spaces or special
+/// characters cause an error. `current_tags` and `remove_tags` are lowercased
+/// but NOT validated, so existing messy data can be preserved/removed without
+/// blocking updates.
+pub(crate) fn compute_new_tags(
+    current: &[String],
+    add: &[String],
+    remove: &[String],
+) -> Result<Vec<String>> {
+    // Lowercase existing tags (preserve spaces/special chars if present —
+    // we don't validate existing data, only normalize case for output consistency).
+    let mut result: Vec<String> = current.iter().map(|t| t.to_lowercase()).collect();
+
+    // Validate and lowercase add tags (strict: no spaces or special chars).
+    let validated_add: Vec<String> = add
+        .iter()
+        .map(|t| validate_tag(t))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Add new tags (deduped, order-preserving)
+    for tag in &validated_add {
+        if !result.iter().any(|t| t == tag) {
+            result.push(tag.clone());
+        }
+    }
+
+    // Lowercase remove tags for case-insensitive matching against current tags
+    let remove_lower: std::collections::HashSet<String> =
+        remove.iter().map(|t| t.to_lowercase()).collect();
+    result.retain(|t| !remove_lower.contains(t));
+
+    Ok(result)
 }
 
 /// Given a task's current state (`location`) and the new status being applied,
@@ -242,6 +322,10 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
                 let current_body = body_from_headline(&headline);
                 let current_closed = extract_closed(&headline);
                 let current_logbook = extract_logbook(&headline);
+                let current_tags = headline
+                    .tags()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>();
 
                 return Ok(TaskLocation {
                     path: path.clone(),
@@ -253,6 +337,7 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
                     current_level,
                     current_closed,
                     current_logbook,
+                    current_tags,
                 });
             }
         }
@@ -297,6 +382,10 @@ pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                     let current_body = body_from_headline(&headline);
                     let current_closed = extract_closed(&headline);
                     let current_logbook = extract_logbook(&headline);
+                    let current_tags = headline
+                        .tags()
+                        .map(|t| t.to_string())
+                        .collect::<Vec<String>>();
 
                     return Ok(TaskLocation {
                         path,
@@ -308,6 +397,7 @@ pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
                         current_level,
                         current_closed,
                         current_logbook,
+                        current_tags,
                     });
                 }
             }
@@ -395,12 +485,18 @@ pub fn body_from_headline(headline: &orgize::ast::Headline) -> String {
 /// `:LOGBOOK:` drawer. When transitioning into DONE or CANCELED, a `CLOSED:`
 /// planning timestamp is set; when reopening (DONE/CANCELED → non-closed),
 /// `CLOSED:` is cleared. Existing logbook entries are preserved verbatim.
+///
+/// Tag updates (`add_tags` / `remove_tags`) are applied to the headline's
+/// existing tag list (deduped, order-preserving) and round-tripped through the
+/// rebuild. Removing a tag not currently set is a silent no-op.
 pub async fn update_task_in_file(
     file_path: &PathBuf,
     id: &str,
     title: Option<&str>,
     body: Option<&str>,
     status: Option<&str>,
+    add_tags: &[String],
+    remove_tags: &[String],
 ) -> Result<()> {
     let location = find_task_in_file(file_path, id).await?;
     let new_title = title.unwrap_or(&location.current_title);
@@ -410,6 +506,7 @@ pub async fn update_task_in_file(
 
     let (new_closed, new_logbook) =
         compute_state_transition(&location, new_status);
+    let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
 
     let new_headline = build_updated_headline(
         id,
@@ -419,6 +516,7 @@ pub async fn update_task_in_file(
         location.current_level,
         new_closed.as_deref(),
         &new_logbook,
+        &new_tags,
     );
     let new_content = format!(
         "{before}{new_headline}{after}",
@@ -442,6 +540,9 @@ pub async fn update_task_in_file(
 /// `:LOGBOOK:` drawer. When transitioning into DONE or CANCELED, a `CLOSED:`
 /// planning timestamp is set; when reopening (DONE/CANCELED → non-closed),
 /// `CLOSED:` is cleared. Existing logbook entries are preserved verbatim.
+///
+/// Tag updates (`add_tags` / `remove_tags`) apply to the headline's existing tag
+/// list (deduped, order-preserving). Removing a tag not currently set is silent.
 pub async fn update_task(
     notes_path: &str,
     id: &str,
@@ -449,6 +550,8 @@ pub async fn update_task(
     title: Option<&str>,
     body: Option<&str>,
     status: Option<&str>,
+    add_tags: &[String],
+    remove_tags: &[String],
 ) -> Result<()> {
     let location = if let Some(fname) = file_name {
         let path = std::path::Path::new(notes_path).join(fname);
@@ -464,6 +567,7 @@ pub async fn update_task(
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
     let (new_closed, new_logbook) = compute_state_transition(&location, new_status);
+    let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
 
     let new_headline = build_updated_headline(
         id,
@@ -473,6 +577,7 @@ pub async fn update_task(
         location.current_level,
         new_closed.as_deref(),
         &new_logbook,
+        &new_tags,
     );
     let new_content = format!(
         "{before}{new_headline}{after}",
@@ -510,7 +615,6 @@ pub fn build_document(id: &str, title: &str, body: &str, status: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orgize::rowan::ast::AstNode;
 
     /// Parse an org-mode document string and return the first headline.
     fn first_headline(content: &str) -> orgize::ast::Headline {
@@ -666,6 +770,200 @@ mod tests {
         let entries = extract_logbook(&h);
         assert_eq!(entries.len(), 1);
         assert!(entries[0].contains("\"DONE\""));
+    }
+
+    // -----------------------------------------------------------------------
+    // Headline-level tags: extraction and compute_new_tags
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_tags_present() {
+        let h = first_headline("* TODO Buy groceries :errands:urgent:\n:PROPERTIES:\n:END:");
+        let tags: Vec<String> = h.tags().map(|t| t.to_string()).collect();
+        assert_eq!(tags, vec!["errands".to_string(), "urgent".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_tags_empty() {
+        let h = first_headline("* TODO Buy groceries\n:PROPERTIES:\n:END:");
+        let tags: Vec<String> = h.tags().map(|t| t.to_string()).collect();
+        assert!(tags.is_empty(), "headline without tags should yield empty Vec, got: {tags:?}");
+    }
+
+    #[test]
+    fn test_compute_new_tags_add_appends() {
+        let current = vec!["existing".to_string()];
+        let add = vec!["urgent".to_string()];
+        let result = compute_new_tags(&current, &add, &[]).unwrap();
+        assert_eq!(result, vec!["existing", "urgent"]);
+    }
+
+    #[test]
+    fn test_compute_new_tags_add_dedupes_existing() {
+        let current = vec!["urgent".to_string()];
+        let add = vec!["urgent".to_string()];
+        let result = compute_new_tags(&current, &add, &[]).unwrap();
+        assert_eq!(result, vec!["urgent"], "duplicate add should not appear twice");
+    }
+
+    #[test]
+    fn test_compute_new_tags_add_dedupes_within_add() {
+        let current: Vec<String> = vec![];
+        let add = vec!["urgent".to_string(), "urgent".to_string()];
+        let result = compute_new_tags(&current, &add, &[]).unwrap();
+        assert_eq!(result, vec!["urgent"], "duplicates within add should be deduped");
+    }
+
+    #[test]
+    fn test_compute_new_tags_remove_existing() {
+        let current = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let result = compute_new_tags(&current, &[], &["b".to_string()]).unwrap();
+        assert_eq!(result, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn test_compute_new_tags_remove_nonexistent_silent() {
+        let current = vec!["a".to_string()];
+        let result = compute_new_tags(&current, &[], &["nonexistent".to_string()]).unwrap();
+        assert_eq!(result, vec!["a"], "removing a tag not present should be a silent no-op");
+    }
+
+    #[test]
+    fn test_compute_new_tags_combined_add_and_remove() {
+        let current = vec!["a".to_string(), "b".to_string()];
+        let add = vec!["c".to_string()];
+        let remove = vec!["a".to_string()];
+        let result = compute_new_tags(&current, &add, &remove).unwrap();
+        assert_eq!(result, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn test_compute_new_tags_remove_all() {
+        let current = vec!["a".to_string(), "b".to_string()];
+        let remove = vec!["a".to_string(), "b".to_string()];
+        let result = compute_new_tags(&current, &[], &remove).unwrap();
+        assert!(result.is_empty(), "removing all tags should yield empty Vec, got: {result:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tag validation (validate_tag + compute_new_tags error cases)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_tag_lowercases() {
+        assert_eq!(validate_tag("Urgent").unwrap(), "urgent");
+        assert_eq!(validate_tag("URGENT").unwrap(), "urgent");
+        assert_eq!(validate_tag("UrGeNt").unwrap(), "urgent");
+    }
+
+    #[test]
+    fn test_validate_tag_allows_hyphens_and_underscores() {
+        assert_eq!(validate_tag("low-priority").unwrap(), "low-priority");
+        assert_eq!(validate_tag("work_project").unwrap(), "work_project");
+        assert_eq!(validate_tag("tag-1_v2").unwrap(), "tag-1_v2");
+    }
+
+    #[test]
+    fn test_validate_tag_rejects_spaces() {
+        let err = validate_tag("ur gent").unwrap_err();
+        assert!(
+            err.to_string().contains("spaces"),
+            "error should mention spaces, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_tag_rejects_special_chars() {
+        for bad in &["urgent!", "tag@host", "a.b.c", "tag#1", "u/r"] {
+            let err = validate_tag(bad).unwrap_err();
+            assert!(
+                err.to_string().contains("special character"),
+                "error for '{bad}' should mention special character, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_tag_rejects_empty() {
+        let err = validate_tag("").unwrap_err();
+        assert!(err.to_string().contains("empty"), "error should mention empty, got: {err}");
+    }
+
+    #[test]
+    fn test_validate_tag_trims_whitespace() {
+        // Leading/trailing whitespace is trimmed; the tag itself is valid.
+        assert_eq!(validate_tag("  urgent  ").unwrap(), "urgent");
+    }
+
+    #[test]
+    fn test_compute_new_tags_add_invalid_tag_errors() {
+        // Add tags with spaces/special chars should error.
+        let err = compute_new_tags(&[], &["ur gent".to_string()], &[]).unwrap_err();
+        assert!(err.to_string().contains("spaces"), "should reject spaces, got: {err}");
+
+        let err = compute_new_tags(&[], &["urgent!".to_string()], &[]).unwrap_err();
+        assert!(err.to_string().contains("special character"), "should reject special chars, got: {err}");
+    }
+
+    #[test]
+    fn test_compute_new_tags_preserves_invalid_current_tags() {
+        // Existing tags with spaces (messy data) should be preserved, not error.
+        // Only normalize case — don't block the update.
+        let current = vec!["UR GENT".to_string()];
+        let result = compute_new_tags(&current, &[], &[]).unwrap();
+        assert_eq!(result, vec!["ur gent".to_string()],
+            "existing tags should be lowercased but preserved (spaces kept), got: {result:?}");
+    }
+
+    #[test]
+    fn test_compute_new_tags_removes_invalid_current_tag_case_insensitive() {
+        // If existing tag has spaces, user can still remove it by specifying
+        // the same (lowercased) value.
+        let current = vec!["ur gent".to_string()];
+        let result = compute_new_tags(&current, &[], &["UR GENT".to_string()]).unwrap();
+        assert!(result.is_empty(), "should remove the tag case-insensitively, got: {result:?}");
+    }
+
+    /// Build a Headline with tags via the builder, render it to a string,
+    /// parse the string back, and confirm `tags()` returns the same set in order.
+    #[test]
+    fn test_headline_tags_round_trip() {
+        let h = org::Headline::builder()
+            .level(1)
+            .status("TODO")
+            .title("Buy groceries")
+            .property("ID", "task-1")
+            .tags(vec!["errands".to_string(), "urgent".to_string()])
+            .build();
+        let rendered = h.to_string();
+
+        // Rendered form should contain the trailing tag suffix on the title line.
+        assert!(
+            rendered.contains("Buy groceries :errands:urgent:"),
+            "rendered headline should include tag suffix, got:\n{rendered}"
+        );
+
+        // Parse back via orgize and verify tags round-trip.
+        let config = org::todo_keywords_config();
+        let org = config.parse(&rendered);
+        let parsed = org.document().headlines().next().expect("should parse one headline");
+        let tags: Vec<String> = parsed.tags().map(|t| t.to_string()).collect();
+        assert_eq!(tags, vec!["errands".to_string(), "urgent".to_string()]);
+    }
+
+    #[test]
+    fn test_headline_no_tags_renders_without_suffix() {
+        let h = org::Headline::builder()
+            .level(1)
+            .status("TODO")
+            .title("Plain task")
+            .property("ID", "task-2")
+            .build();
+        let rendered = h.to_string();
+        assert!(
+            !rendered.contains(" :"),
+            "headline without tags should not emit a trailing tag suffix, got:\n{rendered}"
+        );
     }
 }
 
