@@ -44,7 +44,7 @@ class HqEmptyState extends HTMLElement {
       );
     }
     if (namedAction.length) {
-      parts.push('<div class="mt-4">' + namedAction[0].outerHTML + '</div>');
+      parts.push(`<div class="mt-4">${namedAction[0].outerHTML}</div>`);
     }
     parts.push('</div>');
     this.innerHTML = parts.join('');

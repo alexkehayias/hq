@@ -58,10 +58,10 @@ function serialize(tag, props, ...kids) {
   let s = `<${tag}`;
   if (props) for (const k in props) s += attr(k, props[k]);
   const joined = kids.map(child).join('');
-  if (VOID.has(tag)) return new SafeHtml(s + '>');
+  if (VOID.has(tag)) return new SafeHtml(`${s}>`);
   s += '>';
   s += joined;
-  return new SafeHtml(s + `</${tag}>`);
+  return new SafeHtml(`${s}</${tag}>`);
 }
 
 export const html = htm.bind(serialize);
