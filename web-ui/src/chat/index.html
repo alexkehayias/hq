@@ -13,6 +13,12 @@
         content="#000000">
   <link href="/output.css" rel="stylesheet">
   <title>Chat</title>
+  <script>
+    const t = localStorage.getItem('hq-theme');
+    if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    }
+  </script>
 </head>
 <body style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
   <div style="height: 100dvh;" class="bg-white dark:bg-black mx-auto flex flex-col items-center">

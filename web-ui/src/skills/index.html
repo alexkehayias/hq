@@ -9,6 +9,12 @@
     <link href="/output.css" rel="stylesheet">
     <link href="/vendor/codemirror/codemirror.min.css" rel="stylesheet">
     <link href="/vendor/codemirror/theme/dracula.min.css" rel="stylesheet" id="cm-theme">
+    <script>
+      const t = localStorage.getItem('hq-theme');
+      if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+    </script>
   </head>
   <body class="bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);">
     <!-- ===== List View (no ?name=) ===== -->
