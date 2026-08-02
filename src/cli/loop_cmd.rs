@@ -1,0 +1,131 @@
+//! Loop: subscribe to one or more channels and run an LLM chat on events.
+//!
+//! ## What it does
+//!
+//! `hq loop --channel <name> [--channel <other>]...` connects to one or more
+//! channel publishers (see [`crate::cli::channel`]), merges their event streams,
+//! and feeds each event into a single LLM chat conversation. The chat has
+//! access **only to the bash tool** (sandboxed to a fresh workspace per loop
+//! invocation) — not to the full tool set used by `hq chat`.
+//!
+//! ## Event format
+//!
+//! Each event is tagged with its source channel: `[channel-id] event`. The
+//! LLM sees all events in one conversation, so it has context across channels.
+//!
+//! ## Trust boundary
+//!
+//! Same as the channel publisher: any process owned by the same user can
+//! publish. The loop subscriber trusts events from channels it connects to —
+//! do not subscribe to untrusted publishers if the LLM's bash workspace must
+//! stay isolated.
+
+use anyhow::{anyhow, Result};
+use std::env;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::UnixStream;
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
+use crate::ai::tools::BashTool;
+use crate::cli::channel::{sigterm, socket_path};
+use crate::openai::{BoxedToolCall, Message, Role};
+
+/// Run the loop: subscribe to `channels`, feed events into an LLM chat.
+///
+/// One reader task per channel merges events into a single mpsc receiver. The
+/// main loop reads `(channel_id, event)` pairs and sends `"[channel-id] event"`
+/// as a user message to the chat. The LLM's response is printed to stdout.
+pub async fn run(channels: &[String], _vec_db_path: &str, prompt: Option<&str>) -> Result<()> {
+    if channels.is_empty() {
+        return Err(anyhow!("at least one --channel is required"));
+    }
+
+    // Merge event streams from all channels into one receiver.
+    let (event_tx, mut event_rx) = mpsc::channel::<(String, String)>(100);
+
+    for channel_id in channels {
+        let path = socket_path(channel_id)?;
+        let stream = UnixStream::connect(&path)
+            .await
+            .map_err(|_| anyhow!("channel '{}' not found — is the publisher running?", channel_id))?;
+        println!("Subscribed to channel '{}'", channel_id);
+
+        let ch_id = channel_id.clone();
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stream);
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                match reader.read_line(&mut buf).await {
+                    Ok(0) => return, // channel closed (publisher exited)
+                    Ok(_) => {
+                        let event = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
+                        if tx.send((ch_id.clone(), event)).await.is_err() {
+                            return; // main loop exited
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+    }
+    drop(event_tx); // close our sender so event_rx drains then returns None
+
+    // Set up chat with bash tool only (not the full 7-tool set from hq chat).
+    let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
+    let session_id = Uuid::new_v4().to_string();
+    let bash_tool = BashTool::new(&storage_path, &session_id);
+    let tools: Vec<BoxedToolCall> = vec![Box::new(bash_tool) as BoxedToolCall];
+
+    let api_hostname =
+        env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+    let api_key =
+        env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+    let model =
+        env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+
+    let default_prompt = "You are a helpful assistant. You receive events from one or more \
+         channels, each tagged as [channel-name] event. Respond to each \
+         event appropriately. You have access to a bash tool for running commands.";
+    let system_prompt = prompt.unwrap_or(default_prompt);
+
+    let mut chat = ChatBuilder::new(&api_hostname, &api_key, &model)
+        .transcript(vec![Message::new(Role::System, system_prompt)])
+        .tools(tools)
+        .middleware(vec![Box::new(InvisibleCharFilter)])
+        .build();
+
+    // Main loop: read merged events, send to chat, print responses.
+    // Ctrl-C or SIGTERM breaks out and exits cleanly.
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nShutting down...");
+                return Ok(());
+            }
+            _ = sigterm() => {
+                eprintln!("\nShutting down (SIGTERM)...");
+                return Ok(());
+            }
+            event = event_rx.recv() => {
+                let Some((channel_id, event)) = event else { break; };
+                let user_msg = format!("[{}] {}", channel_id, event);
+                match chat.next_msg(Message::new(Role::User, &user_msg)).await {
+                    Ok(resp) => {
+                        if let Some(msg) = resp.last() {
+                            if let Some(content) = &msg.content {
+                                println!("{}", content);
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("chat error: {}", e),
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

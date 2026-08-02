@@ -32,7 +32,7 @@ sqlite-vec = "0.1.3"
 tantivy = "0.26.1"
 text-splitter = { version = "0.32.0", features = ["tiktoken-rs"] }
 tiktoken-rs = "0.12.0"
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "process"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "process", "io-std", "net", "signal", "sync"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["trace", "cors", "fs"] }
 tracing = "0.1.44"
