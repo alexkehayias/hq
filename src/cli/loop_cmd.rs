@@ -40,12 +40,12 @@ use crate::openai::{BoxedToolCall, Message, Role};
 /// All config (storage path, LLM endpoint/key/model) is passed in by the
 /// caller (`mod.rs` run_dispatch); this module does not parse env vars.
 pub async fn run(
-    channels: &[String],
     storage_path: &str,
     api_hostname: &str,
     api_key: &str,
     model: &str,
-    prompt: Option<&str>,
+    channels: &[String],
+    system_prompt: Option<&str>,
 ) -> Result<()> {
     if channels.is_empty() {
         return Err(anyhow!("at least one --channel is required"));
@@ -55,7 +55,7 @@ pub async fn run(
     let (event_tx, mut event_rx) = mpsc::channel::<(String, String)>(100);
 
     for channel_id in channels {
-        let path = socket_path(channel_id, storage_path)?;
+        let path = socket_path(storage_path, channel_id)?;
         let stream = UnixStream::connect(&path)
             .await
             .map_err(|_| anyhow!("channel '{}' not found — is the publisher running?", channel_id))?;
@@ -91,7 +91,7 @@ pub async fn run(
     let default_prompt = "You are a helpful assistant. You receive events from one or more \
          channels, each tagged as [channel-name] event. Respond to each \
          event appropriately. You have access to a bash tool for running commands.";
-    let system_prompt = prompt.unwrap_or(default_prompt);
+    let system_prompt = system_prompt.unwrap_or(default_prompt);
 
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)
         .transcript(vec![Message::new(Role::System, system_prompt)])

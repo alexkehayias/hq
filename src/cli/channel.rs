@@ -57,7 +57,7 @@ pub fn validate_channel_id(id: &str) -> Result<()> {
 /// so there is no filesystem exposure and symlink attacks are impossible.
 ///
 /// On macOS/other Unix: filesystem path in `<storage_path>/channels/<id>.sock`.
-pub fn socket_path(id: &str, storage_path: &str) -> Result<PathBuf> {
+pub fn socket_path(storage_path: &str, id: &str) -> Result<PathBuf> {
     validate_channel_id(id)?;
 
     #[cfg(target_os = "linux")]
@@ -190,8 +190,8 @@ async fn bind_socket(path: &Path) -> Result<UnixListener> {
 /// Binds a Unix domain socket at `socket_path(id, storage_path)`, accepts
 /// subscriber connections (verifying peer UID matches our own), and broadcasts
 /// each stdin event to all active subscribers as a newline-delimited string.
-pub async fn run(id: &str, storage_path: &str) -> Result<()> {
-    let path = socket_path(id, storage_path)?;
+pub async fn run(storage_path: &str, id: &str) -> Result<()> {
+    let path = socket_path(storage_path, id)?;
 
     // Ensure channels dir exists with 0o700 perms (macOS filesystem paths).
     #[cfg(not(target_os = "linux"))]

@@ -282,7 +282,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             chat::run(&vec_db_path).await?;
         }
         Some(Command::Channel { id }) => {
-            channel::run(&id, &storage_path).await?;
+            channel::run(&storage_path, &id).await?;
         }
         Some(Command::Loop { channel, prompt }) => {
             let api_hostname =
@@ -291,7 +291,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
-            loop_cmd::run(&channel, &storage_path, &api_hostname, &api_key, &model, prompt.as_deref())
+            loop_cmd::run(&storage_path, &api_hostname, &api_key, &model, &channel, prompt.as_deref())
                 .await?;
         }
         Some(Command::Develop { name, no_init, no_examples, base_port }) => {
