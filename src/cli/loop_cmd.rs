@@ -21,7 +21,6 @@
 //! stay isolated.
 
 use anyhow::{anyhow, Result};
-use std::env;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -37,7 +36,17 @@ use crate::openai::{BoxedToolCall, Message, Role};
 /// One reader task per channel merges events into a single mpsc receiver. The
 /// main loop reads `(channel_id, event)` pairs and sends `"[channel-id] event"`
 /// as a user message to the chat. The LLM's response is printed to stdout.
-pub async fn run(channels: &[String], _vec_db_path: &str, prompt: Option<&str>) -> Result<()> {
+///
+/// All config (storage path, LLM endpoint/key/model) is passed in by the
+/// caller (`mod.rs` run_dispatch); this module does not parse env vars.
+pub async fn run(
+    channels: &[String],
+    storage_path: &str,
+    api_hostname: &str,
+    api_key: &str,
+    model: &str,
+    prompt: Option<&str>,
+) -> Result<()> {
     if channels.is_empty() {
         return Err(anyhow!("at least one --channel is required"));
     }
@@ -46,7 +55,7 @@ pub async fn run(channels: &[String], _vec_db_path: &str, prompt: Option<&str>) 
     let (event_tx, mut event_rx) = mpsc::channel::<(String, String)>(100);
 
     for channel_id in channels {
-        let path = socket_path(channel_id)?;
+        let path = socket_path(channel_id, storage_path)?;
         let stream = UnixStream::connect(&path)
             .await
             .map_err(|_| anyhow!("channel '{}' not found — is the publisher running?", channel_id))?;
@@ -75,24 +84,16 @@ pub async fn run(channels: &[String], _vec_db_path: &str, prompt: Option<&str>) 
     drop(event_tx); // close our sender so event_rx drains then returns None
 
     // Set up chat with bash tool only (not the full 7-tool set from hq chat).
-    let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
     let session_id = Uuid::new_v4().to_string();
-    let bash_tool = BashTool::new(&storage_path, &session_id);
+    let bash_tool = BashTool::new(storage_path, &session_id);
     let tools: Vec<BoxedToolCall> = vec![Box::new(bash_tool) as BoxedToolCall];
-
-    let api_hostname =
-        env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
-    let api_key =
-        env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
-    let model =
-        env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
 
     let default_prompt = "You are a helpful assistant. You receive events from one or more \
          channels, each tagged as [channel-name] event. Respond to each \
          event appropriately. You have access to a bash tool for running commands.";
     let system_prompt = prompt.unwrap_or(default_prompt);
 
-    let mut chat = ChatBuilder::new(&api_hostname, &api_key, &model)
+    let mut chat = ChatBuilder::new(api_hostname, api_key, model)
         .transcript(vec![Message::new(Role::System, system_prompt)])
         .tools(tools)
         .middleware(vec![Box::new(InvisibleCharFilter)])

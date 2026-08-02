@@ -282,10 +282,17 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             chat::run(&vec_db_path).await?;
         }
         Some(Command::Channel { id }) => {
-            channel::run(&id).await?;
+            channel::run(&id, &storage_path).await?;
         }
         Some(Command::Loop { channel, prompt }) => {
-            loop_cmd::run(&channel, &vec_db_path, prompt.as_deref()).await?;
+            let api_hostname =
+                env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let api_key =
+                env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let model =
+                env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            loop_cmd::run(&channel, &storage_path, &api_hostname, &api_key, &model, prompt.as_deref())
+                .await?;
         }
         Some(Command::Develop { name, no_init, no_examples, base_port }) => {
             develop::run(name, no_init, no_examples, base_port).await?;

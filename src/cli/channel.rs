@@ -24,7 +24,6 @@ use anyhow::{anyhow, bail, Result};
 use async_stream::stream;
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use std::env;
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
@@ -57,12 +56,13 @@ pub fn validate_channel_id(id: &str) -> Result<()> {
 /// On Linux: uses the abstract socket namespace — path bytes start with `\0`,
 /// so there is no filesystem exposure and symlink attacks are impossible.
 ///
-/// On macOS/other Unix: filesystem path in `$HQ_STORAGE_PATH/channels/<id>.sock`.
-pub fn socket_path(id: &str) -> Result<PathBuf> {
+/// On macOS/other Unix: filesystem path in `<storage_path>/channels/<id>.sock`.
+pub fn socket_path(id: &str, storage_path: &str) -> Result<PathBuf> {
     validate_channel_id(id)?;
 
     #[cfg(target_os = "linux")]
     {
+        let _ = storage_path; // Linux abstract sockets don't use the filesystem
         let mut bytes = Vec::new();
         bytes.push(0u8); // abstract socket marker
         bytes.extend_from_slice(b"hq-channel-");
@@ -72,8 +72,7 @@ pub fn socket_path(id: &str) -> Result<PathBuf> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let storage = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
-        Ok(PathBuf::from(storage).join("channels").join(format!("{}.sock", id)))
+        Ok(PathBuf::from(storage_path).join("channels").join(format!("{}.sock", id)))
     }
 }
 
@@ -188,17 +187,16 @@ async fn bind_socket(path: &Path) -> Result<UnixListener> {
 
 /// Run the channel publisher.
 ///
-/// Binds a Unix domain socket at `socket_path(id)`, accepts subscriber
-/// connections (verifying peer UID matches our own), and broadcasts each stdin
-/// event to all active subscribers as a newline-delimited string.
-pub async fn run(id: &str) -> Result<()> {
-    let path = socket_path(id)?;
+/// Binds a Unix domain socket at `socket_path(id, storage_path)`, accepts
+/// subscriber connections (verifying peer UID matches our own), and broadcasts
+/// each stdin event to all active subscribers as a newline-delimited string.
+pub async fn run(id: &str, storage_path: &str) -> Result<()> {
+    let path = socket_path(id, storage_path)?;
 
     // Ensure channels dir exists with 0o700 perms (macOS filesystem paths).
     #[cfg(not(target_os = "linux"))]
     {
-        let storage = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
-        let channels_dir = PathBuf::from(&storage).join("channels");
+        let channels_dir = PathBuf::from(storage_path).join("channels");
         tokio::fs::create_dir_all(&channels_dir).await?;
         let perms = std::fs::Permissions::from_mode(0o700);
         tokio::fs::set_permissions(&channels_dir, perms).await?;
