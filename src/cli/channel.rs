@@ -28,10 +28,9 @@ use futures::StreamExt;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use tokio::io::{stdin, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tracing::warn;
 
 /// Validate a channel ID. Must be non-empty and alphanumeric with dashes/underscores.
@@ -217,15 +216,15 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     let _guard = SocketGuard::new_file(path.clone());
 
-    // Subscriber registry: one mpsc::Sender per connected subscriber.
-    type Subs = Arc<Mutex<Vec<mpsc::Sender<String>>>>;
-    let subscribers: Subs = Arc::new(Mutex::new(Vec::new()));
+    // Broadcast channel: non-blocking send, no head-of-line blocking.
+    // Lagging subscribers miss events (RecvError::Lagged).
+    let (broadcast_tx, _) = broadcast::channel::<String>(128);
+    let accept_tx = broadcast_tx.clone();
 
     // Accept loop (spawned task). For each accepted connection:
     // - Verify peer UID matches our UID (reject if not).
-    // - Register a bounded mpsc::Sender; spawn a writer task that drains it
-    //   and writes `msg + \n` to the subscriber's stream.
-    let accept_subscribers = subscribers.clone();
+    // - Subscribe to the broadcast channel; spawn a writer task that reads
+    //   events and writes `<msg>\n` to the subscriber's stream.
     let our_uid = current_uid();
     let accept_handle = tokio::spawn(async move {
         loop {
@@ -234,18 +233,23 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
                     // Peer authentication: verify same UID.
                     match stream.peer_cred() {
                         Ok(creds) if creds.uid() == our_uid => {
-                            let (tx, mut rx) = mpsc::channel::<String>(128);
-                            accept_subscribers.lock().unwrap().push(tx.clone());
+                            let mut rx = accept_tx.subscribe();
                             let mut stream = stream;
                             tokio::spawn(async move {
-                                while let Some(msg) = rx.recv().await {
-                                    if stream.write_all(msg.as_bytes()).await.is_err()
-                                        || stream
-                                            .write_all(b"\n")
-                                            .await
-                                            .is_err()
-                                    {
-                                        break;
+                                loop {
+                                    match rx.recv().await {
+                                        Ok(msg) => {
+                                            let mut buf = msg.into_bytes();
+                                            buf.push(b'\n');
+                                            if stream.write_all(&buf).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                                            warn!("subscriber lagged by {} messages", n);
+                                            continue;
+                                        }
+                                        Err(broadcast::error::RecvError::Closed) => break,
                                     }
                                 }
                             });
@@ -254,21 +258,21 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
                         Err(e) => warn!("failed to read peer creds: {}", e),
                     }
                 }
-                Err(_) => break,
+                Err(e) => {
+                    warn!("accept error: {e}");
+                    continue;
+                }
             }
         }
     });
 
     // Read stdin, broadcast each event to all subscribers.
+    // broadcast::Sender::send() is non-blocking — a slow subscriber never
+    // blocks other subscribers.
     let mut events = event_stream();
     let main_loop = async {
         while let Some(event) = events.next().await {
-            // Clone senders out of the mutex so we don't hold it during
-            // `send().await` (which blocks on backpressure).
-            let subs: Vec<mpsc::Sender<String>> = subscribers.lock().unwrap().clone();
-            for tx in subs.iter() {
-                let _ = tx.send(event.clone()).await;
-            }
+            let _ = broadcast_tx.send(event);
         }
     };
 

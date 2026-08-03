@@ -83,7 +83,6 @@ enum Command {
     /// Stream events from stdin to subscribers over a Unix domain socket (pub/sub)
     Channel {
         /// Channel ID (alphanumeric with dashes/underscores; identifies the socket path)
-        #[arg(long)]
         id: String,
     },
     /// Subscribe to one or more channels and run an LLM chat on incoming events
