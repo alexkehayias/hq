@@ -4,6 +4,7 @@ use std::env;
 
 pub mod auth;
 pub mod bashkit;
+pub mod channel;
 pub mod chat;
 pub mod develop;
 pub mod eval;
@@ -11,6 +12,7 @@ pub mod example_data;
 pub mod index;
 pub mod init;
 pub mod job;
+pub mod loop_cmd;
 pub mod migrate;
 pub mod projects;
 pub mod query;
@@ -78,6 +80,20 @@ enum Command {
     },
     /// Start a chat bot session
     Chat {},
+    /// Stream events from stdin to subscribers over a Unix domain socket (pub/sub)
+    Channel {
+        /// Channel ID (alphanumeric with dashes/underscores; identifies the socket path)
+        id: String,
+    },
+    /// Subscribe to one or more channels and run an LLM chat on incoming events
+    Loop {
+        /// Channel ID to subscribe to (repeat for multiple channels)
+        #[arg(long, num_args = 1..)]
+        channel: Vec<String>,
+        /// System prompt for the LLM (defaults to a multi-channel event assistant)
+        #[arg(long)]
+        prompt: Option<String>,
+    },
     /// Set up a development worktree with herdr and Claude Code
     Develop {
         /// Branch/worktree name
@@ -263,6 +279,19 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         }
         Some(Command::Chat {}) => {
             chat::run(&vec_db_path).await?;
+        }
+        Some(Command::Channel { id }) => {
+            channel::run(&storage_path, &id).await?;
+        }
+        Some(Command::Loop { channel, prompt }) => {
+            let api_hostname =
+                env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let api_key =
+                env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let model =
+                env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            loop_cmd::run(&storage_path, &api_hostname, &api_key, &model, &channel, prompt.as_deref())
+                .await?;
         }
         Some(Command::Develop { name, no_init, no_examples, base_port }) => {
             develop::run(name, no_init, no_examples, base_port).await?;
