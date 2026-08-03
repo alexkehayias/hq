@@ -295,3 +295,120 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_validate_channel_id_valid() {
+        assert!(validate_channel_id("my-channel").is_ok());
+        assert!(validate_channel_id("channel_123").is_ok());
+        assert!(validate_channel_id("a").is_ok());
+        assert!(validate_channel_id("abc-123_def").is_ok());
+    }
+
+    #[test]
+    fn test_validate_channel_id_empty() {
+        let err = validate_channel_id("").unwrap_err().to_string();
+        assert!(err.contains("cannot be empty"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_channel_id_rejects_special_chars() {
+        let cases = [
+            "../channel",
+            "channel/../foo",
+            "channel\x00name",
+            "channel space",
+            "channel.name",
+            "channel@host",
+            "",
+        ];
+        for id in cases {
+            if id.is_empty() {
+                continue; // tested separately
+            }
+            assert!(
+                validate_channel_id(id).is_err(),
+                "expected '{id}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_channel_id_rejects_path_traversal_attempts() {
+        // These look like they might slip through naive validation
+        let attacks = ["../etc", "foo/bar", "a/b/c", "/absolute"];
+        for id in attacks {
+            assert!(
+                validate_channel_id(id).is_err(),
+                "expected '{id}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_transform_is_identity() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cases = ["hello", "", "line with spaces", "  trimmed  "];
+        for input in cases {
+            let output = rt.block_on(transform(input.to_string()));
+            assert_eq!(output, input);
+        }
+    }
+
+    #[test]
+    fn test_socket_path_rejects_invalid_id() {
+        let err = socket_path("/tmp", "../bad").unwrap_err().to_string();
+        assert!(err.contains("alphanumeric"), "{err}");
+    }
+
+    #[test]
+    fn test_socket_path_constructs_filesystem_path() {
+        // On macOS (non-Linux), socket_path returns a filesystem path.
+        // On Linux with abstract sockets this test checks different output.
+        let path = socket_path("/tmp/storage", "test-chan").unwrap();
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let expected = PathBuf::from("/tmp/storage/channels/test-chan.sock");
+            assert_eq!(path, expected, "expected {expected:?}, got {path:?}");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let bytes = path.as_os_str().as_encoded_bytes();
+            assert_eq!(bytes[0], 0, "abstract socket should start with \\0");
+            assert!(
+                bytes.windows(b"test-chan".len()).any(|w| w == b"test-chan"),
+                "abstract socket path should contain channel ID"
+            );
+        }
+    }
+
+    #[test]
+    fn test_socket_guard_removes_file_on_drop() {
+        let dir = TempDir::new().unwrap();
+        let sock_path = dir.path().join("test.sock");
+
+        // Create a file at the socket path
+        std::fs::write(&sock_path, "data").unwrap();
+        assert!(sock_path.exists());
+
+        // Guard takes ownership; on drop it removes the file
+        {
+            let _guard = SocketGuard::new_file(sock_path.clone());
+            assert!(sock_path.exists());
+        }
+        assert!(!sock_path.exists(), "SocketGuard should clean up on drop");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_socket_guard_no_file_does_nothing() {
+        // no_file guard should not crash on drop
+        let _guard = SocketGuard::no_file();
+    }
+}
