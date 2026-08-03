@@ -141,6 +141,16 @@ fn current_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+/// Flush any pending input from the terminal's input buffer.
+///
+/// When a program reading stdin exits (e.g. via Ctrl-C), partial input that
+/// was typed before the signal remains in the terminal buffer. The shell reads
+/// this leftover data on its next prompt, which suppresses the prompt display
+/// until the user presses Enter. Flushing the buffer prevents this.
+fn flush_stdin() {
+    unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+}
+
 /// Wait for SIGTERM so the publisher can clean up on `kill` (not just Ctrl-C).
 pub async fn sigterm() {
     #[cfg(unix)]
@@ -284,9 +294,11 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
         _ = main_loop => {}
         _ = tokio::signal::ctrl_c() => {
             eprintln!("\nShutting down...");
+            flush_stdin();
         }
         _ = sigterm() => {
             eprintln!("\nShutting down (SIGTERM)...");
+            flush_stdin();
         }
     }
 
