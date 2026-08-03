@@ -13,6 +13,7 @@ class HqModal extends HTMLElement {
   static observedAttributes = ['open'];
 
   #initialized = false;
+  #abort = null;
 
   connectedCallback() {
     if (this.#initialized) return;
@@ -35,11 +36,20 @@ class HqModal extends HTMLElement {
       if (e.target === e.currentTarget) this.#close();
     });
 
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.hasAttribute('open')) this.#close();
-    });
+    this.#abort = new AbortController();
+    document.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.key === 'Escape' && this.hasAttribute('open')) this.#close();
+      },
+      { signal: this.#abort.signal },
+    );
 
     this.#updateDisplay();
+  }
+
+  disconnectedCallback() {
+    this.#abort?.abort();
   }
 
   attributeChangedCallback() {

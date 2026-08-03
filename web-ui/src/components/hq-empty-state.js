@@ -11,7 +11,31 @@
 class HqEmptyState extends HTMLElement {
   static observedAttributes = ['icon', 'title'];
 
-  #update() {
+  #initialized = false;
+  #loose = [];
+  #action = null;
+
+  connectedCallback() {
+    if (this.#initialized) return;
+    this.#initialized = true;
+
+    // Capture original slot children once — #render() only rebuilds the shell
+    for (const el of [...this.children]) {
+      if (el.getAttribute('slot') === 'action') {
+        this.#action = el;
+      } else {
+        this.#loose.push(el);
+      }
+    }
+
+    this.#render();
+  }
+
+  attributeChangedCallback() {
+    if (this.#initialized) this.#render();
+  }
+
+  #render() {
     const icon = this.getAttribute('icon');
     const title = this.getAttribute('title');
 
@@ -30,32 +54,18 @@ class HqEmptyState extends HTMLElement {
           '</h3>',
       );
     }
-    const loose = [];
-    const namedAction = [];
-    for (const el of [...this.children]) {
-      if (el.getAttribute('slot') === 'action') namedAction.push(el);
-      else loose.push(el);
-    }
-    if (loose.length) {
+    if (this.#loose.length) {
       parts.push(
         '<p class="text-sm text-gray-600 dark:text-gray-400 mb-4">' +
-          loose.map((el) => el.textContent || '').join(' ') +
+          this.#loose.map((el) => el.textContent || '').join(' ') +
           '</p>',
       );
     }
-    if (namedAction.length) {
-      parts.push(`<div class="mt-4">${namedAction[0].outerHTML}</div>`);
+    if (this.#action) {
+      parts.push(`<div class="mt-4">${this.#action.outerHTML}</div>`);
     }
     parts.push('</div>');
     this.innerHTML = parts.join('');
-  }
-
-  connectedCallback() {
-    this.#update();
-  }
-
-  attributeChangedCallback() {
-    this.#update();
   }
 }
 
