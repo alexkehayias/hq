@@ -11,6 +11,8 @@ pub mod research_meeting_attendees;
 pub use research_meeting_attendees::ResearchMeetingAttendees;
 pub mod generate_session_titles;
 pub use generate_session_titles::GenerateSessionTitles;
+pub mod git_sync;
+pub use git_sync::GitSync;
 
 #[async_trait]
 pub trait PeriodicJob: Send + Sync + 'static {
