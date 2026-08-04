@@ -241,39 +241,6 @@ pub async fn sync_repo(deploy_key_path: &str, path: &str) -> Result<Vec<String>>
     Ok(changed)
 }
 
-/// Return a list of files that have changed between the last two
-/// commits (`git diff --name-only HEAD^ HEAD`). Useful for diagnostics.
-pub async fn diff_last_commit_files(deploy_key_path: &str, path: &str) -> Vec<String> {
-    let result = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "cd {} && GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes' git --no-pager diff --name-only HEAD^ HEAD",
-            path,
-            deploy_key_path
-        ))
-        .output()
-        .await;
-
-    match result {
-        Ok(output) => {
-            let stdout = std::str::from_utf8(&output.stdout).unwrap_or("");
-            let stderr = std::str::from_utf8(&output.stderr).unwrap_or("");
-            if !stderr.is_empty() {
-                tracing::error!("Git diff failed: {}", stderr);
-            }
-            if stdout.trim().is_empty() {
-                Vec::new()
-            } else {
-                stdout.trim().split("\n").map(|s| s.to_string()).collect()
-            }
-        }
-        Err(e) => {
-            tracing::error!("Git diff failed: {}", e);
-            Vec::new()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
