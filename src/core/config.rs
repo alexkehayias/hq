@@ -1,4 +1,29 @@
 use std::env;
+use std::path::PathBuf;
+
+/// Returns the directory for caching fastembed model files.
+///
+/// Checks `HQ_FASTEMBED_CACHE_DIR` env var first. Falls back to
+/// `.fastembed_cache` relative to the repo root (found by walking up
+/// from the current working directory until `.git` is found), so all
+/// worktrees share the same model download.
+pub fn fastembed_cache_dir() -> PathBuf {
+    if let Ok(dir) = env::var("HQ_FASTEMBED_CACHE_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(cwd) = env::current_dir() {
+        let mut path = cwd.clone();
+        loop {
+            if path.join(".git").exists() {
+                return path.join(".fastembed_cache");
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    PathBuf::from(".fastembed_cache")
+}
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
