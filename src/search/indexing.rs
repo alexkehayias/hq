@@ -21,6 +21,7 @@ use super::source::{note_filter, notes};
 use crate::ai::chat::db::{
     find_chat_session_by_id, get_non_background_sessions, session_has_background_tag,
 };
+use crate::core::fastembed_cache_dir;
 use crate::openai::{Message, Role};
 
 #[derive(Debug, Clone)]
@@ -533,7 +534,9 @@ pub async fn index_all(
 ) -> Result<()> {
     let embeddings_model = Arc::new(Mutex::new(
         TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
+            InitOptions::new(EmbeddingModel::BGESmallENV15)
+                .with_show_download_progress(true)
+                .with_cache_dir(fastembed_cache_dir()),
         )
         .unwrap(),
     ));

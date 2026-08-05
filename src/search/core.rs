@@ -9,6 +9,7 @@ use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
 use crate::ai::chat::db::get_chat_messages_by_ids;
+use crate::core::fastembed_cache_dir;
 use crate::api::public::notes::SearchResult;
 use crate::openai::Role;
 use crate::search::aql::{self};
@@ -108,7 +109,9 @@ pub async fn search_similar_notes(
     }
 
     let mut embeddings_model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
+        InitOptions::new(EmbeddingModel::BGESmallENV15)
+            .with_show_download_progress(true)
+            .with_cache_dir(fastembed_cache_dir()),
     )
     .unwrap();
     let query_vector = embeddings_model
