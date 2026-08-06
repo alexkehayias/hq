@@ -5,8 +5,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 TAG="${1:-$(git rev-parse --short HEAD)}"
-DOKKU_REMOTE="${DOKKU_REMOTE:?DOKKU_REMOTE must be set (e.g. dokku@your-server.com)}"
-DOKKU_APP="${DOKKU_APP:-indexer}"
+HQ_DOKKU_REMOTE="${HQ_DOKKU_REMOTE:?HQ_DOKKU_REMOTE must be set (e.g. dokku@your-server.com)}"
+HQ_DOKKU_APP="${HQ_DOKKU_APP:?HQ_DOKKU_APP must be set}"
 IMAGE_NAME="hq:${TAG}"
 
 # 1. Rebuild Tailwind CSS
@@ -21,11 +21,11 @@ docker build -t "${IMAGE_NAME}" -t "hq:latest" .
 
 # 3. Stream the image to Dokku via SSH
 echo "==> Streaming image to Dokku..."
-docker image save "${IMAGE_NAME}" | ssh "${DOKKU_REMOTE}" git:load-image "${DOKKU_APP}" "${IMAGE_NAME}"
+docker image save "${IMAGE_NAME}" | ssh "${HQ_DOKKU_REMOTE}" git:load-image "${HQ_DOKKU_APP}" "${IMAGE_NAME}"
 
 # 4. Rebuild the app using the loaded image
 echo "==> Rebuilding app..."
-ssh "${DOKKU_REMOTE}" ps:rebuild "${DOKKU_APP}"
+ssh "${HQ_DOKKU_REMOTE}" ps:rebuild "${HQ_DOKKU_APP}"
 
 # 5. Cleanup
 echo "==> Cleaning up..."
