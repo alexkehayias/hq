@@ -7,17 +7,30 @@ FROM rust:trixie AS builder
 
 WORKDIR /
 
-## Install native dependencies needed for linking
-RUN apt-get update && apt-get install -y --no-install-recommends \
+## Install native dependencies + x86_64 cross-compilation toolchain
+## (Dokku server is linux/amd64, but colima on Apple Silicon is arm64)
+RUN dpkg --add-architecture amd64 && \
+    apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
+    libssl-dev:amd64 \
     pkg-config \
     clang \
+    gcc-x86-64-linux-gnu \
+    g++-x86-64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
 
-## Use lld for faster, more memory-efficient linking (critical on small VMs)
-RUN rustup component add llvm-tools-preview 2>/dev/null; \
+## Add x86_64 Rust target and configure cargo for cross-compilation
+RUN rustup target add x86_64-unknown-linux-gnu && \
     mkdir -p ~/.cargo && \
-    printf '[target.x86_64-unknown-linux-gnu]\nrustflags = ["-C", "link-arg=-fuse-ld=lld"]\n' > ~/.cargo/config.toml
+    printf '[target.x86_64-unknown-linux-gnu]\nlinker = "x86_64-linux-gnu-gcc"\n' > ~/.cargo/config.toml
+
+## Set env vars for cc-rs / C dependencies to use the cross-compiler
+ENV CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc
+ENV CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++
+ENV AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
 
 ## Cache rust dependencies
 ## https://stackoverflow.com/questions/58473606/cache-rust-dependencies-with-docker-build
@@ -25,23 +38,25 @@ RUN rustup component add llvm-tools-preview 2>/dev/null; \
 RUN mkdir ./src && echo 'fn main() { println!("Dummy!"); }' > ./src/main.rs
 COPY ./Cargo.toml .
 COPY ./Cargo.lock .
-RUN cargo build --release --locked
+RUN cargo build --release --target x86_64-unknown-linux-gnu --locked
 
 ## Actually build the app
 RUN rm -rf ./src
 COPY ./src ./src
 RUN touch -a -m ./src/main.rs
-RUN cargo build --release --locked
+RUN cargo build --release --target x86_64-unknown-linux-gnu --locked
 
 # Run stage
 # Match builder's glibc (see note above re: __isoc23_strtoll).
-FROM debian:trixie-slim AS runner
+FROM --platform=linux/amd64 debian:trixie-slim AS runner
 
-RUN apt update
-RUN apt install -y git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Use the compiled binary rather than cargo
-COPY --from=builder /target/release/hq /hq
+COPY --from=builder /target/x86_64-unknown-linux-gnu/release/hq /hq
 
 # Copy over static files for the web UI, currently these are built and
 # checked into the repo but that might change later

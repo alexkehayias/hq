@@ -1,4 +1,5 @@
 use sqlite_vec::sqlite3_vec_init;
+use std::os::raw::c_char;
 use tokio_rusqlite::{Connection, Result, ffi::sqlite3_auto_extension};
 
 /// Initialize the db by creating all tables. This function should
@@ -545,7 +546,7 @@ pub async fn async_db(path_to_db_file: &str) -> anyhow::Result<Connection, anyho
             *const (),
             unsafe extern "C" fn(
                 *mut tokio_rusqlite::ffi::sqlite3,
-                *mut *mut i8,
+                *mut *mut c_char,
                 *const tokio_rusqlite::ffi::sqlite3_api_routines,
             ) -> i32,
         >(sqlite3_vec_init as *const ())));

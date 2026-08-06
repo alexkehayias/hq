@@ -1,0 +1,34 @@
+# Rust build artifacts
+target/
+
+# Git history
+.git/
+.gitattributes
+.gitignore
+
+# Local data and environment
+.hq-data/
+.fastembed_cache/
+.env
+.env.local
+.envrc
+
+# IDE, OS, and project config
+.claude/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Content not needed at build time
+notes/
+docs/
+db/
+marginalia.org
+
+# Web UI build dependencies
+web-ui/node_modules/
+
+# Tests and examples
+tests/
+examples/
