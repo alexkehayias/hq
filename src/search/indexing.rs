@@ -646,6 +646,103 @@ pub async fn index_all(
     Ok(())
 }
 
+/// Re-index a single org file into the SQLite metadata and full-text indexes.
+///
+/// Used after task create/update so the changes are immediately queryable
+/// instead of waiting for a full `hq index`. The index directory must already
+/// exist (created by init / `hq index`); we intentionally do not create it.
+pub async fn index_single_file(
+    db: &Connection,
+    index_dir_path: &str,
+    file_path: PathBuf,
+) -> Result<()> {
+    let file_name = file_path
+        .file_name()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default()
+        .to_owned();
+
+    let content = fs::read_to_string(&file_path)
+        .await
+        .with_context(|| format!("Failed to read file: {:?}", file_path))?;
+    let note = parse_note(&content)?;
+
+    // Index metadata in SQLite (backs tasks list / projects list)
+    let file_name_for_db = file_name.clone();
+    let note_for_db = note.clone();
+    db.call(move |conn| {
+        index_note_meta(conn, &file_name_for_db, &note_for_db)
+            .expect("Upserting note meta failed");
+        Ok(())
+    })
+    .await
+    .expect("DB work failed");
+
+    // Index full text in Tantivy
+    let index_path =
+        tantivy::directory::MmapDirectory::open(index_dir_path).expect("Index not found");
+    let schema = note_schema();
+    let idx =
+        Index::open_or_create(index_path, schema.clone()).expect("Unable to open or create index");
+    let mut index_writer: IndexWriter = idx
+        .writer(50_000_000)
+        .expect("Index writer failed to initialize");
+
+    index_note_full_text(&mut index_writer, &schema, &file_name, &note)
+        .expect("Updating full text search failed");
+
+    index_writer
+        .commit()
+        .expect("Full text search index failed to commit");
+
+    Ok(())
+}
+
+/// Remove a task (or any indexed document) from all indexes by its ID.
+/// Used after deleting a task from an org file.
+pub async fn remove_task_from_indexes(
+    db: &Connection,
+    index_dir_path: &str,
+    task_id: &str,
+) -> Result<()> {
+    // Remove from Tantivy full-text index. Best-effort: if the index directory
+    // doesn't exist there's nothing to remove, but DB cleanup must still run.
+    if let Ok(index_path) = tantivy::directory::MmapDirectory::open(index_dir_path) {
+        let schema = note_schema();
+        let idx = Index::open_or_create(index_path, schema.clone())
+            .expect("Unable to open or create index");
+        let mut index_writer: IndexWriter = idx
+            .writer(50_000_000)
+            .expect("Index writer failed to initialize");
+
+        let id_field = schema.get_field("id").expect("Failed to get 'id' field");
+        let term_id = Term::from_field_text(id_field, task_id);
+        index_writer.delete_term(term_id);
+
+        index_writer
+            .commit()
+            .expect("Full text search index failed to commit");
+    }
+
+    // Remove from SQLite metadata and vector embeddings
+    let task_id_owned = task_id.to_owned();
+    db.call(move |conn| {
+        conn.execute(
+            "DELETE FROM vec_items WHERE note_meta_id = ?",
+            [&task_id_owned],
+        )
+        .ok();
+        conn.execute("DELETE FROM note_meta WHERE id = ?", [&task_id_owned])
+            .ok();
+        Ok(())
+    })
+    .await
+    .expect("DB cleanup failed");
+
+    Ok(())
+}
+
 /// Index a single chat message into the full-text search index
 pub fn index_chat_message_full_text(
     index_writer: &mut IndexWriter,

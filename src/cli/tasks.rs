@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::cli::projects;
 use crate::core::orgmode;
 use crate::org;
+use crate::search::{index_single_file, remove_task_from_indexes};
 
 /// Parse a comma-separated list of tags (e.g. `"urgent, errands"`) into
 /// trimmed, non-empty tag strings. Empty entries (`a,,b`) and surrounding
@@ -84,6 +85,7 @@ fn slugify(s: &str) -> Result<String> {
 pub async fn run_create(
     db: &Connection,
     notes_path: &str,
+    index_path: &str,
     title: &str,
     body: Option<&str>,
     project: Option<&str>,
@@ -93,7 +95,7 @@ pub async fn run_create(
     let body = body.unwrap_or_default();
     let status_upper = status.to_uppercase();
 
-    if let Some(project_name) = project {
+    let file_path = if let Some(project_name) = project {
         // Look up existing project in DB, or create a new project file
         let project_path = match projects::db::find_project_file(db, notes_path, project_name).await? {
             Some(path) => path,
@@ -111,16 +113,42 @@ pub async fn run_create(
             .await
             .context("Failed to write project file")?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
+        project_path
     } else {
-        let slug = slugify(title)?;
-        let today = Local::now().format("%Y-%m-%d");
-        let filename = format!("{notes_path}/{today}--{slug}.org");
-        let content = orgmode::build_document(&id, title, body, &status_upper);
-        fs::write(&filename, &content)
+        // Standalone tasks go into the capture.org inbox so the default
+        // `tasks list` (which scans capture.org) finds them.
+        let capture_path = PathBuf::from(format!("{notes_path}/capture.org"));
+        let mut content = if capture_path.exists() {
+            fs::read_to_string(&capture_path).await?
+        } else {
+            let capture_id = Uuid::new_v4().to_string();
+            let today = Local::now().format("%Y-%m-%d");
+            org::Document::builder()
+                .property("ID", &capture_id)
+                .title("Capture")
+                .category("capture")
+                .date(&today.to_string())
+                .filetags("private inbox")
+                .build()
+                .to_string()
+        };
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&orgmode::build_headline(&id, title, body, &status_upper, 1));
+        content.push('\n');
+        fs::write(&capture_path, &content)
             .await
             .context("Failed to write task file")?;
-        println!("Created task '{title}' (id: {id}, file: {filename})");
-    }
+        println!(
+            "Created task '{title}' (id: {id}, file: {})",
+            capture_path.display()
+        );
+        capture_path
+    };
+
+    // Re-index the affected file so the task is immediately queryable
+    index_single_file(db, index_path, file_path).await?;
 
     Ok(())
 }
@@ -128,6 +156,7 @@ pub async fn run_create(
 pub async fn run_update(
     db: &Connection,
     notes_path: &str,
+    index_path: &str,
     id: &str,
     title: Option<&str>,
     body: Option<&str>,
@@ -155,6 +184,11 @@ pub async fn run_update(
         orgmode::update_task(notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
     }
     println!("Task {id} updated");
+
+    // Re-index the modified file so the task changes are immediately queryable
+    let location = orgmode::find_task(notes_path, id).await?;
+    index_single_file(db, index_path, location.path).await?;
+
     Ok(())
 }
 
@@ -209,7 +243,12 @@ pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &s
     Ok(())
 }
 
-pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
+pub async fn run_delete(
+    db: &Connection,
+    notes_path: &str,
+    index_path: &str,
+    id: &str,
+) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
 
     let before = &location.content[..location.range.start];
@@ -221,6 +260,8 @@ pub async fn run_delete(notes_path: &str, id: &str) -> Result<()> {
         .await
         .context("Failed to write project file after deletion")?;
     println!("Deleted task {id} from {}", location.path.display());
+
+    remove_task_from_indexes(db, index_path, id).await?;
 
     Ok(())
 }
@@ -405,9 +446,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Test Task", None, None, "TODO")
+        run_create(&db, &notes, &index, "Test Task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -425,9 +466,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task_with_body() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
+        run_create(&db, &notes, &index, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
             .await
             .unwrap();
 
@@ -439,9 +480,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_standalone_task_custom_status() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Urgent fix", None, None, "NEXT")
+        run_create(&db, &notes, &index, "Urgent fix", None, None, "NEXT")
             .await
             .unwrap();
 
@@ -457,9 +498,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_project_task_creates_project_file() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix login", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Fix login", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -478,14 +519,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_second_task_in_project() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Task one", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Task one", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
         // Second create reuses the same project file
-        run_create(&db, &notes, "Task two", None, Some("sprint-12"), "DONE")
+        run_create(&db, &notes, &index, "Task two", None, Some("sprint-12"), "DONE")
             .await
             .unwrap();
 
@@ -496,25 +537,77 @@ mod tests {
         assert_eq!(headline_count(&path), 2);
     }
 
+    /// Count task rows in note_meta for the given title.
+    async fn count_tasks_by_title(db: &Connection, title: &str) -> usize {
+        let title = title.to_owned();
+        db.call(move |conn| {
+            let count: usize = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM note_meta WHERE type = 'task' AND title = ?",
+                    [&title],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            Ok(count)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_create_indexes_task_in_note_meta() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        run_create(&db, &notes, &index, "Visible task", None, None, "TODO")
+            .await
+            .unwrap();
+
+        // Creating a task must register it in note_meta so tasks list finds it.
+        assert_eq!(count_tasks_by_title(&db, "Visible task").await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_removes_task_from_note_meta() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        run_create(&db, &notes, &index, "Doomed task", None, None, "TODO")
+            .await
+            .unwrap();
+        assert_eq!(count_tasks_by_title(&db, "Doomed task").await, 1);
+
+        // Extract the task ID from the capture file.
+        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let content = fs::read_to_string(&path).unwrap();
+        let id_marker = ":ID:       ";
+        let id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+
+        run_delete(&db, &notes, &index, &id).await.unwrap();
+
+        // Deleting a task must remove it from note_meta.
+        assert_eq!(count_tasks_by_title(&db, "Doomed task").await, 0);
+    }
+
     // -----------------------------------------------------------------------
     // run_update
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_update_standalone_status() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "My task", None, None, "TODO")
+        run_create(&db, &notes, &index, "My task", None, None, "TODO")
             .await
             .unwrap();
 
         // Find the created task's ID
         let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
-        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let id_marker = ":ID:       ";
+        let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])            .await
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -523,18 +616,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_standalone_title_and_body() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Old title", Some("Old body"), None, "TODO")
+        run_create(&db, &notes, &index, "Old title", Some("Old body"), None, "TODO")
             .await
             .unwrap();
 
         let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
-        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let id_marker = ":ID:       ";
+        let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, Some("New title"), Some("New body"), None, None, &[], &[])            .await
+        run_update(&db, &notes, &index, &id, Some("New title"), Some("New body"), None, None, &[], &[])            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -547,9 +641,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_project_task_status() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix bug", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Fix bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -561,7 +655,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])            .await
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -577,9 +671,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_nonexistent_task() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_update(&db, &notes, "nonexistent-uuid", None, None, Some("DONE"), None, &[], &[]).await;
+        let result = run_update(&db, &notes, &index, "nonexistent-uuid", None, None, Some("DONE"), None, &[], &[]).await;
         assert!(result.is_err());
     }
 
@@ -589,23 +683,24 @@ mod tests {
 
     /// Helper: create a TODO task and return (path, id) so tests can drive
     /// subsequent updates without re-deriving the ID.
-    async fn create_todo_task(db: &Connection, notes: &str) -> (PathBuf, String) {
-        run_create(db, notes, "Test task", None, None, "TODO")
+    async fn create_todo_task(db: &Connection, notes: &str, index: &str) -> (PathBuf, String) {
+        run_create(db, notes, &index, "Test task", None, None, "TODO")
             .await
             .unwrap();
         let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
-        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let id_marker = ":ID:       ";
+        let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
         (path, id)
     }
 
     #[tokio::test]
     async fn test_update_logs_state_change_to_done() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_todo_task(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
@@ -626,10 +721,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_logs_state_change_to_canceled() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_todo_task(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &id, None, None, Some("CANCELED"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("CANCELED"), None, &[], &[])
             .await
             .unwrap();
 
@@ -646,10 +741,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_someday_does_not_set_closed() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_todo_task(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &id, None, None, Some("SOMEDAY"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("SOMEDAY"), None, &[], &[])
             .await
             .unwrap();
 
@@ -666,18 +761,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_reopen_clears_closed() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_todo_task(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task first
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
         let closed_content = fs::read_to_string(&path).unwrap();
         assert!(closed_content.contains("CLOSED:"));
 
         // Reopen it
-        run_update(&db, &notes, &id, None, None, Some("NEXT"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("NEXT"), None, &[], &[])
             .await
             .unwrap();
 
@@ -708,16 +803,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_title_only_preserves_logbook() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_todo_task(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task to populate CLOSED + LOGBOOK
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
         // Now update the title only, status unchanged (status=None means preserve)
-        run_update(&db, &notes, &id, Some("New title"), None, None, None, &[], &[])
+        run_update(&db, &notes, &index, &id, Some("New title"), None, None, None, &[], &[])
             .await
             .unwrap();
 
@@ -747,16 +842,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_status_noop_preserves_closed() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_todo_task(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
         // "Update" to the same status (DONE -> DONE)
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[])
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
@@ -781,9 +876,9 @@ mod tests {
     async fn test_create_done_no_closed() {
         // New tasks created with a closed status should NOT get a CLOSED: line
         // or LOGBOOK entries — only state transitions (updates) record these.
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Already done task", None, None, "DONE")
+        run_create(&db, &notes, &index, "Already done task", None, None, "DONE")
             .await
             .unwrap();
 
@@ -805,18 +900,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_standalone_task() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Temp task", None, None, "TODO")
+        run_create(&db, &notes, &index, "Temp task", None, None, "TODO")
             .await
             .unwrap();
 
         let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
-        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let id_marker = ":ID:       ";
+        let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&db, &notes, &index, &id).await.unwrap();
 
         // File should still exist (as a note with no task headlines)
         assert!(path.exists());
@@ -825,14 +921,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_project_task() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Task one", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Task one", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
         // Second create reuses the same project file
-        run_create(&db, &notes, "Task two", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Task two", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -843,7 +939,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&db, &notes, &index, &id).await.unwrap();
 
         // One headline should remain
         assert_eq!(headline_count(&path), 1);
@@ -851,9 +947,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_last_project_task_leaves_project_file() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Only task", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Only task", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -863,7 +959,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_delete(&notes, &id).await.unwrap();
+        run_delete(&db, &notes, &index, &id).await.unwrap();
 
         // Project file should still exist (preamble remains)
         assert!(path.exists());
@@ -872,10 +968,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_nonexistent_task() {
-        let dir = TempDir::new().unwrap();
-        let notes = dir.path().to_str().unwrap().to_string();
+        let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_delete(&notes, "nonexistent-uuid").await;
+        let result = run_delete(&db, &notes, &index, "nonexistent-uuid").await;
         assert!(result.is_err());
     }
 
@@ -901,10 +996,12 @@ mod tests {
     /// temp dir guard, and notes path string.
     /// Notes are stored in a `notes/` subdirectory so DB files at the temp
     /// dir root don't interfere with file-count assertions.
-    async fn test_env() -> (Connection, TempDir, String) {
+    async fn test_env() -> (Connection, TempDir, String, String) {
         let dir = TempDir::new().unwrap();
         let notes = format!("{}/notes", dir.path().to_str().unwrap());
+        let index = format!("{}/index", dir.path().to_str().unwrap());
         std::fs::create_dir_all(&notes).unwrap();
+        std::fs::create_dir_all(&index).unwrap();
         let db = crate::core::db::async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             crate::core::db::initialize_db(conn).unwrap();
@@ -912,7 +1009,7 @@ mod tests {
         })
         .await
         .unwrap();
-        (db, dir, notes)
+        (db, dir, notes, index)
     }
 
     /// Insert a task row into note_meta for testing.
@@ -1194,9 +1291,9 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_by_filename() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix bug", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Fix bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1210,7 +1307,7 @@ Investigate the redirect
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
 
         // Update using --project with filename
-        run_update(&db, &notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[])            .await
+        run_update(&db, &notes, &index, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[])            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1223,9 +1320,9 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_by_id() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Add tests", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Add tests", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1241,7 +1338,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some(&project_id), &[], &[])            .await
+        run_update(&db, &notes, &index, &task_id, None, None, Some("DONE"), Some(&project_id), &[], &[])            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1253,15 +1350,15 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_update_project_task_not_found_in_project() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Create a standalone task (not in any project)
-        run_create(&db, &notes, "Standalone", None, None, "TODO")
+        run_create(&db, &notes, &index, "Standalone", None, None, "TODO")
             .await
             .unwrap();
 
         // Create a project with a different task
-        run_create(&db, &notes, "Project task", None, Some("my-project"), "TODO")
+        run_create(&db, &notes, &index, "Project task", None, Some("my-project"), "TODO")
             .await
             .unwrap();
 
@@ -1276,19 +1373,19 @@ Investigate the redirect
             .next()
             .unwrap();
         let content = fs::read_to_string(&standalone_path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id_start = content.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Updating scoped to a project where the task doesn't exist should error
-        let result = run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some("my-project"), &[], &[]).await;
+        let result = run_update(&db, &notes, &index, &task_id, None, None, Some("DONE"), Some("my-project"), &[], &[]).await;
         assert!(result.is_err(), "should error when task not found in scoped project file");
     }
 
     #[tokio::test]
     async fn test_update_project_task_nonexistent_project() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_update(&db, &notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), &[], &[]).await;
+        let result = run_update(&db, &notes, &index, "some-id", None, None, Some("DONE"), Some("nonexistent"), &[], &[]).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 
@@ -1298,9 +1395,9 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_refile_standalone_to_project() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
+        run_create(&db, &notes, &index, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
             .await
             .unwrap();
 
@@ -1315,7 +1412,7 @@ Investigate the redirect
             .next()
             .unwrap();
         let content = fs::read_to_string(&standalone_path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
+        let id_start = content.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a project
@@ -1347,9 +1444,9 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_refile_from_one_project_to_another() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix login bug", None, Some("sprint-12"), "TODO")
+        run_create(&db, &notes, &index, "Fix login bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1394,7 +1491,7 @@ Investigate the redirect
 
     #[tokio::test]
     async fn test_refile_preserves_org_structure() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, _index) = test_env().await;
 
         // Create a task with body text via refile.org
         let refile_path = std::path::Path::new(&notes).join("refile.org");
@@ -1439,9 +1536,9 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_to_same_project_errors() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Task in project", None, Some("my-project"), "TODO")
+        run_create(&db, &notes, &index, "Task in project", None, Some("my-project"), "TODO")
             .await
             .unwrap();
 
@@ -1471,7 +1568,7 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_nonexistent_task() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, _index) = test_env().await;
 
         let result = run_refile(&db, &notes, "nonexistent-uuid", "some-project").await;
         assert!(result.is_err());
@@ -1479,7 +1576,7 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_from_refile_org_to_project() {
-        let (db, _dir, notes) = test_env().await;
+        let (db, _dir, notes, _index) = test_env().await;
 
         // Simulate a task sitting in refile.org
         let refile_path = std::path::Path::new(&notes).join("refile.org");
@@ -1541,14 +1638,15 @@ Need to check the middleware changes.
     /// Helper: create a TODO task and return (path, id) so tag tests can drive
     /// subsequent updates without re-deriving the ID. Mirrors `create_todo_task` above
     /// but kept separate so existing tests don't depend on a helper defined further down.
-    async fn create_task_for_tags(db: &Connection, notes: &str) -> (PathBuf, String) {
-        run_create(db, notes, "Tag test task", None, None, "TODO")
+    async fn create_task_for_tags(db: &Connection, notes: &str, index: &str) -> (PathBuf, String) {
+        run_create(db, notes, &index, "Tag test task", None, None, "TODO")
             .await
             .unwrap();
         let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
-        let id_start = content.find(":ID:").unwrap() + ":ID:       ".len();
-        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let id_marker = ":ID:       ";
+        let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
+        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
         (path, id)
     }
 
@@ -1568,23 +1666,13 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_tag_to_task_without_tags() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Task starts with no tags
         assert!(read_headline_tags(&path).is_empty());
 
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
@@ -1594,36 +1682,16 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_remove_tag() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add a tag first
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Then remove it
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &[],
-            &["urgent".to_string()],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &[], &["urgent".to_string()])
         .await
         .unwrap();
 
@@ -1633,36 +1701,16 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_and_remove_in_one_call() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Start with tags a and b
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["a".to_string(), "b".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["a".to_string(), "b".to_string()], &[])
         .await
         .unwrap();
 
         // In one call: add c, remove a — result should be b and c.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["c".to_string()],
-            &["a".to_string()],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["c".to_string()], &["a".to_string()])
         .await
         .unwrap();
 
@@ -1672,36 +1720,16 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_remove_nonexistent_tag_silent() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add one tag so we have something to verify
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Removing a tag that isn't set should be a silent no-op (no error).
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &[],
-            &["nonexistent".to_string()],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &[], &["nonexistent".to_string()])
         .await
         .unwrap();
 
@@ -1711,36 +1739,16 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_preserves_tags_when_updating_title() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add a tag
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Update the title only (no add/remove tag flags) — existing tags should be preserved.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            Some("Renamed task"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, Some("Renamed task"), None, None, None, &[], &[])
         .await
         .unwrap();
 
@@ -1757,36 +1765,16 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_duplicate_tag_dedup() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add the same tag that's already present — should dedupe to one.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Add the same tag again — should NOT result in two "urgent" entries.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
@@ -1796,21 +1784,11 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_tag_with_spaces_errors() {
-        let (db, _dir, notes) = test_env().await;
-        let (_path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (_path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Adding a tag with spaces should error (validation runs in compute_new_tags).
-        let result = run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["ur gent".to_string()],
-            &[],
-        )
+        let result = run_update(&db, &notes, &index, &id, None, None, None, None, &["ur gent".to_string()], &[])
         .await;
         let err = result.unwrap_err();
         assert!(
@@ -1821,21 +1799,11 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_tag_with_special_chars_errors() {
-        let (db, _dir, notes) = test_env().await;
-        let (_path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (_path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Adding a tag with special chars should error.
-        let result = run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent!".to_string()],
-            &[],
-        )
+        let result = run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent!".to_string()], &[])
         .await;
         let err = result.unwrap_err();
         assert!(
@@ -1846,21 +1814,11 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_tag_uppercase_auto_lowercased() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Uppercase tags should be auto-lowercased (not rejected).
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["URGENT".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["URGENT".to_string()], &[])
         .await
         .unwrap();
 
@@ -1870,21 +1828,11 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_update_add_tag_with_underscore_allowed() {
-        let (db, _dir, notes) = test_env().await;
-        let (path, id) = create_task_for_tags(&db, &notes).await;
+        let (db, _dir, notes, index) = test_env().await;
+        let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Underscores are allowed (per user's custom choice).
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["work_project".to_string()],
-            &[],
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["work_project".to_string()], &[])
         .await
         .unwrap();
 
