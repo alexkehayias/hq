@@ -85,11 +85,11 @@ fn slugify(s: &str) -> Result<String> {
 pub async fn run_create(
     db: &Connection,
     notes_path: &str,
+    index_path: &str,
     title: &str,
     body: Option<&str>,
     project: Option<&str>,
     status: &str,
-    index_path: &str,
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
@@ -156,6 +156,7 @@ pub async fn run_create(
 pub async fn run_update(
     db: &Connection,
     notes_path: &str,
+    index_path: &str,
     id: &str,
     title: Option<&str>,
     body: Option<&str>,
@@ -163,7 +164,6 @@ pub async fn run_update(
     project: Option<&str>,
     add_tags: &[String],
     remove_tags: &[String],
-    index_path: &str,
 ) -> Result<()> {
     if let Some(project_ref) = project {
         let path = projects::db::find_project_file(db, notes_path, project_ref).await?
@@ -448,7 +448,7 @@ mod tests {
     async fn test_create_standalone_task() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Test Task", None, None, "TODO", &index)
+        run_create(&db, &notes, &index, "Test Task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -468,7 +468,7 @@ mod tests {
     async fn test_create_standalone_task_with_body() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Buy milk", Some("Milk, eggs, bread"), None, "TODO", &index)
+        run_create(&db, &notes, &index, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
             .await
             .unwrap();
 
@@ -482,7 +482,7 @@ mod tests {
     async fn test_create_standalone_task_custom_status() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Urgent fix", None, None, "NEXT", &index)
+        run_create(&db, &notes, &index, "Urgent fix", None, None, "NEXT")
             .await
             .unwrap();
 
@@ -500,7 +500,7 @@ mod tests {
     async fn test_create_project_task_creates_project_file() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix login", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Fix login", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -521,12 +521,12 @@ mod tests {
     async fn test_create_second_task_in_project() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Task one", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Task one", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
         // Second create reuses the same project file
-        run_create(&db, &notes, "Task two", None, Some("sprint-12"), "DONE", &index)
+        run_create(&db, &notes, &index, "Task two", None, Some("sprint-12"), "DONE")
             .await
             .unwrap();
 
@@ -558,7 +558,7 @@ mod tests {
     async fn test_create_indexes_task_in_note_meta() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Visible task", None, None, "TODO", &index)
+        run_create(&db, &notes, &index, "Visible task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -570,7 +570,7 @@ mod tests {
     async fn test_delete_removes_task_from_note_meta() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Doomed task", None, None, "TODO", &index)
+        run_create(&db, &notes, &index, "Doomed task", None, None, "TODO")
             .await
             .unwrap();
         assert_eq!(count_tasks_by_title(&db, "Doomed task").await, 1);
@@ -596,7 +596,7 @@ mod tests {
     async fn test_update_standalone_status() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "My task", None, None, "TODO", &index)
+        run_create(&db, &notes, &index, "My task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -607,7 +607,7 @@ mod tests {
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)            .await
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])            .await
             .unwrap();
 
         let (_, status, _) = parse_headline(&path);
@@ -618,7 +618,7 @@ mod tests {
     async fn test_update_standalone_title_and_body() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Old title", Some("Old body"), None, "TODO", &index)
+        run_create(&db, &notes, &index, "Old title", Some("Old body"), None, "TODO")
             .await
             .unwrap();
 
@@ -628,7 +628,7 @@ mod tests {
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, Some("New title"), Some("New body"), None, None, &[], &[], &index)            .await
+        run_update(&db, &notes, &index, &id, Some("New title"), Some("New body"), None, None, &[], &[])            .await
             .unwrap();
 
         let (_, status, title) = parse_headline(&path);
@@ -643,7 +643,7 @@ mod tests {
     async fn test_update_project_task_status() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix bug", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Fix bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -655,7 +655,7 @@ mod tests {
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)            .await
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])            .await
             .unwrap();
 
         // Re-parse and check the headline
@@ -673,7 +673,7 @@ mod tests {
     async fn test_update_nonexistent_task() {
         let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_update(&db, &notes, "nonexistent-uuid", None, None, Some("DONE"), None, &[], &[], &index).await;
+        let result = run_update(&db, &notes, &index, "nonexistent-uuid", None, None, Some("DONE"), None, &[], &[]).await;
         assert!(result.is_err());
     }
 
@@ -684,7 +684,7 @@ mod tests {
     /// Helper: create a TODO task and return (path, id) so tests can drive
     /// subsequent updates without re-deriving the ID.
     async fn create_todo_task(db: &Connection, notes: &str, index: &str) -> (PathBuf, String) {
-        run_create(db, notes, "Test task", None, None, "TODO", &index)
+        run_create(db, notes, &index, "Test task", None, None, "TODO")
             .await
             .unwrap();
         let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
@@ -700,7 +700,7 @@ mod tests {
         let (db, _dir, notes, index) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
@@ -724,7 +724,7 @@ mod tests {
         let (db, _dir, notes, index) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &id, None, None, Some("CANCELED"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("CANCELED"), None, &[], &[])
             .await
             .unwrap();
 
@@ -744,7 +744,7 @@ mod tests {
         let (db, _dir, notes, index) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &id, None, None, Some("SOMEDAY"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("SOMEDAY"), None, &[], &[])
             .await
             .unwrap();
 
@@ -765,14 +765,14 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task first
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
         let closed_content = fs::read_to_string(&path).unwrap();
         assert!(closed_content.contains("CLOSED:"));
 
         // Reopen it
-        run_update(&db, &notes, &id, None, None, Some("NEXT"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("NEXT"), None, &[], &[])
             .await
             .unwrap();
 
@@ -807,12 +807,12 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task to populate CLOSED + LOGBOOK
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
         // Now update the title only, status unchanged (status=None means preserve)
-        run_update(&db, &notes, &id, Some("New title"), None, None, None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, Some("New title"), None, None, None, &[], &[])
             .await
             .unwrap();
 
@@ -846,12 +846,12 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
         // "Update" to the same status (DONE -> DONE)
-        run_update(&db, &notes, &id, None, None, Some("DONE"), None, &[], &[], &index)
+        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
             .await
             .unwrap();
 
@@ -878,7 +878,7 @@ mod tests {
         // or LOGBOOK entries — only state transitions (updates) record these.
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Already done task", None, None, "DONE", &index)
+        run_create(&db, &notes, &index, "Already done task", None, None, "DONE")
             .await
             .unwrap();
 
@@ -902,7 +902,7 @@ mod tests {
     async fn test_delete_standalone_task() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Temp task", None, None, "TODO", &index)
+        run_create(&db, &notes, &index, "Temp task", None, None, "TODO")
             .await
             .unwrap();
 
@@ -923,12 +923,12 @@ mod tests {
     async fn test_delete_project_task() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Task one", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Task one", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
         // Second create reuses the same project file
-        run_create(&db, &notes, "Task two", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Task two", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -949,7 +949,7 @@ mod tests {
     async fn test_delete_last_project_task_leaves_project_file() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Only task", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Only task", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1293,7 +1293,7 @@ Investigate the redirect
     async fn test_update_project_task_by_filename() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix bug", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Fix bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1307,7 +1307,7 @@ Investigate the redirect
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
 
         // Update using --project with filename
-        run_update(&db, &notes, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[], &index)            .await
+        run_update(&db, &notes, &index, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[])            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1322,7 +1322,7 @@ Investigate the redirect
     async fn test_update_project_task_by_id() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Add tests", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Add tests", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1338,7 +1338,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Update using --project with project ID
-        run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some(&project_id), &[], &[], &index)            .await
+        run_update(&db, &notes, &index, &task_id, None, None, Some("DONE"), Some(&project_id), &[], &[])            .await
             .unwrap();
 
         let config = parsing_config();
@@ -1353,12 +1353,12 @@ Investigate the redirect
         let (db, _dir, notes, index) = test_env().await;
 
         // Create a standalone task (not in any project)
-        run_create(&db, &notes, "Standalone", None, None, "TODO", &index)
+        run_create(&db, &notes, &index, "Standalone", None, None, "TODO")
             .await
             .unwrap();
 
         // Create a project with a different task
-        run_create(&db, &notes, "Project task", None, Some("my-project"), "TODO", &index)
+        run_create(&db, &notes, &index, "Project task", None, Some("my-project"), "TODO")
             .await
             .unwrap();
 
@@ -1377,7 +1377,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Updating scoped to a project where the task doesn't exist should error
-        let result = run_update(&db, &notes, &task_id, None, None, Some("DONE"), Some("my-project"), &[], &[], &index).await;
+        let result = run_update(&db, &notes, &index, &task_id, None, None, Some("DONE"), Some("my-project"), &[], &[]).await;
         assert!(result.is_err(), "should error when task not found in scoped project file");
     }
 
@@ -1385,7 +1385,7 @@ Investigate the redirect
     async fn test_update_project_task_nonexistent_project() {
         let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_update(&db, &notes, "some-id", None, None, Some("DONE"), Some("nonexistent"), &[], &[], &index).await;
+        let result = run_update(&db, &notes, &index, "some-id", None, None, Some("DONE"), Some("nonexistent"), &[], &[]).await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 
@@ -1397,7 +1397,7 @@ Investigate the redirect
     async fn test_refile_standalone_to_project() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO", &index)
+        run_create(&db, &notes, &index, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
             .await
             .unwrap();
 
@@ -1446,7 +1446,7 @@ Investigate the redirect
     async fn test_refile_from_one_project_to_another() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Fix login bug", None, Some("sprint-12"), "TODO", &index)
+        run_create(&db, &notes, &index, "Fix login bug", None, Some("sprint-12"), "TODO")
             .await
             .unwrap();
 
@@ -1538,7 +1538,7 @@ Consider authentication requirements.
     async fn test_refile_to_same_project_errors() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, "Task in project", None, Some("my-project"), "TODO", &index)
+        run_create(&db, &notes, &index, "Task in project", None, Some("my-project"), "TODO")
             .await
             .unwrap();
 
@@ -1639,7 +1639,7 @@ Need to check the middleware changes.
     /// subsequent updates without re-deriving the ID. Mirrors `create_todo_task` above
     /// but kept separate so existing tests don't depend on a helper defined further down.
     async fn create_task_for_tags(db: &Connection, notes: &str, index: &str) -> (PathBuf, String) {
-        run_create(db, notes, "Tag test task", None, None, "TODO", &index)
+        run_create(db, notes, &index, "Tag test task", None, None, "TODO")
             .await
             .unwrap();
         let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
@@ -1672,18 +1672,7 @@ Need to check the middleware changes.
         // Task starts with no tags
         assert!(read_headline_tags(&path).is_empty());
 
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
@@ -1697,34 +1686,12 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add a tag first
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Then remove it
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &[],
-            &["urgent".to_string()],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &[], &["urgent".to_string()])
         .await
         .unwrap();
 
@@ -1738,34 +1705,12 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Start with tags a and b
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["a".to_string(), "b".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["a".to_string(), "b".to_string()], &[])
         .await
         .unwrap();
 
         // In one call: add c, remove a — result should be b and c.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["c".to_string()],
-            &["a".to_string()],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["c".to_string()], &["a".to_string()])
         .await
         .unwrap();
 
@@ -1779,34 +1724,12 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add one tag so we have something to verify
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Removing a tag that isn't set should be a silent no-op (no error).
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &[],
-            &["nonexistent".to_string()],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &[], &["nonexistent".to_string()])
         .await
         .unwrap();
 
@@ -1820,34 +1743,12 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add a tag
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Update the title only (no add/remove tag flags) — existing tags should be preserved.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            Some("Renamed task"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, Some("Renamed task"), None, None, None, &[], &[])
         .await
         .unwrap();
 
@@ -1868,34 +1769,12 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add the same tag that's already present — should dedupe to one.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
         // Add the same tag again — should NOT result in two "urgent" entries.
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
         .await
         .unwrap();
 
@@ -1909,18 +1788,7 @@ Need to check the middleware changes.
         let (_path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Adding a tag with spaces should error (validation runs in compute_new_tags).
-        let result = run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["ur gent".to_string()],
-            &[],
-            &index,
-        )
+        let result = run_update(&db, &notes, &index, &id, None, None, None, None, &["ur gent".to_string()], &[])
         .await;
         let err = result.unwrap_err();
         assert!(
@@ -1935,18 +1803,7 @@ Need to check the middleware changes.
         let (_path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Adding a tag with special chars should error.
-        let result = run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["urgent!".to_string()],
-            &[],
-            &index,
-        )
+        let result = run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent!".to_string()], &[])
         .await;
         let err = result.unwrap_err();
         assert!(
@@ -1961,18 +1818,7 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Uppercase tags should be auto-lowercased (not rejected).
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["URGENT".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["URGENT".to_string()], &[])
         .await
         .unwrap();
 
@@ -1986,18 +1832,7 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Underscores are allowed (per user's custom choice).
-        run_update(
-            &db,
-            &notes,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            &["work_project".to_string()],
-            &[],
-            &index,
-        )
+        run_update(&db, &notes, &index, &id, None, None, None, None, &["work_project".to_string()], &[])
         .await
         .unwrap();
 

@@ -331,11 +331,11 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 tasks::run_create(
                     &task_db,
                     &notes_path,
+                    &index_path,
                     &title,
                     body.as_deref(),
                     project.as_deref(),
                     &status,
-                    &index_path,
                 )
                 .await?;
             }
@@ -359,6 +359,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 tasks::run_update(
                     &task_db,
                     &notes_path,
+                    &index_path,
                     &id,
                     title.as_deref(),
                     body.as_deref(),
@@ -366,7 +367,6 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     project.as_deref(),
                     &add_tags,
                     &remove_tags,
-                    &index_path,
                 )
                 .await?;
             }
