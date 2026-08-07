@@ -12,6 +12,8 @@
     <link rel="apple-touch-icon" href="/icon512_maskable.png">
   </head>
   <body class="min-h-dvh bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+    <!-- Fixed full-screen background so the gradient always covers the viewport in PWA mode -->
+    <div aria-hidden="true" class="fixed inset-0 bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="z-index: -10;"></div>
     <div class="min-h-dvh flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 py-12">
       <!-- Welcome Card -->
       <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
