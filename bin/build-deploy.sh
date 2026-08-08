@@ -15,19 +15,39 @@ cd web-ui
 "$REPO_ROOT/bin/tailwindcss" -i ./src/input.css -o ./src/output.css -m
 cd "$REPO_ROOT"
 
-# 2. Build the Docker image (cross-compiles hq for linux/amd64)
-echo "==> Building Docker image for linux/amd64..."
-docker build -t "${IMAGE_NAME}" -t "hq:latest" .
+# 2. Build a buildx-enabled builder image. Colima's docker CLI lacks the
+#    buildx plugin, and the legacy builder ignores the Dockerfile's
+#    --platform=linux/amd64 on the runner stage, silently producing an arm64
+#    image. BuildKit is required to honor --platform while the builder stage
+#    cross-compiles natively on arm64. We get buildx via docker/buildx-bin
+#    inside a builder container rather than installing a host plugin.
+echo "==> Building buildx builder image..."
+docker build -t hq-buildx:local - <<'EOF' >/dev/null
+# syntax=docker/dockerfile:1
+FROM docker:latest
+COPY --from=docker/buildx-bin /buildx /usr/libexec/docker/cli-plugins/docker-buildx
+EOF
 
-# 3. Stream the image to Dokku via SSH
+# 3. Build the Docker image for linux/amd64 via BuildKit (cross-compiles hq).
+#    --load makes the amd64 image available to the host daemon (shared socket)
+#    so it can be streamed to Dokku in the next step.
+echo "==> Building Docker image for linux/amd64..."
+docker run --rm \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "${REPO_ROOT}":/workspace \
+    -w /workspace \
+    hq-buildx:local \
+    docker buildx build --load -t "${IMAGE_NAME}" -t "hq:latest" .
+
+# 4. Stream the image to Dokku via SSH
 echo "==> Streaming image to Dokku..."
 docker image save "${IMAGE_NAME}" | ssh "${HQ_DOKKU_REMOTE}" git:load-image "${HQ_DOKKU_APP}" "${IMAGE_NAME}"
 
-# 4. Rebuild the app using the loaded image
+# 5. Rebuild the app using the loaded image
 echo "==> Rebuilding app..."
 ssh "${HQ_DOKKU_REMOTE}" ps:rebuild "${HQ_DOKKU_APP}"
 
-# 5. Cleanup
+# 6. Cleanup
 echo "==> Cleaning up..."
 docker rmi "${IMAGE_NAME}" 2>/dev/null || true
 
