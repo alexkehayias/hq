@@ -1,5 +1,14 @@
 use anyhow::{Context, Result};
+use std::path::Path;
 use tokio::process::Command;
+
+/// True if `path` is itself a git repository (has a `.git` entry directly in
+/// it). Used to avoid git commands walking up to an enclosing repo — e.g. when
+/// the notes dir sits inside the hq repo but was never cloned, `cd <notes> &&
+/// git add -A` would otherwise stage and push the hq repo itself.
+pub fn is_git_repo(path: &str) -> bool {
+    Path::new(path).join(".git").exists()
+}
 
 /// Clone a repo if it doesn't already exist. Logs errors instead of panicking.
 pub async fn maybe_clone_repo(deploy_key_path: &str, url: &str, storage_path: &str) {
@@ -273,6 +282,17 @@ mod tests {
             "git -c user.name=test -c user.email=test@test commit --allow-empty -m initial",
         )
         .await;
+    }
+
+    /// `is_git_repo` is true only when the dir is its own git repo, so git
+    /// commands won't walk up to an enclosing repo (e.g. the hq repo itself).
+    #[tokio::test]
+    async fn test_is_git_repo() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        assert!(!is_git_repo(path), "plain dir should not be a git repo");
+        init_repo(path).await;
+        assert!(is_git_repo(path), "repo root should be a git repo");
     }
 
     /// `head_sha` returns a 40-char SHA for a git repo, errors on non-git dir.
