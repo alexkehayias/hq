@@ -61,10 +61,15 @@ pub async fn maybe_pull_rebase(deploy_key_path: &str, path: &str) -> Result<()> 
         anyhow::bail!("git fetch failed: {}", stderr.trim());
     }
 
-    // Rebase local commits on top of origin/main.
+    // Rebase local commits on top of origin/main. Replaying commits needs a
+    // committer identity (the container has no global git config), so set it
+    // inline like sync_repo's commit does.
     let rebase = Command::new("sh")
         .arg("-c")
-        .arg(format!("cd {} && {} git rebase origin/main", path, ssh))
+        .arg(format!(
+            "cd {} && {} git -c user.name='hq sync' -c user.email='hq@localhost' rebase origin/main",
+            path, ssh
+        ))
         .output()
         .await
         .context("Failed to run git rebase")?;
@@ -209,7 +214,10 @@ pub async fn sync_repo(deploy_key_path: &str, path: &str) -> Result<Vec<String>>
 
     let rebase = Command::new("sh")
         .arg("-c")
-        .arg(format!("cd {} && {} git rebase origin/main", path, ssh))
+        .arg(format!(
+            "cd {} && {} git -c user.name='hq sync' -c user.email='hq@localhost' rebase origin/main",
+            path, ssh
+        ))
         .output()
         .await
         .context("Failed to run git rebase")?;
