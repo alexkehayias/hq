@@ -5,8 +5,9 @@
 //! `hq loop --channel <name> [--channel <other>]...` connects to one or more
 //! channel publishers (see [`crate::cli::channel`]), merges their event streams,
 //! and feeds each event into a single LLM chat conversation. The chat has
-//! access **only to the bash tool** (sandboxed to a fresh workspace per loop
-//! invocation) — not to the full tool set used by `hq chat`.
+//! access to the **bash tool** (sandboxed to a fresh workspace per loop
+//! invocation) and the **notify tool** (push notifications) — not to the full
+//! tool set used by `hq chat`.
 //!
 //! ## Event format
 //!
@@ -27,9 +28,10 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
-use crate::ai::tools::BashTool;
+use crate::ai::tools::{BashTool, NotifyTool};
 use crate::cli::channel::{sigterm, socket_path};
 use crate::openai::{BoxedToolCall, Message, Role};
+use tokio_rusqlite::Connection;
 
 /// Run the loop: subscribe to `channels`, feed events into an LLM chat.
 ///
@@ -40,10 +42,12 @@ use crate::openai::{BoxedToolCall, Message, Role};
 /// All config (storage path, LLM endpoint/key/model) is passed in by the
 /// caller (`mod.rs` run_dispatch); this module does not parse env vars.
 pub async fn run(
+    db: Connection,
     storage_path: &str,
     api_hostname: &str,
     api_key: &str,
     model: &str,
+    vapid_key_path: &str,
     channels: &[String],
     system_prompt: Option<&str>,
 ) -> Result<()> {
@@ -83,14 +87,19 @@ pub async fn run(
     }
     drop(event_tx); // close our sender so event_rx drains then returns None
 
-    // Set up chat with bash tool only (not the full 7-tool set from hq chat).
+    // Set up chat with bash and notify tools (not the full tool set from hq chat).
     let session_id = Uuid::new_v4().to_string();
     let bash_tool = BashTool::new(storage_path, &session_id);
-    let tools: Vec<BoxedToolCall> = vec![Box::new(bash_tool) as BoxedToolCall];
+    let notify_tool = NotifyTool::new(db, vapid_key_path);
+    let tools: Vec<BoxedToolCall> = vec![
+        Box::new(bash_tool) as BoxedToolCall,
+        Box::new(notify_tool) as BoxedToolCall,
+    ];
 
     let default_prompt = "You are a helpful assistant. You receive events from one or more \
          channels, each tagged as [channel-name] event. Respond to each \
-         event appropriately. You have access to a bash tool for running commands.";
+         event appropriately. You have access to a bash tool for running commands \
+         and a notify tool for sending push notifications.";
     let system_prompt = system_prompt.unwrap_or(default_prompt);
 
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)

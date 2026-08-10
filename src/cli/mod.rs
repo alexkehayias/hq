@@ -290,8 +290,19 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
-            loop_cmd::run(&storage_path, &api_hostname, &api_key, &model, &channel, prompt.as_deref())
-                .await?;
+            let vapid_key_path = env::var("HQ_VAPID_KEY_PATH").unwrap_or_else(|_| String::new());
+            let db = crate::core::db::async_db(&vec_db_path).await?;
+            loop_cmd::run(
+                db,
+                &storage_path,
+                &api_hostname,
+                &api_key,
+                &model,
+                &vapid_key_path,
+                &channel,
+                prompt.as_deref(),
+            )
+            .await?;
         }
         Some(Command::Develop { name, no_init, no_examples, base_port }) => {
             develop::run(name, no_init, no_examples, base_port).await?;
