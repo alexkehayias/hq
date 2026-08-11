@@ -170,6 +170,9 @@ fn parse_fielded_term<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputErro
             negated,
         })
     } else {
+        // A comma list is an OR of the values — matching org-ql, where
+        // comma-separated arguments to a predicate match "one or more of".
+        // AND is expressed by repeating the field: `tags:a tags:b`.
         let mut terms = values.into_iter().map(|(value, phrase)| Expr::Term {
             field: Some(field.to_string()),
             value,
@@ -177,7 +180,7 @@ fn parse_fielded_term<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputErro
             negated,
         });
         let first = terms.next().unwrap();
-        Ok(terms.fold(first, |acc, term| Expr::And(Box::new(acc), Box::new(term))))
+        Ok(terms.fold(first, |acc, term| Expr::Or(Box::new(acc), Box::new(term))))
     }
 }
 
@@ -275,8 +278,34 @@ mod tests {
     }
 
     #[test]
-    fn test_comma_separated_terms() {
+    fn test_comma_separated_terms_is_or() {
+        // Comma means OR for any field (matching org-ql). `tags:work,urgent`
+        // matches docs with tag "work" OR tag "urgent".
         let result = parse_query("tags:work,urgent").unwrap();
+        assert_eq!(
+            result,
+            Expr::Or(
+                Box::new(Expr::Term {
+                    field: Some(String::from("tags")),
+                    value: String::from("work"),
+                    phrase: false,
+                    negated: false
+                }),
+                Box::new(Expr::Term {
+                    field: Some(String::from("tags")),
+                    value: String::from("urgent"),
+                    phrase: false,
+                    negated: false
+                })
+            ),
+        );
+    }
+
+    #[test]
+    fn test_space_separated_same_field_is_and() {
+        // Repeating the field with a space means AND: `tags:a tags:b`
+        // requires the doc to have both tags.
+        let result = parse_query("tags:work tags:urgent").unwrap();
         assert_eq!(
             result,
             Expr::And(
@@ -289,6 +318,61 @@ mod tests {
                 Box::new(Expr::Term {
                     field: Some(String::from("tags")),
                     value: String::from("urgent"),
+                    phrase: false,
+                    negated: false
+                })
+            ),
+        );
+    }
+
+    #[test]
+    fn test_comma_separated_terms_single_value_field_is_or() {
+        // `status` is single-valued, so a comma list means "any of these".
+        // `todo:next,todo` should NOT become status:next AND status:todo
+        // (which could never match), but an OR of the two.
+        let result = parse_query("todo:next,todo").unwrap();
+        assert_eq!(
+            result,
+            Expr::Or(
+                Box::new(Expr::Term {
+                    field: Some(String::from("status")),
+                    value: String::from("next"),
+                    phrase: false,
+                    negated: false
+                }),
+                Box::new(Expr::Term {
+                    field: Some(String::from("status")),
+                    value: String::from("todo"),
+                    phrase: false,
+                    negated: false
+                })
+            ),
+        );
+    }
+
+    #[test]
+    fn test_comma_separated_three_values_single_value_field_is_or() {
+        let result = parse_query("todo:next,todo,done").unwrap();
+        assert_eq!(
+            result,
+            Expr::Or(
+                Box::new(Expr::Or(
+                    Box::new(Expr::Term {
+                        field: Some(String::from("status")),
+                        value: String::from("next"),
+                        phrase: false,
+                        negated: false
+                    }),
+                    Box::new(Expr::Term {
+                        field: Some(String::from("status")),
+                        value: String::from("todo"),
+                        phrase: false,
+                        negated: false
+                    })
+                )),
+                Box::new(Expr::Term {
+                    field: Some(String::from("status")),
+                    value: String::from("done"),
                     phrase: false,
                     negated: false
                 })
