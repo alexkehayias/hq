@@ -302,7 +302,7 @@ pub fn aql_to_index_query(
                 if let Some(rq) = right_query {
                     Some(Box::new(BooleanQuery::from(vec![
                         (Occur::Should, lq),
-                        (Occur::Must, rq),
+                        (Occur::Should, rq),
                     ])))
                 } else {
                     Some(Box::new(BooleanQuery::from(vec![(Occur::Should, lq)])))
@@ -524,6 +524,35 @@ mod tests {
                 title_field => title,
                 body_field => body,
                 status_field => status_val,
+            ))
+            .unwrap();
+        writer.commit().unwrap();
+
+        let reader = idx.reader_builder().reload_policy(ReloadPolicy::Manual).try_into().unwrap();
+        drop(reader);
+    }
+
+    /// Index a document with the given `tags` value, for testing
+    /// multi-value (AND) comma semantics on the tags field.
+    fn index_doc_with_tags(idx: &Index, id: &str, title: &str, body: &str, tags_val: &str) {
+        let schema = idx.schema();
+        let id_field = schema.get_field("id").unwrap();
+        let title_field = schema.get_field("title").unwrap();
+        let body_field = schema.get_field("body").unwrap();
+        let type_field = schema.get_field("type").unwrap();
+        let tags_field = schema.get_field("tags").unwrap();
+
+        let mut writer: IndexWriter = idx.writer(50_000_000).unwrap();
+        let id_term = Term::from_field_text(id_field, id);
+        writer.delete_term(id_term);
+
+        writer
+            .add_document(doc!(
+                id_field => id,
+                type_field => "note",
+                title_field => title,
+                body_field => body,
+                tags_field => tags_val,
             ))
             .unwrap();
         writer.commit().unwrap();
@@ -973,5 +1002,50 @@ mod tests {
         // `todo:` (status) is not a SQL field — Tantivy handles it.
         let expr = parse_query("todo:").unwrap();
         assert_eq!(expr_to_sql(&expr), None);
+    }
+
+    #[test]
+    fn test_comma_separated_status_is_or() {
+        // `todo:next,todo` is a single-valued field, so comma means OR:
+        // docs whose status is "next" OR "todo" should match.
+        let (_schema, idx) = build_test_index();
+        index_doc_with_status(&idx, "doc-next", "", "body", "next");
+        index_doc_with_status(&idx, "doc-todo", "", "body", "todo");
+        index_doc_with_status(&idx, "doc-done", "", "body", "done");
+
+        let results = search_top_ids(&idx, "todo:next,todo", 10);
+        assert!(results.contains(&"doc-next".to_string()), "status 'next' should match — got {:?}", results);
+        assert!(results.contains(&"doc-todo".to_string()), "status 'todo' should match — got {:?}", results);
+        assert!(!results.contains(&"doc-done".to_string()), "status 'done' should NOT match — got {:?}", results);
+    }
+
+    #[test]
+    fn test_comma_separated_tags_is_or() {
+        // Comma means OR for any field (matching org-ql): a doc with
+        // tag "work" OR tag "urgent" should match `tags:work,urgent`.
+        let (_schema, idx) = build_test_index();
+        index_doc_with_tags(&idx, "doc-both", "", "irrelevant", "work,urgent");
+        index_doc_with_tags(&idx, "doc-one", "", "irrelevant", "work,other");
+        index_doc_with_tags(&idx, "doc-none", "", "irrelevant", "unrelated");
+
+        let results = search_top_ids(&idx, "tags:work,urgent", 10);
+        assert!(results.contains(&"doc-both".to_string()), "doc with both tags should match — got {:?}", results);
+        assert!(results.contains(&"doc-one".to_string()), "doc with one of the tags should match — got {:?}", results);
+        assert!(!results.contains(&"doc-none".to_string()), "doc with neither tag should NOT match — got {:?}", results);
+    }
+
+    #[test]
+    fn test_space_separated_tags_is_and() {
+        // Repeating the field with a space means AND: `tags:work tags:urgent`
+        // requires a doc to have both tags.
+        let (_schema, idx) = build_test_index();
+        index_doc_with_tags(&idx, "doc-both", "", "irrelevant", "work,urgent");
+        index_doc_with_tags(&idx, "doc-one", "", "irrelevant", "work,other");
+        index_doc_with_tags(&idx, "doc-none", "", "irrelevant", "unrelated");
+
+        let results = search_top_ids(&idx, "tags:work tags:urgent", 10);
+        assert!(results.contains(&"doc-both".to_string()), "doc with both tags should match — got {:?}", results);
+        assert!(!results.contains(&"doc-one".to_string()), "doc with only one tag should NOT match — got {:?}", results);
+        assert!(!results.contains(&"doc-none".to_string()), "doc with neither tag should NOT match — got {:?}", results);
     }
 }
