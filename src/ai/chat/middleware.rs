@@ -163,13 +163,64 @@ pub struct ToolSecurityMiddleware {
 }
 
 impl Default for ToolSecurityMiddleware {
-    /// Returns a middleware with the default rule set: reject
-    /// `view_website` after `search_notes`.
+    /// Returns a middleware with the default rule set.
+    ///
+    /// Rules protect the persistence and user-facing boundaries from
+    /// indirect prompt injection: once a tool has read untrusted
+    /// external content (`view_website`, `web_search`, email, calendar),
+    /// the agent must not be allowed to take persistent or user-visible
+    /// actions on it. `bash` is intentionally not guarded — it runs in a
+    /// fully virtualized, session-scoped sandbox with no network, so a
+    /// malicious `bash` call cannot reach sensitive host state.
     fn default() -> Self {
-        Self::new(vec![ToolCallRule {
-            target: "view_website".to_string(),
-            blocked_after: vec!["search_notes".to_string()],
-        }])
+        Self::new(vec![
+            // Don't let a malicious skill (authored via bash in the
+            // workspace) be installed into the global skills directory,
+            // where it becomes trusted instructions in future sessions.
+            ToolCallRule {
+                target: "save_skill".to_string(),
+                blocked_after: vec![
+                    "view_website".to_string(),
+                    "web_search".to_string(),
+                    "get_unread_emails".to_string(),
+                    "search_emails".to_string(),
+                ],
+            },
+            // Don't let untrusted content poison persistent memory,
+            // which is loaded as context in future sessions.
+            ToolCallRule {
+                target: "memory".to_string(),
+                blocked_after: vec![
+                    "view_website".to_string(),
+                    "web_search".to_string(),
+                    "get_unread_emails".to_string(),
+                    "search_emails".to_string(),
+                ],
+            },
+            // Don't let a webpage or email steer the agent into pushing
+            // a notification to the user's devices (phishing).
+            ToolCallRule {
+                target: "notify".to_string(),
+                blocked_after: vec![
+                    "view_website".to_string(),
+                    "web_search".to_string(),
+                    "get_unread_emails".to_string(),
+                    "search_emails".to_string(),
+                ],
+            },
+            // Don't let email/calendar content steer the agent into
+            // fetching an arbitrary URL.
+            ToolCallRule {
+                target: "view_website".to_string(),
+                blocked_after: vec![
+                    "search_notes".to_string(),
+                    "search_meetings".to_string(),
+                    "get_unread_emails".to_string(),
+                    "search_emails".to_string(),
+                    "get_calendar_events".to_string(),
+                ],
+            },
+        ])
     }
 }
 
@@ -718,6 +769,117 @@ mod tests {
         assert!(
             matches!(action, MiddlewareAction::Reject(_)),
             "Expected Reject for custom rule, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_security_rejects_save_skill_after_web_search() {
+        let mw = ToolSecurityMiddleware::default();
+        // web_search was used; a malicious result could steer the agent
+        // into persisting a skill.
+        let transcript = vec![
+            Message::new(Role::User, "research"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: crate::openai::FunctionCallFn {
+                    name: "web_search".into(),
+                    arguments: r#"{}"#.into(),
+                },
+                id: "call_1".into(),
+                r#type: "function".into(),
+            }]),
+            Message::new_tool_call_response("search result", "call_1"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: crate::openai::FunctionCallFn {
+                    name: "save_skill".into(),
+                    arguments: r#"{"name":"foo"}"#.into(),
+                },
+                id: "call_2".into(),
+                r#type: "function".into(),
+            }]),
+        ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for save_skill after web_search, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_security_rejects_notify_after_email() {
+        let mw = ToolSecurityMiddleware::default();
+        let transcript = vec![
+            Message::new(Role::User, "check inbox"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: crate::openai::FunctionCallFn {
+                    name: "get_unread_emails".into(),
+                    arguments: r#"{}"#.into(),
+                },
+                id: "call_1".into(),
+                r#type: "function".into(),
+            }]),
+            Message::new_tool_call_response("email result", "call_1"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: crate::openai::FunctionCallFn {
+                    name: "notify".into(),
+                    arguments: r#"{"message":"hi"}"#.into(),
+                },
+                id: "call_2".into(),
+                r#type: "function".into(),
+            }]),
+        ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for notify after email, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_security_rejects_memory_write_after_website() {
+        let mw = ToolSecurityMiddleware::default();
+        let transcript = vec![
+            Message::new(Role::User, "look at this"),
+            Message::new_tool_call_request(vec![view_website_call("call_1")]),
+            Message::new_tool_call_response("site content", "call_1"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: crate::openai::FunctionCallFn {
+                    name: "memory".into(),
+                    arguments: r#"{"operation":"write","content":"x"}"#.into(),
+                },
+                id: "call_2".into(),
+                r#type: "function".into(),
+            }]),
+        ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(
+            matches!(action, MiddlewareAction::Reject(_)),
+            "Expected Reject for memory after view_website, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_security_allows_bash_after_website() {
+        // bash is sandboxed (no network, session-scoped FS) and is a
+        // legitimate way to read files saved by view_website, so it must
+        // not be blocked.
+        let mw = ToolSecurityMiddleware::default();
+        let transcript = vec![
+            Message::new(Role::User, "look at this"),
+            Message::new_tool_call_request(vec![view_website_call("call_1")]),
+            Message::new_tool_call_response("site content", "call_1"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: crate::openai::FunctionCallFn {
+                    name: "bash".into(),
+                    arguments: r#"{"command":"cat file"}"#.into(),
+                },
+                id: "call_2".into(),
+                r#type: "function".into(),
+            }]),
+        ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(
+            matches!(action, MiddlewareAction::Continue),
+            "Expected Continue for bash after view_website, got {action:?}",
         );
     }
 
