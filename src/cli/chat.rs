@@ -3,7 +3,9 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::env;
 
-use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
+use crate::ai::chat::{
+    ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
+};
 use crate::ai::tools::{
     CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
     WebSearchTool,
@@ -77,7 +79,11 @@ pub async fn run(vec_db_path: &str) -> Result<()> {
             "You are a helpful assistant.",
         )])
         .tools(tools)
-        .middleware(vec![Box::new(InvisibleCharFilter)])
+        .middleware(vec![
+            Box::new(InfiniteLoopDetector::new(3)),
+            Box::new(ToolSecurityMiddleware::default()),
+            Box::new(InvisibleCharFilter),
+        ])
         .build();
 
     loop {
