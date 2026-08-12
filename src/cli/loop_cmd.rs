@@ -27,7 +27,9 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
+use crate::ai::chat::{
+    ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
+};
 use crate::ai::tools::{BashTool, NotifyTool};
 use crate::cli::channel::{sigterm, socket_path};
 use crate::openai::{BoxedToolCall, Message, Role};
@@ -105,7 +107,11 @@ pub async fn run(
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)
         .transcript(vec![Message::new(Role::System, system_prompt)])
         .tools(tools)
-        .middleware(vec![Box::new(InvisibleCharFilter)])
+        .middleware(vec![
+            Box::new(InfiniteLoopDetector::new(3)),
+            Box::new(ToolSecurityMiddleware::default()),
+            Box::new(InvisibleCharFilter),
+        ])
         .build();
 
     // Main loop: read merged events, send to chat, print responses.

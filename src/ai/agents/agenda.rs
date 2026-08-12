@@ -1,6 +1,8 @@
 use tokio_rusqlite::Connection;
 
-use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
+use crate::ai::chat::{
+    ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
+};
 use crate::ai::tools::{CalendarTool, TasksDueTodayTool, TasksScheduledTodayTool};
 use crate::openai::{BoxedToolCall, Message, Role};
 
@@ -56,7 +58,11 @@ Avoid verbose descriptions. Focus on what's most important for the user to know.
             Some(vec![String::from("background"), String::from("agenda")]),
         )
         .tools(tools)
-        .middleware(vec![Box::new(InvisibleCharFilter)])
+        .middleware(vec![
+            Box::new(InfiniteLoopDetector::new(3)),
+            Box::new(ToolSecurityMiddleware::default()),
+            Box::new(InvisibleCharFilter),
+        ])
         .build();
 
     let response = chat
