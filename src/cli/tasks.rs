@@ -26,15 +26,24 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
     let slug = slugify(project_name)?;
     let project_id = Uuid::new_v4().to_string();
     let today = Local::now().format("%Y-%m-%d");
-    let filename = format!("{today}--project-{slug}.org");
+
+    // Special files (capture, refile, personal, work) are addressed by their
+    // bare name with no date prefix — e.g. `work.org` rather than
+    // `2026-08-11--project-work.org`.
+    let special = projects::db::is_special_file(project_name);
+    let filename = if special {
+        format!("{project_name}.org")
+    } else {
+        format!("{today}--project-{slug}.org")
+    };
     let full_path = format!("{notes_path}/{filename}");
 
     let content = org::Document::builder()
         .property("ID", &project_id)
         .title(project_name)
-        .category(&slug)
+        .category(if special { project_name } else { &slug })
         .date(&today.to_string())
-        .filetags("private project")
+        .filetags(if special { "private inbox" } else { "private project" })
         .build()
         .to_string();
     fs::write(&full_path, &content)
@@ -273,21 +282,18 @@ pub async fn run_list(
     status: Option<&str>,
 ) -> Result<()> {
     let tasks = if let Some(project_ref) = project {
-        let (filenames, display_prefix) = match project_ref {
-            "refile" | "capture" => {
-                let filename = format!("{project_ref}.org");
-                (vec![filename], None)
-            }
-            _ => {
-                let path = projects::db::find_project_file(db, notes_path, project_ref).await?
-                    .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
-                let filename = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(project_ref)
-                    .to_string();
-                (vec![filename], None)
-            }
+        let (filenames, display_prefix) = if projects::db::is_special_file(project_ref) {
+            let filename = format!("{project_ref}.org");
+            (vec![filename], None)
+        } else {
+            let path = projects::db::find_project_file(db, notes_path, project_ref).await?
+                .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(project_ref)
+                .to_string();
+            (vec![filename], None)
         };
         list_tasks_from_files(db, &filenames, status, display_prefix).await?
     } else {
@@ -1100,6 +1106,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_special_file_personal() {
+        let (db, _dir) = test_db().await;
+        db.call(|conn| {
+            insert_task(conn, "p1", "personal.org", "Personal task", "todo");
+            insert_task(conn, "w1", "work.org", "Work task", "todo");
+            insert_task(conn, "t1", "capture.org", "Capture task", "todo");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // personal and work are special files — listing them should target
+        // their bare filenames, not require a dated --project-* registration.
+        let result = run_list(&db, "", Some("personal"), None).await;
+        assert!(result.is_ok());
+        let result = run_list(&db, "", Some("work"), None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_list_refile_filter_by_status() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
@@ -1629,6 +1655,136 @@ Need to check the middleware changes.
         assert!(project_content.contains("Review PR"));
         assert!(project_content.contains("middleware changes"));
         assert_eq!(headline_count(&project_path), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Special files (capture, refile, personal, work) — bare filenames with
+    // no date. Creating/refiling into these must write to `{name}.org`, not
+    // create a new dated `--project-{slug}.org` file.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_create_into_existing_special_file() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        // Pre-existing special file with no date in its filename
+        let work_path = std::path::Path::new(&notes).join("work.org");
+        fs::write(
+            &work_path,
+            "\
+:PROPERTIES:
+:ID:       work-file
+:END:
+#+TITLE: work
+
+* TODO Existing task
+:PROPERTIES:
+:ID:       existing-1
+:END:
+",
+        )
+        .unwrap();
+
+        run_create(&db, &notes, &index, "New work task", None, Some("work"), "TODO")
+            .await
+            .unwrap();
+
+        // No new dated project file — only work.org exists, with both tasks
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let path = entries[0].as_ref().unwrap().path();
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "work.org");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("New work task"));
+        assert!(content.contains("Existing task"));
+        assert_eq!(headline_count(&path), 2);
+    }
+
+    #[tokio::test]
+    async fn test_create_special_file_creates_bare_name() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        run_create(&db, &notes, &index, "Personal task", None, Some("personal"), "TODO")
+            .await
+            .unwrap();
+
+        // Special file is created with its bare name, not a dated --project-* name
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let path = entries[0].as_ref().unwrap().path();
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "personal.org");
+        assert!(!path.to_str().unwrap().contains("--project-"));
+    }
+
+    #[tokio::test]
+    async fn test_refile_to_existing_special_file() {
+        let (db, _dir, notes, _index) = test_env().await;
+
+        // Task in capture.org
+        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        fs::write(
+            &capture_path,
+            "\
+* TODO Refile me
+:PROPERTIES:
+:ID:       special-task
+:END:
+",
+        )
+        .unwrap();
+
+        // Pre-existing work.org
+        let work_path = std::path::Path::new(&notes).join("work.org");
+        fs::write(
+            &work_path,
+            "\
+* TODO Work task
+:PROPERTIES:
+:ID:       work-task
+:END:
+",
+        )
+        .unwrap();
+
+        run_refile(&db, &notes, "special-task", "work").await.unwrap();
+
+        // Task removed from capture.org, appended to work.org
+        let capture_content = fs::read_to_string(&capture_path).unwrap();
+        assert!(!capture_content.contains("special-task"));
+        let work_content = fs::read_to_string(&work_path).unwrap();
+        assert!(work_content.contains("special-task"));
+        assert!(work_content.contains("Refile me"));
+
+        // No new dated project file created
+        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_refile_creates_special_file_when_missing() {
+        let (db, _dir, notes, _index) = test_env().await;
+
+        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        fs::write(
+            &capture_path,
+            "\
+* TODO Refile me
+:PROPERTIES:
+:ID:       special-task
+:END:
+",
+        )
+        .unwrap();
+
+        run_refile(&db, &notes, "special-task", "personal").await.unwrap();
+
+        // personal.org created with bare name (no date prefix)
+        let personal_path = std::path::Path::new(&notes).join("personal.org");
+        assert!(personal_path.exists());
+        let content = fs::read_to_string(&personal_path).unwrap();
+        assert!(content.contains("special-task"));
+        assert!(content.contains("Refile me"));
+        assert!(!personal_path.to_str().unwrap().contains("--project-"));
     }
 
     // -----------------------------------------------------------------------
