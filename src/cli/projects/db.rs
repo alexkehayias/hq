@@ -31,12 +31,36 @@ fn slugify(s: &str) -> String {
         .to_string()
 }
 
+/// Special inbox/project files addressed by their bare name rather than by
+/// the dated `--project-{slug}.org` scheme. Their filenames carry no date
+/// (e.g. `capture.org`, `work.org`, `personal.org`).
+pub const SPECIAL_FILES: &[&str] = &["capture", "refile", "personal", "work"];
+
+/// Whether `name` refers to a special inbox/project file.
+pub fn is_special_file(name: &str) -> bool {
+    SPECIAL_FILES.contains(&name)
+}
+
 /// Find a project file by ID, title, or name slug using the database.
 ///
 /// Queries `note_meta` for project-type entries and matches the given reference
 /// against the project's UUID, title, or filename (via slug). Returns the full
 /// path to the project file, or `None` if no match is found.
+///
+/// Special files (capture, refile, personal, work) are resolved directly by
+/// their bare filename (`{name}.org`) when present on disk, since they carry
+/// no date in their filename and are not registered under the
+/// `--project-{slug}.org` scheme.
 pub async fn find_project_file(db: &Connection, notes_path: &str, project_ref: &str) -> Result<Option<PathBuf>> {
+    if is_special_file(project_ref) {
+        let path = PathBuf::from(format!("{notes_path}/{project_ref}.org"));
+        if path.exists() {
+            return Ok(Some(path));
+        }
+        // Not on disk yet — caller should create it as a special file.
+        return Ok(None);
+    }
+
     let projects = db
         .call(|conn| {
             let mut stmt = conn.prepare(
