@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -18,6 +21,78 @@ use crate::org;
 /// SOMEDAY is intentionally excluded — only DONE and CANCELED mark a task as
 /// closed (per user requirement).
 const CLOSED_STATUSES: &[&str] = &["DONE", "CANCELED"];
+
+/// Write `contents` to `path` atomically: write a temp file in the same
+/// directory, then `rename` it over the target. Because rename is atomic on
+/// the same filesystem, a concurrent reader — most importantly the git sync's
+/// `git add -A`, which runs every few minutes — can never observe a
+/// half-written note file. This is what caused the tail corruption seen when a
+/// plain truncate+write raced with the git sync.
+pub async fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("note.org");
+    let tmp_path = dir.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&tmp_path, contents).await?;
+    fs::rename(&tmp_path, path).await?;
+    Ok(())
+}
+
+/// Counter to keep atomic-write temp names unique within this process.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Process-global registry of per-path async mutexes, used to serialize
+/// read-modify-write mutations to the same note file so concurrent operations
+/// (e.g. several refiles from the same file, or a refile racing an update)
+/// don't lose each other's changes.
+static FILE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+/// Run `f` while holding exclusive locks for each path in `paths`. Locks are
+/// acquired in sorted order so concurrent multi-file operations can't deadlock.
+pub async fn with_file_locks<F, Fut>(paths: &[PathBuf], f: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = Result<()>> + Send,
+{
+    let map = FILE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    sorted.dedup();
+
+    // Collect the Arc handles first, then acquire guards. `locks` is declared
+    // before `guards` so the guards (which borrow it) drop first.
+    let mut locks: Vec<Arc<tokio::sync::Mutex<()>>> = Vec::with_capacity(sorted.len());
+    for path in &sorted {
+        let lock = {
+            let mut m = map.lock().unwrap();
+            m.entry(path.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        locks.push(lock);
+    }
+    let mut guards = Vec::with_capacity(locks.len());
+    for lock in &locks {
+        guards.push(lock.lock().await);
+    }
+    f().await
+}
+
+/// Run `f` while holding an exclusive lock for `path`.
+pub async fn with_file_lock<F, Fut>(path: &Path, f: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = Result<()>> + Send,
+{
+    with_file_locks(&[path.to_path_buf()], f).await
+}
 
 /// Format the current local time as an inactive org timestamp:
 /// `[YYYY-MM-DD Ddd HH:MM]`.
@@ -498,14 +573,31 @@ pub async fn update_task_in_file(
     add_tags: &[String],
     remove_tags: &[String],
 ) -> Result<()> {
-    let location = find_task_in_file(file_path, id).await?;
+    with_file_lock(file_path, || async {
+        let location = find_task_in_file(file_path, id).await?;
+        apply_update(&location, id, title, body, status, add_tags, remove_tags).await
+    })
+    .await
+}
+
+/// Rebuild the headline for a located task and write the file back atomically.
+/// Callers must hold the file lock for `location.path`.
+async fn apply_update(
+    location: &TaskLocation,
+    id: &str,
+    title: Option<&str>,
+    body: Option<&str>,
+    status: Option<&str>,
+    add_tags: &[String],
+    remove_tags: &[String],
+) -> Result<()> {
     let new_title = title.unwrap_or(&location.current_title);
     let new_body = body.unwrap_or(&location.current_body);
     let status = status.map(|s| s.to_uppercase());
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
     let (new_closed, new_logbook) =
-        compute_state_transition(&location, new_status);
+        compute_state_transition(location, new_status);
     let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
 
     let new_headline = build_updated_headline(
@@ -523,11 +615,9 @@ pub async fn update_task_in_file(
         before = &location.content[..location.range.start],
         after = &location.content[location.range.end..]
     );
-    fs::write(&location.path, &new_content)
+    atomic_write(&location.path, &new_content)
         .await
-        .context("Failed to write updated task file")?;
-
-    Ok(())
+        .context("Failed to write updated task file")
 }
 
 /// Update a task by UUID, optionally scoped to a specific file.
@@ -561,34 +651,13 @@ pub async fn update_task(
     } else {
         find_task(notes_path, id).await?
     };
-    let new_title = title.unwrap_or(&location.current_title);
-    let new_body = body.unwrap_or(&location.current_body);
-    let status = status.map(|s| s.to_uppercase());
-    let new_status = status.as_deref().unwrap_or(&location.current_status);
-
-    let (new_closed, new_logbook) = compute_state_transition(&location, new_status);
-    let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
-
-    let new_headline = build_updated_headline(
-        id,
-        new_title,
-        new_body,
-        new_status,
-        location.current_level,
-        new_closed.as_deref(),
-        &new_logbook,
-        &new_tags,
-    );
-    let new_content = format!(
-        "{before}{new_headline}{after}",
-        before = &location.content[..location.range.start],
-        after = &location.content[location.range.end..]
-    );
-    fs::write(&location.path, &new_content)
-        .await
-        .context("Failed to write updated task file")?;
-
-    Ok(())
+    let path = location.path.clone();
+    with_file_lock(&path, || async {
+        // Re-read under the lock so a concurrent writer can't be overwritten.
+        let location = find_task_in_file(&path, id).await?;
+        apply_update(&location, id, title, body, status, add_tags, remove_tags).await
+    })
+    .await
 }
 
 /// Build a full org-mode document string for a standalone task.

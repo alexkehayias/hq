@@ -46,7 +46,7 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
         .filetags(if special { "private inbox" } else { "private project" })
         .build()
         .to_string();
-    fs::write(&full_path, &content)
+    orgmode::atomic_write(std::path::Path::new(&full_path), &content)
         .await
         .context("Failed to create project file")?;
 
@@ -103,6 +103,7 @@ pub async fn run_create(
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
     let status_upper = status.to_uppercase();
+    let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
 
     let file_path = if let Some(project_name) = project {
         // Look up existing project in DB, or create a new project file
@@ -111,44 +112,49 @@ pub async fn run_create(
             None => create_project_file(db, notes_path, project_name).await?,
         };
         println!("Created project file: {}", project_path.display());
-        let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
-        let mut project_content = fs::read_to_string(&project_path).await?;
-        if !project_content.ends_with('\n') {
+        orgmode::with_file_lock(&project_path, || async {
+            let mut project_content = fs::read_to_string(&project_path).await?;
+            if !project_content.ends_with('\n') {
+                project_content.push('\n');
+            }
+            project_content.push_str(&headline);
             project_content.push('\n');
-        }
-        project_content.push_str(&headline);
-        project_content.push('\n');
-        fs::write(&project_path, &project_content)
-            .await
-            .context("Failed to write project file")?;
+            orgmode::atomic_write(&project_path, &project_content)
+                .await
+                .context("Failed to write project file")
+        })
+        .await?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
         project_path
     } else {
         // Standalone tasks go into the capture.org inbox so the default
         // `tasks list` (which scans capture.org) finds them.
         let capture_path = PathBuf::from(format!("{notes_path}/capture.org"));
-        let mut content = if capture_path.exists() {
-            fs::read_to_string(&capture_path).await?
-        } else {
-            let capture_id = Uuid::new_v4().to_string();
-            let today = Local::now().format("%Y-%m-%d");
-            org::Document::builder()
-                .property("ID", &capture_id)
-                .title("Capture")
-                .category("capture")
-                .date(&today.to_string())
-                .filetags("private inbox")
-                .build()
-                .to_string()
-        };
-        if !content.ends_with('\n') {
+        orgmode::with_file_lock(&capture_path, || async {
+            let mut content = if capture_path.exists() {
+                fs::read_to_string(&capture_path).await?
+            } else {
+                let capture_id = Uuid::new_v4().to_string();
+                let today = Local::now().format("%Y-%m-%d");
+                org::Document::builder()
+                    .property("ID", &capture_id)
+                    .title("Capture")
+                    .category("capture")
+                    .date(&today.to_string())
+                    .filetags("private inbox")
+                    .build()
+                    .to_string()
+            };
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&headline);
             content.push('\n');
-        }
-        content.push_str(&orgmode::build_headline(&id, title, body, &status_upper, 1));
-        content.push('\n');
-        fs::write(&capture_path, &content)
-            .await
-            .context("Failed to write task file")?;
+            orgmode::atomic_write(&capture_path, &content)
+                .await
+                .context("Failed to write task file")
+        })
+        .await?;
         println!(
             "Created task '{title}' (id: {id}, file: {})",
             capture_path.display()
@@ -207,7 +213,9 @@ pub async fn run_update(
 /// source, and appends it to the target project file (creating the project
 /// file if it doesn't exist yet).
 pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &str) -> Result<()> {
-    let location = orgmode::find_task(notes_path, id).await?;
+    // Resolve which file holds the task (searches all notes) so we know which
+    // file to lock before doing the read-modify-write.
+    let source_path = orgmode::find_task(notes_path, id).await?.path;
 
     // Look up existing project in DB, or create a new project file
     let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
@@ -215,41 +223,51 @@ pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &s
         None => create_project_file(db, notes_path, project).await?,
     };
 
-    if location.path == target_path {
+    if source_path == target_path {
         anyhow::bail!("Task is already in project '{project}'");
     }
 
-    // Extract the raw headline text (preserves all org-mode structure)
-    let headline_text = &location.content[location.range.start..location.range.end];
+    orgmode::with_file_locks(
+        &[source_path.clone(), target_path.clone()],
+        || async {
+            // Re-read the task under the lock so a concurrent refile can't be
+            // overwritten (lost update) and the git sync never sees a partial file.
+            let location = orgmode::find_task_in_file(&source_path, id).await?;
 
-    // Remove the headline from the source file
-    let before = &location.content[..location.range.start];
-    let after = &location.content[location.range.end..];
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    let new_source = format!("{before}{after}");
-    fs::write(&location.path, &new_source)
-        .await
-        .context("Failed to write source file after refile")?;
+            // Extract the raw headline text (preserves all org-mode structure)
+            let headline_text = &location.content[location.range.start..location.range.end];
 
-    // Append the raw headline verbatim to the target project file
-    let mut target_content = fs::read_to_string(&target_path).await?;
-    if !target_content.ends_with('\n') {
-        target_content.push('\n');
-    }
-    target_content.push_str(headline_text);
-    target_content.push('\n');
-    fs::write(&target_path, &target_content)
-        .await
-        .context("Failed to write target project file")?;
+            // Remove the headline from the source file
+            let before = &location.content[..location.range.start];
+            let after = &location.content[location.range.end..];
+            let after = after.strip_prefix('\n').unwrap_or(after);
+            let new_source = format!("{before}{after}");
+            orgmode::atomic_write(&location.path, &new_source)
+                .await
+                .context("Failed to write source file after refile")?;
 
-    println!(
-        "Refiled task {id} ('{}') from {} to {}",
-        location.current_title,
-        location.path.display(),
-        target_path.display()
-    );
+            // Append the raw headline verbatim to the target project file
+            let mut target_content = fs::read_to_string(&target_path).await?;
+            if !target_content.ends_with('\n') {
+                target_content.push('\n');
+            }
+            target_content.push_str(headline_text);
+            target_content.push('\n');
+            orgmode::atomic_write(&target_path, &target_content)
+                .await
+                .context("Failed to write target project file")?;
 
-    Ok(())
+            println!(
+                "Refiled task {id} ('{}') from {} to {}",
+                location.current_title,
+                location.path.display(),
+                target_path.display()
+            );
+
+            Ok(())
+        },
+    )
+    .await
 }
 
 pub async fn run_delete(
@@ -259,16 +277,25 @@ pub async fn run_delete(
     id: &str,
 ) -> Result<()> {
     let location = orgmode::find_task(notes_path, id).await?;
+    let path = location.path.clone();
 
-    let before = &location.content[..location.range.start];
-    let after = &location.content[location.range.end..];
-    // Remove one trailing newline if present to avoid blank-line gaps
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    let new_content = format!("{before}{after}");
-    fs::write(&location.path, &new_content)
-        .await
-        .context("Failed to write project file after deletion")?;
-    println!("Deleted task {id} from {}", location.path.display());
+    orgmode::with_file_lock(&path, || async {
+        // Re-read under the lock so a concurrent writer can't be overwritten.
+        let location = orgmode::find_task_in_file(&path, id).await?;
+
+        let before = &location.content[..location.range.start];
+        let after = &location.content[location.range.end..];
+        // Remove one trailing newline if present to avoid blank-line gaps
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        let new_content = format!("{before}{after}");
+        orgmode::atomic_write(&location.path, &new_content)
+            .await
+            .context("Failed to write project file after deletion")?;
+        println!("Deleted task {id} from {}", location.path.display());
+
+        Ok(())
+    })
+    .await?;
 
     remove_task_from_indexes(db, index_path, id).await?;
 
@@ -1655,6 +1682,76 @@ Need to check the middleware changes.
         assert!(project_content.contains("Review PR"));
         assert!(project_content.contains("middleware changes"));
         assert_eq!(headline_count(&project_path), 1);
+    }
+
+    /// Concurrent refiles of several tasks from the same capture.org must not
+    /// lose updates: every task ends up in the project exactly once, and none
+    /// remain behind in the source (regression test for the lost-update / task
+    /// duplication seen when refiles raced the git sync).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_refile_concurrent_from_same_file_no_duplication() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        // Create several standalone tasks in capture.org.
+        for i in 0..8 {
+            run_create(&db, &notes, &index, &format!("Task {i}"), Some("body"), None, "TODO")
+                .await
+                .unwrap();
+        }
+        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture = fs::read_to_string(&capture_path).unwrap();
+        // Skip the document-level :ID: (first) and collect each task's ID.
+        let ids: Vec<String> = capture
+            .match_indices(":ID:")
+            .skip(1)
+            .filter_map(|(i, _)| {
+                let rest = &capture[i + ":ID:".len()..];
+                let line = rest.lines().next()?.trim().to_string();
+                Some(line)
+            })
+            .collect();
+        assert_eq!(ids.len(), 8, "expected 8 task IDs, got: {ids:?}");
+
+        // Refile all of them concurrently to the same project.
+        let mut set = tokio::task::JoinSet::new();
+        for id in ids.clone() {
+            let db = db.clone();
+            let notes = notes.clone();
+            set.spawn(async move {
+                run_refile(&db, &notes, &id, "errands").await.unwrap();
+            });
+        }
+        while let Some(_) = set.join_next().await {}
+
+        // Every task must appear in the project file exactly once.
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-errands") { Some(p) } else { None }
+            })
+            .next()
+            .expect("errands project file should exist");
+        let project = fs::read_to_string(&project_path).unwrap();
+        for id in &ids {
+            assert_eq!(
+                project.matches(id).count(),
+                1,
+                "task {id} should appear exactly once in project, got:\n{project}"
+            );
+        }
+        assert_eq!(headline_count(&project_path), 8);
+
+        // None should remain in capture.org (no lost updates).
+        let capture = fs::read_to_string(&capture_path).unwrap();
+        for id in &ids {
+            assert!(
+                !capture.contains(id.as_str()),
+                "task {id} should have been removed from capture.org, got:\n{capture}"
+            );
+        }
+        assert_eq!(headline_count(&capture_path), 0);
     }
 
     // -----------------------------------------------------------------------
