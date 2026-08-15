@@ -271,16 +271,18 @@ pub async fn run_refile(
                 target_path.display()
             );
 
+            // Re-index both files so note_meta and full-text search reflect the
+            // move: the task now lives in target, not source. Done under the
+            // file locks so concurrent refiles sharing these files also
+            // serialize their Tantivy index writes (an IndexWriter is exclusive
+            // per directory, so parallel writers would panic on LockBusy).
+            index_single_file(db, index_path, source_path.clone()).await?;
+            index_single_file(db, index_path, target_path.clone()).await?;
+
             Ok(())
         },
     )
     .await?;
-
-    // Re-index both files so note_meta and full-text search reflect the move:
-    // the task now lives in target, not source. Without this, `find_task`'s
-    // index lookup would still point at the source file.
-    index_single_file(db, index_path, source_path).await?;
-    index_single_file(db, index_path, target_path).await?;
 
     Ok(())
 }
