@@ -1881,13 +1881,18 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_refile_to_existing_special_file() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Task in capture.org
         let capture_path = std::path::Path::new(&notes).join("capture.org");
         fs::write(
             &capture_path,
             "\
+:PROPERTIES:
+:ID:       capture
+:END:
+#+TITLE: capture
+
 * TODO Refile me
 :PROPERTIES:
 :ID:       special-task
@@ -1895,12 +1900,18 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, capture_path.clone()).await.unwrap();
 
         // Pre-existing work.org
         let work_path = std::path::Path::new(&notes).join("work.org");
         fs::write(
             &work_path,
             "\
+:PROPERTIES:
+:ID:       work-file
+:END:
+#+TITLE: work
+
 * TODO Work task
 :PROPERTIES:
 :ID:       work-task
@@ -1909,7 +1920,7 @@ Need to check the middleware changes.
         )
         .unwrap();
 
-        run_refile(&db, &notes, "special-task", "work").await.unwrap();
+        run_refile(&db, &notes, &index, "special-task", "work").await.unwrap();
 
         // Task removed from capture.org, appended to work.org
         let capture_content = fs::read_to_string(&capture_path).unwrap();
@@ -1925,12 +1936,17 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_refile_creates_special_file_when_missing() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         let capture_path = std::path::Path::new(&notes).join("capture.org");
         fs::write(
             &capture_path,
             "\
+:PROPERTIES:
+:ID:       capture
+:END:
+#+TITLE: capture
+
 * TODO Refile me
 :PROPERTIES:
 :ID:       special-task
@@ -1938,8 +1954,9 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, capture_path.clone()).await.unwrap();
 
-        run_refile(&db, &notes, "special-task", "personal").await.unwrap();
+        run_refile(&db, &notes, &index, "special-task", "personal").await.unwrap();
 
         // personal.org created with bare name (no date prefix)
         let personal_path = std::path::Path::new(&notes).join("personal.org");
