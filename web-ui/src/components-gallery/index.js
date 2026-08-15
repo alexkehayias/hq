@@ -135,20 +135,18 @@ function stateViewDemo(c) {
       State-driven slot switcher. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: state (loading|error|empty|content)</code>
     </p>
     <div class="space-y-4">
-      <div>
-        <label class="text-sm text-gray-600 dark:text-gray-400">State:
-          <select id="state-view-select" class="ml-2 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
-            <option value="loading">loading</option>
-            <option value="error">error</option>
-            <option value="empty">empty</option>
-            <option value="content" selected>content</option>
-          </select>
-        </label>
+      <div class="max-w-xs">
+        <hq-select id="state-view-select" label="State">
+          <option value="loading">loading</option>
+          <option value="error">error</option>
+          <option value="empty">empty</option>
+          <option value="content" selected>content</option>
+        </hq-select>
       </div>
       <hq-state-view id="state-demo" state="content">
         <p>This is the content slot.</p>
         <div slot="error" class="text-center py-8">
-          <hq-icon name="alert" size="lg" tone="text-red-400"></hq-icon>
+          <div class="flex justify-center"><hq-icon name="alert" size="lg" tone="text-red-400"></hq-icon></div>
           <p class="mt-2 text-red-600 dark:text-red-400">Something went wrong.</p>
           <hq-button variant="secondary" class="mt-4">Retry</hq-button>
         </div>
@@ -158,9 +156,39 @@ function stateViewDemo(c) {
   `;
   const sel = c.querySelector('#state-view-select');
   const sv = c.querySelector('#state-demo');
-  sel.addEventListener('change', () => sv.setAttribute('state', sel.value));
+  sel.addEventListener('change', (e) =>
+    sv.setAttribute('state', e.detail.value),
+  );
 }
 sections.push({ title: 'hq-state-view', render: stateViewDemo });
+
+function selectDemo(c) {
+  c.innerHTML = `
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100"><hq-select></h2>
+    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+      Styled dropdown. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: label, value, disabled</code>
+      <span class="ml-2">Emits <code>change</code> with <code>detail.value</code>.</span>
+    </p>
+    <div class="max-w-xs space-y-4">
+      <hq-select id="select-demo" label="Pick a fruit" value="apple">
+        <option value="apple">Apple</option>
+        <option value="banana">Banana</option>
+        <option value="cherry">Cherry</option>
+      </hq-select>
+      <hq-select label="Disabled" disabled>
+        <option value="1">Option one</option>
+        <option value="2">Option two</option>
+      </hq-select>
+      <p class="text-sm text-gray-600 dark:text-gray-400">Current: <span id="select-current" class="font-semibold">apple</span></p>
+    </div>
+  `;
+  const sel = c.querySelector('#select-demo');
+  const current = c.querySelector('#select-current');
+  sel.addEventListener('change', (e) => {
+    current.textContent = e.detail.value;
+  });
+}
+sections.push({ title: 'hq-select', render: selectDemo });
 
 function emptyStateDemo(c) {
   c.innerHTML = `

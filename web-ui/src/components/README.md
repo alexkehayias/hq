@@ -46,7 +46,7 @@ For visual review, see `/components-gallery/`.
 #### `<hq-icon>`
 - **File:** `./hq-icon.js`
 - **Attrs:** `name` (required), `size` (`sm|md|lg`, default `md`), `tone` (optional color class, e.g. `text-red-400`)
-- Inline SVG icon library. Names: `chevron-left`, `chevron-right`, `search`, `chat`, `sessions`, `skills`, `metrics`, `close`, `alert`, `plus`. Uses HTM.
+- Inline SVG icon library. Names: `chevron-left`, `chevron-right`, `chevron-down`, `search`, `chat`, `sessions`, `skills`, `metrics`, `close`, `alert`, `plus`, `folder`, `file`. Uses HTM.
 
 ### Tier 2 — Composites
 
@@ -61,6 +61,13 @@ For visual review, see `/components-gallery/`.
 - **Attrs:** `icon` (optional hq-icon name), `title`
 - **Slots:** default (description), `action` (optional button)
 - Centered empty/placeholder message. CSS-only.
+
+#### `<hq-select>`
+- **File:** `./hq-select.js`
+- **Attrs:** `label`, `value`, `disabled`
+- **Slots:** default (native `<option>` elements)
+- **Events:** `change` with `{ detail: { value } }` (bubbles)
+- Styled dropdown wrapping a native `<select>` (appearance-none) with a themed chevron. Handles dark mode correctly.
 
 #### `<hq-modal>`
 - **File:** `./hq-modal.js`

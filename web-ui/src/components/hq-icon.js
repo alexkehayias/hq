@@ -2,8 +2,8 @@
  * <hq-icon> — inline SVG icon from a named library.
  *
  * @attr {string} name - required. One of:
- *   chevron-left, chevron-right, search, chat, sessions, skills, metrics,
- *   close, alert, plus, folder, file
+ *   chevron-left, chevron-right, chevron-down, search, chat, sessions, skills,
+ *   metrics, close, alert, plus, folder, file
  *
  * Uses HTM to build the SVG string. Single source for the SVG library;
  * replaces repeated inline SVG paths across pages (home page repeats
@@ -17,6 +17,9 @@ const ICONS = {
   ),
   'chevron-right': new SafeHtml(
     '<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />',
+  ),
+  'chevron-down': new SafeHtml(
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />',
   ),
   search: new SafeHtml(
     '<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />',

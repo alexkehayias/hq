@@ -8,6 +8,7 @@ import './hq-state-view.js';
 import './hq-empty-state.js';
 import './hq-modal.js';
 import './hq-pagination.js';
+import './hq-select.js';
 import './hq-file-tree.js';
 import './hq-stat-card.js';
 import './hq-session-item.js';
