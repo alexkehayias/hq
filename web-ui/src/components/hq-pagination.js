@@ -32,19 +32,19 @@ class HqPagination extends HTMLElement {
     let html = '<nav class="flex justify-center items-center space-x-2 mt-4">';
 
     if (page > 1) {
-      html += `<button data-page="${page - 1}" class="px-3 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Previous</button>`;
+      html += `<button data-page="${page - 1}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Previous</button>`;
     }
 
     for (let i = start; i <= end; i++) {
       if (i === page) {
-        html += `<span class="px-3 py-1 border rounded bg-blue-500 text-white text-sm">${i}</span>`;
+        html += `<span class="px-3 py-1 border rounded bg-blue-600 text-white text-sm font-medium">${i}</span>`;
       } else {
-        html += `<button data-page="${i}" class="px-3 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">${i}</button>`;
+        html += `<button data-page="${i}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">${i}</button>`;
       }
     }
 
     if (page < totalPages) {
-      html += `<button data-page="${page + 1}" class="px-3 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Next</button>`;
+      html += `<button data-page="${page + 1}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Next</button>`;
     }
 
     html += '</nav>';

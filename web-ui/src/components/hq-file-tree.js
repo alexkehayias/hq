@@ -74,7 +74,7 @@ function renderNode(node, openPaths, selectedPath) {
   }
   return html`<li class="block">
     <button
-      class="flex items-center gap-1 w-full px-2 py-1 text-sm rounded ${isSelected ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'hover:bg-gray-100 dark:hover:bg-gray-700'} text-left"
+      class="flex items-center gap-1 w-full px-2 py-1 text-sm rounded ${isSelected ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 font-medium' : 'hover:bg-gray-100 dark:hover:bg-gray-700'} text-left"
       data-path=${node.path}
       data-kind="file"
     >
