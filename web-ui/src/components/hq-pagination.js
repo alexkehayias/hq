@@ -29,7 +29,8 @@ class HqPagination extends HTMLElement {
       start = Math.max(1, end - maxVisible + 1);
     }
 
-    let html = '<nav class="flex justify-center items-center space-x-2 mt-4">';
+    let html =
+      '<nav class="flex flex-wrap justify-center items-center gap-x-2 gap-y-1 mt-4">';
 
     if (page > 1) {
       html += `<button data-page="${page - 1}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Previous</button>`;
