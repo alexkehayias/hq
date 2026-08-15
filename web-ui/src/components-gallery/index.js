@@ -11,7 +11,7 @@ function darkToggle() {
 
 function pageShellDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-page-shell&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-page-shell&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Wraps gradient background + safe-area padding + "Back to" link. Used by every page.
       <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: title, back-href, back-label</code>
@@ -28,7 +28,7 @@ sections.push({ title: 'hq-page-shell', render: pageShellDemo });
 
 function cardDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-card&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-card&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Surface container with optional header. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: max-width (2xl|4xl|6xl|full)</code>
     </p>
@@ -50,7 +50,7 @@ sections.push({ title: 'hq-card', render: cardDemo });
 
 function buttonDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-button&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-button&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Styled button with variants. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: variant (primary|secondary|ghost|danger), disabled</code>
     </p>
@@ -67,7 +67,7 @@ sections.push({ title: 'hq-button', render: buttonDemo });
 
 function badgeDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-badge&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-badge&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Colored pill badge. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: tone (blue|green|yellow|red|gray)</code>
     </p>
@@ -84,7 +84,7 @@ sections.push({ title: 'hq-badge', render: badgeDemo });
 
 function spinnerDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-spinner&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-spinner&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Loading spinner. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: size (sm|md|lg), tone</code>
     </p>
@@ -108,7 +108,7 @@ sections.push({ title: 'hq-spinner', render: spinnerDemo });
 
 function iconDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-icon&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-icon&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Inline SVG icon library. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: name, size (sm|md|lg)</code>
     </p>
@@ -130,7 +130,7 @@ sections.push({ title: 'hq-icon', render: iconDemo });
 
 function stateViewDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-state-view&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-state-view&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       State-driven slot switcher. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: state (loading|error|empty|content)</code>
     </p>
@@ -164,7 +164,7 @@ sections.push({ title: 'hq-state-view', render: stateViewDemo });
 
 function emptyStateDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-empty-state&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-empty-state&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Centered empty/placeholder message. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: icon, title</code>
     </p>
@@ -177,7 +177,7 @@ sections.push({ title: 'hq-empty-state', render: emptyStateDemo });
 
 function modalDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-modal&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-modal&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Full-screen overlay modal. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: open (boolean)</code>
     </p>
@@ -200,7 +200,7 @@ sections.push({ title: 'hq-modal', render: modalDemo });
 
 function paginationDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-pagination&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-pagination&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Page navigation with 5-page window. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: page, total-pages</code>
       <span class="ml-2">Emits <code>page-change</code> event.</span>
@@ -225,7 +225,7 @@ function fileTreeDemo(c) {
     { path: 'README.md', is_directory: false },
   ]);
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-file-tree&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-file-tree&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       File list with directory expansion. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: files (JSON), selected</code>
       <span class="ml-2">Emits <code>file-select</code> event.</span>
@@ -251,7 +251,7 @@ sections.push({ title: 'hq-file-tree', render: fileTreeDemo });
 
 function statCardDemo(c) {
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-stat-card&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-stat-card&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       KPI stat card with label and value. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: label, value</code>
     </p>
@@ -283,7 +283,7 @@ function sessionItemDemo(c) {
     }),
   ];
   c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1">&lt;hq-session-item&gt;</h2>
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-session-item&gt;</h2>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
       Chat session list row. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: session (JSON)</code>
     </p>
