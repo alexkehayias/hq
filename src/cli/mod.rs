@@ -301,11 +301,15 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            let vapid_key_path = env::var("HQ_VAPID_KEY_PATH").unwrap_or_else(|_| String::new());
+            let db = crate::core::db::async_db(&vec_db_path).await?;
             loop_cmd::run(
+                db,
                 &storage_path,
                 &api_hostname,
                 &api_key,
                 &model,
+                &vapid_key_path,
                 &channel,
                 Duration::from_millis(debounce_ms),
                 prompt.as_deref(),
