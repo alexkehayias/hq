@@ -29,7 +29,7 @@ class HqPageShell extends HTMLElement {
             </svg>
             <span id="hq-back-label">Back to Home</span>
           </a>
-          <main class="w-full max-w-6xl mx-auto"></main>
+          <main class="w-full max-w-6xl mx-auto text-gray-900 dark:text-gray-200"></main>
         </div>
       </div>
     `;

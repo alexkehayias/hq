@@ -10,6 +10,7 @@
  * directories before files. Directory expansion state is internal.
  */
 import { html } from '/components/lib/html.js';
+import '/components/hq-icon.js';
 
 function buildTree(files) {
   const root = { name: '', path: '', is_dir: true, children: [] };
@@ -62,7 +63,7 @@ function renderNode(node, openPaths, selectedPath) {
         data-kind="dir"
       >
         <span class="text-xs w-3">${isOpen ? '▼' : '▶'}</span>
-        <span>📁</span>
+        <span><hq-icon name="folder" size="sm"></hq-icon></span>
         <span>${node.name}</span>
       </button>
       ${
@@ -79,7 +80,7 @@ function renderNode(node, openPaths, selectedPath) {
       data-kind="file"
     >
       <span class="text-xs w-3"></span>
-      <span>📄</span>
+      <span><hq-icon name="file" size="sm"></hq-icon></span>
       <span>${node.name}</span>
     </button>
   </li>`;
