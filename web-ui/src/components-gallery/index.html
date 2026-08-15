@@ -5,12 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Components Gallery - HQ</title>
   <link href="/output.css" rel="stylesheet">
-  <script>
-    const t = localStorage.getItem('hq-theme');
-    if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches)) {
-      document.documentElement.classList.add('dark');
-    }
-  </script>
+  <script src="/theme-init.js"></script>
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 min-h-dvh">
   <div id="gallery-root"></div>

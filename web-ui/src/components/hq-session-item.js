@@ -10,13 +10,6 @@
  */
 import { html, SafeHtml } from '/components/lib/html.js';
 
-function esc(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
 class HqSessionItem extends HTMLElement {
   static observedAttributes = ['session'];
 
@@ -27,13 +20,13 @@ class HqSessionItem extends HTMLElement {
     } catch {
       session = {};
     }
-    const title = esc(session.title || `Session ${session.id}`);
-    const id = esc(String(session.id));
+    const title = session.title || `Session ${session.id}`;
+    const id = String(session.id);
     const summary = session.summary
-      ? esc(session.summary)
+      ? session.summary
       : new SafeHtml('<i>Summary not available.</i>');
     const tags = (session.tags || []).map(
-      (t) => html`<hq-badge tone="blue">${esc(t)}</hq-badge>`,
+      (t) => html`<hq-badge tone="blue">${t}</hq-badge>`,
     );
     const result = html`<article class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
       <h2 class="font-semibold text-gray-900 dark:text-white">${title}</h2>

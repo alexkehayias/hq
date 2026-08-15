@@ -51,17 +51,18 @@ const SIZE_CLASS = {
 };
 
 class HqIcon extends HTMLElement {
-  static observedAttributes = ['name', 'size'];
+  static observedAttributes = ['name', 'size', 'tone'];
 
   #update() {
     const name = this.getAttribute('name');
     const sizeClass =
       SIZE_CLASS[this.getAttribute('size') || 'md'] || SIZE_CLASS.md;
+    const tone = this.getAttribute('tone');
     if (!name || !ICONS[name]) {
       this.innerHTML = '';
       return;
     }
-    const svg = html`<svg class="${sizeClass}" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">${ICONS[name]}</svg>`;
+    const svg = html`<svg class="${sizeClass}${tone ? ` ${tone}` : ''}" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">${ICONS[name]}</svg>`;
     this.innerHTML = svg.value;
   }
 

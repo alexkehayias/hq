@@ -30,7 +30,7 @@ For visual review, see `/components-gallery/`.
 - **File:** `./hq-button.js`
 - **Attrs:** `variant` (`primary|secondary|ghost|danger`, default `primary`), `disabled`
 - **Slots:** default (label)
-- Styled button. CSS-only — no HTM.
+- Styled button. Renders a real `<button>` in light DOM (focusable, keyboard-activatable).
 
 #### `<hq-badge>`
 - **File:** `./hq-badge.js`
@@ -45,7 +45,7 @@ For visual review, see `/components-gallery/`.
 
 #### `<hq-icon>`
 - **File:** `./hq-icon.js`
-- **Attrs:** `name` (required), `size` (`sm|md|lg`, default `md`)
+- **Attrs:** `name` (required), `size` (`sm|md|lg`, default `md`), `tone` (optional color class, e.g. `text-red-400`)
 - Inline SVG icon library. Names: `chevron-left`, `chevron-right`, `search`, `chat`, `sessions`, `skills`, `metrics`, `close`, `alert`, `plus`. Uses HTM.
 
 ### Tier 2 — Composites
@@ -96,8 +96,9 @@ For visual review, see `/components-gallery/`.
 ## Conventions
 
 - **Light DOM** — no Shadow DOM. Tailwind classes work directly.
-- **HTM for data-driven HTML** — `import { html } from '/components/lib/html.js'`. CSS-only components (button, badge, spinner) don't need HTM.
+- **HTM for data-driven HTML** — `import { html } from '/components/lib/html.js'`. CSS-only components (badge, spinner) don't need HTM.
 - **Event handlers via `addEventListener`** — inline `onClick` props are dropped by the serializer.
+- **Dark mode** — every page must load `/theme-init.js` in `<head>` (before the body renders) so the `.dark` class is set without a flash. Without it, a page silently loses dark mode.
 - **Reference:** `web-ui/src/chat/message-bubble.js` (the existing web component pattern, not migrated).
 
 ## File layout
@@ -105,6 +106,8 @@ For visual review, see `/components-gallery/`.
 ```
 web-ui/src/
   vendor/htm.js                    ← HTM library (~1KB ESM)
+  theme-init.js                    ← pre-paint dark-mode init (loaded in <head>)
+  theme.js                         ← exported helpers (isDark/setDark/toggleDark)
   components/
     lib/html.js                     ← serializer (SafeHtml + esc/escAttr)
     index.js                        ← imports all components

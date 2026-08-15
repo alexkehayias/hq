@@ -1,15 +1,7 @@
-// Theme detection — runs before paint to set the .dark class on <html>.
-// Checks localStorage (user override) first, then falls back to OS preference.
-// This script is intentionally inline in each HTML <head> via the snippet:
-//
-//   <script>
-//     const t = localStorage.getItem('hq-theme');
-//     if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches)) {
-//       document.documentElement.classList.add('dark');
-//     }
-//   </script>
-//
-// Exported helpers (loaded as a module by pages that have a toggle):
+// Exported theme helpers for pages that render a toggle. The pre-paint theme
+// detection (setting .dark before first paint, following OS preference while no
+// override is stored) lives in /theme-init.js, which every page loads in <head>
+// via <script src="/theme-init.js"></script>.
 export function isDark() {
   return document.documentElement.classList.contains('dark');
 }

@@ -9,18 +9,13 @@
  * Replaces the three duplicated stat cards on the metrics page
  * (#totalTokens, #avgTokensPerDay, #estCost).
  */
+import { esc } from '/components/lib/html.js';
+
 class HqStatCard extends HTMLElement {
   static observedAttributes = ['label', 'value'];
 
   #initialized = false;
   #originalBody = '';
-
-  #esc(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
 
   connectedCallback() {
     if (this.#initialized) return;
@@ -34,7 +29,7 @@ class HqStatCard extends HTMLElement {
     this.#originalBody =
       loose.length > 0
         ? loose.map((el) => el.outerHTML).join('')
-        : this.#esc(this.getAttribute('value') || '');
+        : esc(this.getAttribute('value') || '');
 
     // Clear and build
     this.innerHTML = '';
@@ -55,7 +50,7 @@ class HqStatCard extends HTMLElement {
   #update() {
     const label = this.getAttribute('label') || '';
     const valueAttr = this.getAttribute('value');
-    const body = this.#originalBody || this.#esc(valueAttr || '');
+    const body = this.#originalBody || esc(valueAttr || '');
 
     const labelP = this.querySelector('p:first-child');
     const valueP = this.querySelector('p:last-child');

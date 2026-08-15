@@ -51,13 +51,6 @@ function collectDirs(node, acc = []) {
   return acc;
 }
 
-function esc(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
 function renderNode(node, openPaths, selectedPath) {
   const isSelected = !node.is_dir && node.path === selectedPath;
   if (node.is_dir) {
@@ -70,7 +63,7 @@ function renderNode(node, openPaths, selectedPath) {
       >
         <span class="text-xs w-3">${isOpen ? '▼' : '▶'}</span>
         <span>📁</span>
-        <span>${esc(node.name)}</span>
+        <span>${node.name}</span>
       </button>
       ${
         isOpen && node.children.length
@@ -87,7 +80,7 @@ function renderNode(node, openPaths, selectedPath) {
     >
       <span class="text-xs w-3"></span>
       <span>📄</span>
-      <span>${esc(node.name)}</span>
+      <span>${node.name}</span>
     </button>
   </li>`;
 }
