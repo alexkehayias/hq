@@ -9,6 +9,35 @@ use tokio::fs;
 
 use crate::cli::{example_data, init};
 
+/// Per-worktree Claude settings granting common dev-command permissions so Claude Code
+/// doesn't re-prompt for cargo/git/gh/hq/bin commands in each new worktree. Destructive
+/// ops stay on the `ask` list. Written to `.claude/settings.local.json`, which is
+/// gitignored, so it stays personal and is never committed.
+const CLAUDE_SETTINGS_LOCAL: &str = r#"{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo run *)",
+      "Bash(cargo test *)",
+      "Bash(cargo check *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo clippy *)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(hq *)",
+      "Bash(./bin/*)",
+      "Bash(herdr *)"
+    ],
+    "ask": [
+      "Bash(git reset --hard *)",
+      "Bash(git push --force*)",
+      "Bash(git branch -D *)",
+      "Bash(git clean -f*)",
+      "Bash(rm -rf *)"
+    ]
+  }
+}"#;
+
 pub async fn run(
     name: String,
     no_init: bool,
@@ -49,6 +78,10 @@ pub async fn run(
     // Step 3: Create storage directories
     fs::create_dir_all(".hq-data/storage").await?;
     println!("  Created base directories under .hq-data/");
+
+    // Step 3b: Write per-worktree Claude settings so Claude Code doesn't re-prompt for
+    // common dev commands (cargo, git, gh, hq, bin scripts) in this worktree.
+    write_claude_settings().await?;
 
     // Step 4: Pick port and write custom zsh config
     let port = pick_port(base_port);
@@ -317,6 +350,15 @@ fn focus_workspace(workspace_id: &str) -> Result<()> {
     if !status.success() {
         eprintln!("  warning: herdr workspace focus failed (attach may show a different workspace)");
     }
+    Ok(())
+}
+
+/// Write `.claude/settings.local.json` (gitignored) with the per-worktree dev-command
+/// allowlist so Claude Code starts each worktree session without re-prompting.
+async fn write_claude_settings() -> Result<()> {
+    fs::create_dir_all(".claude").await?;
+    fs::write(".claude/settings.local.json", CLAUDE_SETTINGS_LOCAL).await?;
+    println!("  Wrote .claude/settings.local.json with dev-command permissions");
     Ok(())
 }
 
