@@ -346,25 +346,6 @@ fn compute_state_transition(
     (new_closed, new_logbook)
 }
 
-/// Recursively collect all .org files in a directory tree.
-pub async fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
-        return files;
-    };
-    while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
-        let p = entry.path();
-        if p.is_dir() {
-            files.extend(Box::pin(collect_org_files(&p)).await);
-        } else if p.extension().map_or(false, |e| e == "org")
-            && p.file_name().unwrap_or_default() != "config.org"
-        {
-            files.push(p);
-        }
-    }
-    files
-}
-
 /// Build a regex pattern that matches `:ID:` followed by the given value,
 /// regardless of the amount of whitespace between the key and value.
 fn id_pattern(id: &str) -> Regex {
@@ -425,12 +406,13 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
     );
 }
 
-/// Find a task by UUID across all org files in the notes directory.
+/// Find a task by UUID, using the index to locate its file.
 ///
-/// Uses the index as a fast path: looks up the task's `file_name` in
-/// `note_meta`, then reads just that one file. If the index entry is stale
-/// (e.g. the task was refiled but the index wasn't updated) or missing, falls
-/// back to scanning every org file.
+/// Looks up the task's `file_name` in `note_meta`, then reads just that one
+/// file. Tasks are only findable once indexed (created via the CLI or picked
+/// up by the periodic index job) — this matches `run_list`, which also queries
+/// `note_meta`. Callers that move a task between files (e.g. refile) must
+/// re-index so the entry stays in sync.
 pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<TaskLocation> {
     let id_owned = id.to_string();
     let db_file: Option<String> = db
@@ -443,31 +425,11 @@ pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<Ta
         })
         .await?;
 
-    if let Some(file_name) = db_file {
-        let path = std::path::Path::new(notes_path).join(&file_name);
-        if let Ok(location) = find_task_in_file(&path, id).await {
-            return Ok(location);
-        }
-    }
-
-    // Fallback: the task isn't where the index says (or isn't indexed), so
-    // scan the org files directly.
-    let pattern = id_pattern(id);
-    let files = collect_org_files(std::path::Path::new(notes_path)).await;
-
-    for path in files {
-        if path.file_name().unwrap_or_default() == "config.org" {
-            continue;
-        }
-
-        let content = fs::read_to_string(&path).await?;
-        if !pattern.is_match(&content) {
-            continue;
-        }
-        return find_task_in_file(&path, id).await;
-    }
-
-    anyhow::bail!("Task with ID {id} not found in {notes_path}");
+    let Some(file_name) = db_file else {
+        anyhow::bail!("Task with ID {id} not found in {notes_path}");
+    };
+    let path = std::path::Path::new(notes_path).join(&file_name);
+    find_task_in_file(&path, id).await
 }
 
 /// Traverses a headline's syntax subtree and extracts body text,

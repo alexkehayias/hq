@@ -213,7 +213,13 @@ pub async fn run_update(
 /// Finds the task by UUID across all org files, removes the headline from its
 /// source, and appends it to the target project file (creating the project
 /// file if it doesn't exist yet).
-pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &str) -> Result<()> {
+pub async fn run_refile(
+    db: &Connection,
+    notes_path: &str,
+    index_path: &str,
+    id: &str,
+    project: &str,
+) -> Result<()> {
     // Resolve which file holds the task (via the index) so we know which
     // file to lock before doing the read-modify-write.
     let source_path = orgmode::find_task(db, notes_path, id).await?.path;
@@ -268,7 +274,15 @@ pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &s
             Ok(())
         },
     )
-    .await
+    .await?;
+
+    // Re-index both files so note_meta and full-text search reflect the move:
+    // the task now lives in target, not source. Without this, `find_task`'s
+    // index lookup would still point at the source file.
+    index_single_file(db, index_path, source_path).await?;
+    index_single_file(db, index_path, target_path).await?;
+
+    Ok(())
 }
 
 pub async fn run_delete(
@@ -1470,7 +1484,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a project
-        run_refile(&db, &notes, &task_id, "errands").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "errands").await.unwrap();
 
         // Task headline should be removed from the standalone file
         // (document-level preamble with #+TITLE: may retain the title)
@@ -1520,7 +1534,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a different project
-        run_refile(&db, &notes, &task_id, "security").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "security").await.unwrap();
 
         // Task should no longer be in the original project
         let sprint_content = fs::read_to_string(&project_path).unwrap();
@@ -1544,14 +1558,62 @@ Investigate the redirect
     }
 
     #[tokio::test]
+    async fn test_refile_twice_keeps_index_in_sync() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        run_create(&db, &notes, &index, "Move me", None, None, "TODO")
+            .await
+            .unwrap();
+
+        // Find the standalone task's ID (document-level :ID: is first, task is second)
+        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture = fs::read_to_string(&capture_path).unwrap();
+        let id_start = capture.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
+        let task_id = capture[id_start..].lines().next().unwrap().trim().to_string();
+
+        // Refile to project alpha, then refile again to project beta. The second
+        // refile depends on find_task locating the task in alpha — i.e. the index
+        // must have been updated by the first refile.
+        run_refile(&db, &notes, &index, &task_id, "alpha").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "beta").await.unwrap();
+
+        // find_task (index-driven, no fallback) must point at the beta file.
+        let loc = orgmode::find_task(&db, &notes, &task_id).await.unwrap();
+        let file_name = loc.path.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(
+            file_name.contains("--project-beta"),
+            "task should now live in beta, find_task resolved to {file_name}"
+        );
+
+        // Task appears exactly once, only in beta.
+        let beta = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-beta") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
+        let beta_content = fs::read_to_string(&beta).unwrap();
+        assert_eq!(beta_content.matches(&task_id).count(), 1);
+        assert_eq!(headline_count(&beta), 1);
+    }
+
+    #[tokio::test]
     async fn test_refile_preserves_org_structure() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Create a task with body text via refile.org
         let refile_path = std::path::Path::new(&notes).join("refile.org");
         fs::write(
             &refile_path,
             "\
+:PROPERTIES:
+:ID:       refile
+:END:
+#+TITLE: Refile
+
 * TODO Research API design
 :PROPERTIES:
 :ID:       task-with-body
@@ -1561,9 +1623,10 @@ Consider authentication requirements.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, refile_path.clone()).await.unwrap();
 
         // Refile to a project
-        run_refile(&db, &notes, "task-with-body", "research").await.unwrap();
+        run_refile(&db, &notes, &index, "task-with-body", "research").await.unwrap();
 
         // Read the project file
         let project_path = fs::read_dir(&notes)
@@ -1612,7 +1675,7 @@ Consider authentication requirements.
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refiling to the same project should fail
-        let result = run_refile(&db, &notes, &task_id, "my-project").await;
+        let result = run_refile(&db, &notes, &index, &task_id, "my-project").await;
         assert!(result.is_err(), "should error when refiling to same project");
         assert!(
             result.unwrap_err().to_string().contains("already in project"),
@@ -1622,15 +1685,15 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_nonexistent_task() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_refile(&db, &notes, "nonexistent-uuid", "some-project").await;
+        let result = run_refile(&db, &notes, &index, "nonexistent-uuid", "some-project").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_refile_from_refile_org_to_project() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Simulate a task sitting in refile.org
         let refile_path = std::path::Path::new(&notes).join("refile.org");
@@ -1655,9 +1718,10 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, refile_path.clone()).await.unwrap();
 
         // Refile one task to a project
-        run_refile(&db, &notes, "review-pr-42", "ops").await.unwrap();
+        run_refile(&db, &notes, &index, "review-pr-42", "ops").await.unwrap();
 
         // The refiled task should be gone from refile.org
         let refile_content = fs::read_to_string(&refile_path).unwrap();
@@ -1718,8 +1782,9 @@ Need to check the middleware changes.
         for id in ids.clone() {
             let db = db.clone();
             let notes = notes.clone();
+            let index = index.clone();
             set.spawn(async move {
-                run_refile(&db, &notes, &id, "errands").await.unwrap();
+                run_refile(&db, &notes, &index, &id, "errands").await.unwrap();
             });
         }
         while let Some(_) = set.join_next().await {}
