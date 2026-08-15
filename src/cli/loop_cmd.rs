@@ -4,15 +4,19 @@
 //!
 //! `hq loop --channel <name> [--channel <other>]...` connects to one or more
 //! channel publishers (see [`crate::cli::channel`]), merges their event streams,
-//! and feeds each event into a single LLM chat conversation. The chat has
-//! access to the **bash tool** (sandboxed to a fresh workspace per loop
-//! invocation) and the **notify tool** (push notifications) — not to the full
-//! tool set used by `hq chat`.
+//! and feeds each event into a fresh LLM chat. The chat has access to the
+//! **bash tool** (sandboxed to a fresh workspace per loop invocation) and the
+//! **notify tool** (push notifications) — not to the full tool set used by
+//! `hq chat`.
 //!
 //! ## Event format
 //!
-//! Each event is tagged with its source channel: `[channel-id] event`. The
-//! LLM sees all events in one conversation, so it has context across channels.
+//! Each event is tagged with its source channel: `[channel-id] event`. Every
+//! event is processed independently: the LLM sees only the system prompt and
+//! that single event — the chat (and its transcript) is rebuilt per event, so
+//! there is no accumulated context across channels. The bash tool mounts the
+//! same workspace directory for the whole loop, so files written in one event
+//! remain accessible in later events.
 //!
 //! ## Trust boundary
 //!
@@ -89,33 +93,24 @@ pub async fn run(
     }
     drop(event_tx); // close our sender so event_rx drains then returns None
 
-    // Set up chat with bash and notify tools (not the full tool set from hq chat).
-    let session_id = Uuid::new_v4().to_string();
-    let bash_tool = BashTool::new(storage_path, &session_id);
-    let notify_tool = NotifyTool::new(db, vapid_key_path);
-    let tools: Vec<BoxedToolCall> = vec![
-        Box::new(bash_tool) as BoxedToolCall,
-        Box::new(notify_tool) as BoxedToolCall,
-    ];
-
     let default_prompt = "You are a helpful assistant. You receive events from one or more \
          channels, each tagged as [channel-name] event. Respond to each \
          event appropriately. You have access to a bash tool for running commands \
          and a notify tool for sending push notifications.";
     let system_prompt = system_prompt.unwrap_or(default_prompt);
 
-    let mut chat = ChatBuilder::new(api_hostname, api_key, model)
-        .transcript(vec![Message::new(Role::System, system_prompt)])
-        .tools(tools)
-        .middleware(vec![
-            Box::new(InfiniteLoopDetector::new(3)),
-            Box::new(ToolSecurityMiddleware::default()),
-            Box::new(InvisibleCharFilter),
-        ])
-        .build();
+    // session_id is fixed for the lifetime of the loop so every BashTool mounts
+    // the same workspace directory. Files written in one turn are visible in
+    // later turns even though the LLM transcript is rebuilt fresh each turn.
+    let session_id = Uuid::new_v4().to_string();
 
     // Main loop: read merged events, send to chat, print responses.
     // Ctrl-C or SIGTERM breaks out and exits cleanly.
+    //
+    // Tools and chat are reconstructed per event. Rebuilding the chat means
+    // each event is processed with only the system prompt and that event — no
+    // accumulated transcript. Rebuilding the tools is harmless (bash mounts the
+    // same session_id directory; notify is stateless).
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -129,6 +124,24 @@ pub async fn run(
             event = event_rx.recv() => {
                 let Some((channel_id, event)) = event else { break; };
                 let user_msg = format!("[{}] {}", channel_id, event);
+
+                let bash_tool = BashTool::new(storage_path, &session_id);
+                let notify_tool = NotifyTool::new(db.clone(), vapid_key_path);
+                let tools: Vec<BoxedToolCall> = vec![
+                    Box::new(bash_tool) as BoxedToolCall,
+                    Box::new(notify_tool) as BoxedToolCall,
+                ];
+
+                let mut chat = ChatBuilder::new(api_hostname, api_key, model)
+                    .transcript(vec![Message::new(Role::System, system_prompt)])
+                    .tools(tools)
+                    .middleware(vec![
+                        Box::new(InfiniteLoopDetector::new(3)),
+                        Box::new(ToolSecurityMiddleware::default()),
+                        Box::new(InvisibleCharFilter),
+                    ])
+                    .build();
+
                 match chat.next_msg(Message::new(Role::User, &user_msg)).await {
                     Ok(resp) => {
                         if let Some(msg) = resp.last() {
