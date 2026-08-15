@@ -13,6 +13,7 @@ use orgize::rowan::ast::AstNode;
 use orgize::SyntaxElement;
 use regex::Regex;
 use tokio::fs;
+use tokio_rusqlite::Connection;
 
 use crate::org;
 
@@ -425,7 +426,32 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
 }
 
 /// Find a task by UUID across all org files in the notes directory.
-pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
+///
+/// Uses the index as a fast path: looks up the task's `file_name` in
+/// `note_meta`, then reads just that one file. If the index entry is stale
+/// (e.g. the task was refiled but the index wasn't updated) or missing, falls
+/// back to scanning every org file.
+pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<TaskLocation> {
+    let id_owned = id.to_string();
+    let db_file: Option<String> = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT file_name FROM note_meta WHERE id = ?1 AND type = 'task'",
+            )?;
+            let mut rows = stmt.query_map([id_owned.as_str()], |row| row.get::<_, String>(0))?;
+            Ok(rows.next().transpose()?)
+        })
+        .await?;
+
+    if let Some(file_name) = db_file {
+        let path = std::path::Path::new(notes_path).join(&file_name);
+        if let Ok(location) = find_task_in_file(&path, id).await {
+            return Ok(location);
+        }
+    }
+
+    // Fallback: the task isn't where the index says (or isn't indexed), so
+    // scan the org files directly.
     let pattern = id_pattern(id);
     let files = collect_org_files(std::path::Path::new(notes_path)).await;
 
@@ -438,50 +464,7 @@ pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
         if !pattern.is_match(&content) {
             continue;
         }
-
-        // Parse to find the matching headline
-        let config = org::todo_keywords_config();
-        let org = config.parse(&content);
-        for headline in org.document().headlines() {
-            if let Some(props) = headline.properties() {
-                if props.get("ID").is_some_and(|v| v == id) {
-                    let range = headline.syntax().text_range();
-                    let usize_range =
-                        u32::from(range.start()) as usize..u32::from(range.end()) as usize;
-                    let current_status = headline
-                        .todo_keyword()
-                        .map(|k| k.to_string())
-                        .unwrap_or_else(|| "TODO".to_string());
-                    let current_title = headline.title_raw().trim().to_string();
-                    let current_level = headline.level();
-                    let current_body = body_from_headline(&headline);
-                    let current_closed = extract_closed(&headline);
-                    let current_logbook = extract_logbook(&headline);
-                    let current_tags = headline
-                        .tags()
-                        .map(|t| t.to_string())
-                        .collect::<Vec<String>>();
-
-                    return Ok(TaskLocation {
-                        path,
-                        range: usize_range,
-                        content,
-                        current_title,
-                        current_body,
-                        current_status,
-                        current_level,
-                        current_closed,
-                        current_logbook,
-                        current_tags,
-                    });
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "Found ID {id} in {} but could not locate its headline",
-            path.display()
-        );
+        return find_task_in_file(&path, id).await;
     }
 
     anyhow::bail!("Task with ID {id} not found in {notes_path}");
@@ -634,6 +617,7 @@ async fn apply_update(
 /// Tag updates (`add_tags` / `remove_tags`) apply to the headline's existing tag
 /// list (deduped, order-preserving). Removing a tag not currently set is silent.
 pub async fn update_task(
+    db: &Connection,
     notes_path: &str,
     id: &str,
     file_name: Option<&str>,
@@ -649,7 +633,7 @@ pub async fn update_task(
             format!("Task {id} not found in scoped file {fname}")
         })?
     } else {
-        find_task(notes_path, id).await?
+        find_task(db, notes_path, id).await?
     };
     let path = location.path.clone();
     with_file_lock(&path, || async {

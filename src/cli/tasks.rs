@@ -185,6 +185,7 @@ pub async fn run_update(
             .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
         let filename = path.file_name().and_then(|s| s.to_str()).unwrap();
         orgmode::update_task(
+            db,
             notes_path,
             id,
             Some(filename),
@@ -196,12 +197,12 @@ pub async fn run_update(
         )
         .await?;
     } else {
-        orgmode::update_task(notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
+        orgmode::update_task(db, notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
     }
     println!("Task {id} updated");
 
     // Re-index the modified file so the task changes are immediately queryable
-    let location = orgmode::find_task(notes_path, id).await?;
+    let location = orgmode::find_task(db, notes_path, id).await?;
     index_single_file(db, index_path, location.path).await?;
 
     Ok(())
@@ -213,9 +214,9 @@ pub async fn run_update(
 /// source, and appends it to the target project file (creating the project
 /// file if it doesn't exist yet).
 pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &str) -> Result<()> {
-    // Resolve which file holds the task (searches all notes) so we know which
+    // Resolve which file holds the task (via the index) so we know which
     // file to lock before doing the read-modify-write.
-    let source_path = orgmode::find_task(notes_path, id).await?.path;
+    let source_path = orgmode::find_task(db, notes_path, id).await?.path;
 
     // Look up existing project in DB, or create a new project file
     let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
@@ -276,7 +277,7 @@ pub async fn run_delete(
     index_path: &str,
     id: &str,
 ) -> Result<()> {
-    let location = orgmode::find_task(notes_path, id).await?;
+    let location = orgmode::find_task(db, notes_path, id).await?;
     let path = location.path.clone();
 
     orgmode::with_file_lock(&path, || async {
