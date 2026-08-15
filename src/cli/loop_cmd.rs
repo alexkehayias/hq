@@ -26,7 +26,9 @@
 //! stay isolated.
 
 use anyhow::{anyhow, Result};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use futures::StreamExt;
+use std::time::Duration;
+use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -35,7 +37,7 @@ use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{BashTool, NotifyTool};
-use crate::cli::channel::{sigterm, socket_path};
+use crate::cli::channel::{event_stream_from_reader, sigterm, socket_path};
 use crate::openai::{BoxedToolCall, Message, Role};
 use tokio_rusqlite::Connection;
 
@@ -44,6 +46,10 @@ use tokio_rusqlite::Connection;
 /// One reader task per channel merges events into a single mpsc receiver. The
 /// main loop reads `(channel_id, event)` pairs and sends `"[channel-id] event"`
 /// as a user message to the chat. The LLM's response is printed to stdout.
+///
+/// Incoming lines from each channel are coalesced into events using the same
+/// debounce window as the publisher, so a multi-line burst is delivered to the
+/// chat as one event rather than one per line.
 ///
 /// All config (storage path, LLM endpoint/key/model) is passed in by the
 /// caller (`mod.rs` run_dispatch); this module does not parse env vars.
@@ -55,6 +61,7 @@ pub async fn run(
     model: &str,
     vapid_key_path: &str,
     channels: &[String],
+    debounce: Duration,
     system_prompt: Option<&str>,
 ) -> Result<()> {
     if channels.is_empty() {
@@ -74,19 +81,11 @@ pub async fn run(
         let ch_id = channel_id.clone();
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stream);
-            let mut buf = String::new();
-            loop {
-                buf.clear();
-                match reader.read_line(&mut buf).await {
-                    Ok(0) => return, // channel closed (publisher exited)
-                    Ok(_) => {
-                        let event = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
-                        if tx.send((ch_id.clone(), event)).await.is_err() {
-                            return; // main loop exited
-                        }
-                    }
-                    Err(_) => return,
+            let reader = BufReader::new(stream);
+            let mut events = event_stream_from_reader(reader, debounce);
+            while let Some(event) = events.next().await {
+                if tx.send((ch_id.clone(), event)).await.is_err() {
+                    return; // main loop exited
                 }
             }
         });

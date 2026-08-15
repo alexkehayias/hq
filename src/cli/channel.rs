@@ -28,9 +28,11 @@ use futures::StreamExt;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use tokio::io::{stdin, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::time::Duration;
+use tokio::io::{stdin, AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
+use tokio::time::{sleep, Instant};
 use tracing::warn;
 
 /// Validate a channel ID. Must be non-empty and alphanumeric with dashes/underscores.
@@ -114,22 +116,63 @@ pub async fn transform(input: String) -> String {
 
 /// Build a stream of events read from stdin, with the channel transform applied.
 ///
-/// Each line read from stdin becomes one event. The stream ends when stdin
-/// reaches EOF.
-pub fn event_stream() -> BoxStream<'static, String> {
+/// Incoming lines are coalesced into events using a debounce window: lines that
+/// arrive within `debounce` of each other are grouped into a single event. This
+/// treats a burst of multi-line output from a piped command (e.g. a website
+/// dumped every 60s) as one event rather than one event per line. The stream
+/// ends when stdin reaches EOF.
+pub fn event_stream(debounce: Duration) -> BoxStream<'static, String> {
+    event_stream_from_reader(BufReader::new(stdin()), debounce)
+}
+
+/// Debounce-coalesced event stream over an arbitrary async buffered reader.
+///
+/// Reads lines, appending to a buffer, and resets an idle timer on each line.
+/// When the timer expires with no new input, the accumulated buffer is yielded
+/// as one event. The reader is generic so the coalescing logic is testable
+/// without touching process stdin, and reusable by subscribers.
+pub(crate) fn event_stream_from_reader<R: AsyncBufRead + Unpin + Send + 'static>(
+    reader: R,
+    debounce: Duration,
+) -> BoxStream<'static, String> {
     let s = stream! {
-        let stdin = stdin();
-        let mut reader = BufReader::new(stdin);
-        let mut buf = String::new();
+        let mut reader = reader;
+        // `line` holds the most recently read line; `burst` accumulates the
+        // lines that arrive within a single debounce window.
+        let mut line = Vec::new();
+        let mut burst = String::new();
+        let idle = sleep(debounce);
+        tokio::pin!(idle);
         loop {
-            buf.clear();
-            match reader.read_line(&mut buf).await {
-                Ok(0) => return,
-                Ok(_) => {
-                    let line = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
-                    yield transform(line).await;
+            tokio::select! {
+                n = reader.read_until(b'\n', &mut line) => {
+                    match n {
+                        Ok(0) => {
+                            // EOF: flush any remaining burst, then end.
+                            if !burst.is_empty() {
+                                let out = burst.strip_suffix('\n').unwrap_or(&burst).to_string();
+                                yield transform(out).await;
+                            }
+                            return;
+                        }
+                        Ok(_) => {
+                            burst.push_str(std::str::from_utf8(&line).unwrap_or(""));
+                            line.clear();
+                            // New data: restart the idle window.
+                            idle.as_mut().reset(Instant::now() + debounce);
+                        }
+                        Err(_) => return,
+                    }
                 }
-                Err(_) => return,
+                _ = &mut idle => {
+                    // Idle for `debounce`: emit the accumulated burst as one event.
+                    if !burst.is_empty() {
+                        let out = burst.strip_suffix('\n').unwrap_or(&burst).to_string();
+                        yield transform(out).await;
+                        burst.clear();
+                    }
+                    idle.as_mut().reset(Instant::now() + debounce);
+                }
             }
         }
     };
@@ -199,7 +242,7 @@ async fn bind_socket(path: &Path) -> Result<UnixListener> {
 /// Binds a Unix domain socket at `socket_path(id, storage_path)`, accepts
 /// subscriber connections (verifying peer UID matches our own), and broadcasts
 /// each stdin event to all active subscribers as a newline-delimited string.
-pub async fn run(storage_path: &str, id: &str) -> Result<()> {
+pub async fn run(storage_path: &str, id: &str, debounce: Duration) -> Result<()> {
     let path = socket_path(storage_path, id)?;
 
     // Ensure channels dir exists with 0o700 perms (macOS filesystem paths).
@@ -279,7 +322,7 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
     // Read stdin, broadcast each event to all subscribers.
     // broadcast::Sender::send() is non-blocking — a slow subscriber never
     // blocks other subscribers.
-    let mut events = event_stream();
+    let mut events = event_stream(debounce);
     let main_loop = async {
         while let Some(event) = events.next().await {
             let _ = broadcast_tx.send(event);
@@ -311,7 +354,56 @@ pub async fn run(storage_path: &str, id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
     use tempfile::TempDir;
+    use tokio::io::{AsyncRead, ReadBuf};
+    use tokio::sync::mpsc;
+
+    /// An `AsyncRead` wrapper over a tokio mpsc receiver of byte chunks, used to
+    /// simulate timed bursts of input in tests.
+    struct MpscReader {
+        rx: mpsc::Receiver<Vec<u8>>,
+        current: Vec<u8>,
+        pos: usize,
+    }
+
+    impl MpscReader {
+        fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+            Self {
+                rx,
+                current: Vec::new(),
+                pos: 0,
+            }
+        }
+    }
+
+    impl AsyncRead for MpscReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            if self.pos < self.current.len() {
+                let n = std::cmp::min(buf.remaining(), self.current.len() - self.pos);
+                buf.put_slice(&self.current[self.pos..self.pos + n]);
+                self.pos += n;
+                return Poll::Ready(Ok(()));
+            }
+            match self.rx.poll_recv(cx) {
+                Poll::Ready(Some(chunk)) => {
+                    self.current = chunk;
+                    self.pos = 0;
+                    let n = std::cmp::min(buf.remaining(), self.current.len());
+                    buf.put_slice(&self.current[..n]);
+                    self.pos = n;
+                    Poll::Ready(Ok(()))
+                }
+                Poll::Ready(None) => Poll::Ready(Ok(())), // EOF
+                Poll::Pending => Poll::Pending,
+            }
+        }
+    }
 
     #[test]
     fn test_validate_channel_id_valid() {
@@ -422,5 +514,45 @@ mod tests {
     fn test_socket_guard_no_file_does_nothing() {
         // no_file guard should not crash on drop
         let _guard = SocketGuard::no_file();
+    }
+
+    #[test]
+    fn test_event_stream_coalesces_burst_into_one_event() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let reader = BufReader::new(std::io::Cursor::new(b"line1\nline2\nline3\n".as_slice()));
+            let stream = event_stream_from_reader(reader, Duration::from_millis(10));
+            let events: Vec<String> = stream.collect().await;
+            assert_eq!(events, vec!["line1\nline2\nline3"]);
+        });
+    }
+
+    #[test]
+    fn test_event_stream_single_line_is_one_event() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let reader = BufReader::new(std::io::Cursor::new(b"hello\n".as_slice()));
+            let stream = event_stream_from_reader(reader, Duration::from_millis(10));
+            let events: Vec<String> = stream.collect().await;
+            assert_eq!(events, vec!["hello"]);
+        });
+    }
+
+    #[test]
+    fn test_event_stream_splits_temporally_distinct_bursts() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (tx, rx) = mpsc::channel(16);
+            tokio::spawn(async move {
+                tx.send(b"line1\n".to_vec()).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                tx.send(b"line2\n".to_vec()).await.unwrap();
+                // dropping tx signals EOF
+            });
+            let reader = BufReader::new(MpscReader::new(rx));
+            let stream = event_stream_from_reader(reader, Duration::from_millis(10));
+            let events: Vec<String> = stream.collect().await;
+            assert_eq!(events, vec!["line1", "line2"]);
+        });
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::env;
+use std::time::Duration;
 
 pub mod auth;
 pub mod bashkit;
@@ -84,6 +85,9 @@ enum Command {
     Channel {
         /// Channel ID (alphanumeric with dashes/underscores; identifies the socket path)
         id: String,
+        /// Coalesce lines arriving within this window (ms) into a single event
+        #[arg(long, default_value_t = 250)]
+        debounce_ms: u64,
     },
     /// Subscribe to one or more channels and run an LLM chat on incoming events
     Loop {
@@ -93,6 +97,9 @@ enum Command {
         /// System prompt for the LLM (defaults to a multi-channel event assistant)
         #[arg(long)]
         prompt: Option<String>,
+        /// Coalesce lines arriving within this window (ms) into a single event
+        #[arg(long, default_value_t = 250)]
+        debounce_ms: u64,
     },
     /// Set up a development worktree with herdr and Claude Code
     Develop {
@@ -280,10 +287,14 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         Some(Command::Chat {}) => {
             chat::run(&vec_db_path).await?;
         }
-        Some(Command::Channel { id }) => {
-            channel::run(&storage_path, &id).await?;
+        Some(Command::Channel { id, debounce_ms }) => {
+            channel::run(&storage_path, &id, Duration::from_millis(debounce_ms)).await?;
         }
-        Some(Command::Loop { channel, prompt }) => {
+        Some(Command::Loop {
+            channel,
+            prompt,
+            debounce_ms,
+        }) => {
             let api_hostname =
                 env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
             let api_key =
@@ -300,6 +311,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 &model,
                 &vapid_key_path,
                 &channel,
+                Duration::from_millis(debounce_ms),
                 prompt.as_deref(),
             )
             .await?;
