@@ -5,23 +5,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[cfg(feature = "embed-assets")]
-use super::embed;
-
-#[cfg(not(feature = "embed-assets"))]
-use axum::middleware;
-#[cfg(not(feature = "embed-assets"))]
-use axum::extract::Request;
-#[cfg(not(feature = "embed-assets"))]
-use axum::response::Response;
-#[cfg(not(feature = "embed-assets"))]
-use http::{HeaderValue, header};
-#[cfg(not(feature = "embed-assets"))]
-use tower::ServiceBuilder;
-#[cfg(not(feature = "embed-assets"))]
-use tower_http::services::ServeDir;
-
-use super::routes;
+use super::{routes, static_assets};
 use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::core::{AppConfig, db::async_db};
@@ -29,41 +13,15 @@ use crate::jobs::{
     DailyAgenda, GenerateSessionTitles, GitSync, ResearchMeetingAttendees, spawn_periodic_job,
 };
 
-#[cfg(not(feature = "embed-assets"))]
-async fn set_static_cache_control(request: Request, next: middleware::Next) -> Response {
-    let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    response
-}
-
 pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
     let cors = CorsLayer::permissive();
 
-    let mut router = Router::new()
+    let router = Router::new()
         // API routes
         .nest("/api", routes::router());
 
-    #[cfg(feature = "embed-assets")]
-    {
-        // Serve assets embedded in the binary (prod build)
-        router = router.fallback(embed::handler);
-    }
-
-    #[cfg(not(feature = "embed-assets"))]
-    {
-        // Dev: serve assets from disk so changes appear without a rebuild
-        router = router.fallback_service(
-            ServiceBuilder::new()
-                .layer(middleware::from_fn(set_static_cache_control))
-                .service(
-                    ServeDir::new("./web-ui/src")
-                        .precompressed_br()
-                        .precompressed_gzip(),
-                ),
-        );
-    }
+    // Static assets: embedded in the binary (prod), or served from disk (dev).
+    let router = static_assets::attach_assets(router);
 
     router
         .layer(TraceLayer::new_for_http())

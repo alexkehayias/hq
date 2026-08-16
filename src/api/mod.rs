@@ -3,6 +3,7 @@ mod server;
 pub use server::{app, serve};
 #[cfg(feature = "embed-assets")]
 mod embed;
+mod static_assets;
 pub mod public;
 mod state;
 pub use state::AppState;
