@@ -43,11 +43,7 @@ docker run --rm \
 echo "==> Streaming image to Dokku..."
 docker image save "${IMAGE_NAME}" | ssh "${HQ_DOKKU_REMOTE}" git:load-image "${HQ_DOKKU_APP}" "${IMAGE_NAME}"
 
-# 5. Rebuild the app using the loaded image
-echo "==> Rebuilding app..."
-ssh "${HQ_DOKKU_REMOTE}" ps:rebuild "${HQ_DOKKU_APP}"
-
-# 6. Cleanup
+# 5. Cleanup
 echo "==> Cleaning up..."
 docker rmi "${IMAGE_NAME}" 2>/dev/null || true
 
