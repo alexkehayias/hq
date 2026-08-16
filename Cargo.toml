@@ -63,6 +63,13 @@ getrandom = "0.4"
 bigdecimal = "0.4"
 unit-prefix = "0.5"
 
+# Prod-only: embed web-ui assets into the binary (enabled via `--features embed-assets`)
+include_dir = { version = "0.7", optional = true }
+mime_guess = { version = "2", optional = true }
+
+[features]
+embed-assets = ["dep:include_dir", "dep:mime_guess"]
+
 
 [profile.release]
 # Cross-crate LTO and single codegen unit for max optimization

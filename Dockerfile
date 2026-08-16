@@ -38,13 +38,16 @@ ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
 RUN mkdir ./src && echo 'fn main() { println!("Dummy!"); }' > ./src/main.rs
 COPY ./Cargo.toml .
 COPY ./Cargo.lock .
-RUN cargo build --release --target x86_64-unknown-linux-gnu --locked
+RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets
 
 ## Actually build the app
 RUN rm -rf ./src
 COPY ./src ./src
+# Assets are embedded into the binary at compile time; copying them here lets
+# the include_dir! macro read them and busts the layer cache when assets change.
+COPY ./web-ui ./web-ui
 RUN touch -a -m ./src/main.rs
-RUN cargo build --release --target x86_64-unknown-linux-gnu --locked
+RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets
 
 # Run stage
 # Match builder's glibc (see note above re: __isoc23_strtoll).
@@ -58,40 +61,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Use the compiled binary rather than cargo
+# Web assets are embedded in the binary (`--features embed-assets`), so no
+# web-ui directory is needed at runtime.
 COPY --from=builder /target/x86_64-unknown-linux-gnu/release/hq /hq
-
-# Copy over static files for the web UI, currently these are built and
-# checked into the repo but that might change later
-COPY ./web-ui/src/index.html ./web-ui/src/index.html
-COPY ./web-ui/src/search/index.html ./web-ui/src/search/index.html
-COPY ./web-ui/src/search/index.js ./web-ui/src/search/index.js
-COPY ./web-ui/src/metrics/index.html ./web-ui/src/metrics/index.html
-COPY ./web-ui/src/metrics/index.js ./web-ui/src/metrics/index.js
-COPY ./web-ui/src/chat/index.html ./web-ui/src/chat/index.html
-COPY ./web-ui/src/chat/index.js ./web-ui/src/chat/index.js
-COPY ./web-ui/src/chat/message-bubble.js ./web-ui/src/chat/message-bubble.js
-COPY ./web-ui/src/chat/img/ ./web-ui/src/chat/img/
-COPY ./web-ui/src/chat/sessions/index.html ./web-ui/src/chat/sessions/index.html
-COPY ./web-ui/src/chat/sessions/index.js ./web-ui/src/chat/sessions/index.js
-COPY ./web-ui/src/output.css ./web-ui/src/output.css
-COPY ./web-ui/src/skills/index.html ./web-ui/src/skills/index.html
-COPY ./web-ui/src/skills/index.js ./web-ui/src/skills/index.js
-COPY ./web-ui/src/favicon.ico ./web-ui/src/favicon.ico
-COPY ./web-ui/src/icon512_maskable.png ./web-ui/src/icon512_maskable.png
-COPY ./web-ui/src/manifest.json ./web-ui/src/manifest.json
-COPY ./web-ui/src/service-worker.js ./web-ui/src/service-worker.js
-COPY ./web-ui/src/vendor/marked.min.js ./web-ui/src/vendor/marked.min.js
-COPY ./web-ui/src/vendor/highlight.min.js ./web-ui/src/vendor/highlight.min.js
-COPY ./web-ui/src/vendor/echarts.simple.min.js ./web-ui/src/vendor/echarts.simple.min.js
-COPY ./web-ui/src/vendor/codemirror/codemirror.min.js ./web-ui/src/vendor/codemirror/codemirror.min.js
-COPY ./web-ui/src/vendor/codemirror/codemirror.min.css ./web-ui/src/vendor/codemirror/codemirror.min.css
-COPY ./web-ui/src/vendor/codemirror/theme/dracula.min.css ./web-ui/src/vendor/codemirror/theme/dracula.min.css
-COPY ./web-ui/src/vendor/codemirror/mode/javascript.min.js ./web-ui/src/vendor/codemirror/mode/javascript.min.js
-COPY ./web-ui/src/vendor/codemirror/mode/python.min.js ./web-ui/src/vendor/codemirror/mode/python.min.js
-COPY ./web-ui/src/vendor/codemirror/mode/markdown.min.js ./web-ui/src/vendor/codemirror/mode/markdown.min.js
-COPY ./web-ui/src/vendor/codemirror/mode/shell.min.js ./web-ui/src/vendor/codemirror/mode/shell.min.js
-COPY ./web-ui/src/vendor/codemirror/mode/xml.min.js ./web-ui/src/vendor/codemirror/mode/xml.min.js
-COPY ./web-ui/src/vendor/codemirror/mode/yaml.min.js ./web-ui/src/vendor/codemirror/mode/yaml.min.js
 
 EXPOSE 2222
 

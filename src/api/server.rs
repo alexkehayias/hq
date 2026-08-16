@@ -1,15 +1,11 @@
 use std::sync::{Arc, RwLock};
 
-use axum::middleware;
-use axum::{Router, extract::Request, response::Response};
-use http::{HeaderValue, header};
-use tower::ServiceBuilder;
+use axum::Router;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use super::routes;
+use super::{routes, assets};
 use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::core::{AppConfig, db::async_db};
@@ -17,30 +13,17 @@ use crate::jobs::{
     DailyAgenda, GenerateSessionTitles, GitSync, ResearchMeetingAttendees, spawn_periodic_job,
 };
 
-async fn set_static_cache_control(request: Request, next: middleware::Next) -> Response {
-    let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    response
-}
-
 pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
     let cors = CorsLayer::permissive();
 
-    Router::new()
+    let router = Router::new()
         // API routes
-        .nest("/api", routes::router())
-        // Static server of assets in ./web-ui
-        .fallback_service(
-            ServiceBuilder::new()
-                .layer(middleware::from_fn(set_static_cache_control))
-                .service(
-                    ServeDir::new("./web-ui/src")
-                        .precompressed_br()
-                        .precompressed_gzip(),
-                ),
-        )
+        .nest("/api", routes::router());
+
+    // Static assets: embedded in the binary (prod), or served from disk (dev).
+    let router = assets::attach_assets(router);
+
+    router
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(Arc::clone(&shared_state))
