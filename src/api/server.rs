@@ -5,7 +5,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use super::{routes, static_assets};
+use super::{routes, assets};
 use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::core::{AppConfig, db::async_db};
@@ -21,7 +21,7 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
         .nest("/api", routes::router());
 
     // Static assets: embedded in the binary (prod), or served from disk (dev).
-    let router = static_assets::attach_assets(router);
+    let router = assets::attach_assets(router);
 
     router
         .layer(TraceLayer::new_for_http())
