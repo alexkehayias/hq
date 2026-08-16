@@ -100,6 +100,112 @@ For visual review, see `/components-gallery/`.
 - **Attrs:** `session` (JSON: `{ id, title?, summary?, tags? }`)
 - Chat session list row with title (falls back to `Session {id}`), optional tag chips, summary, and "View »" link. Uses HTM.
 
+## Composing components
+
+Components nest like regular HTML and talk to each other **only through events**.
+Every page that uses them must load two things in `<head>`:
+
+```html
+<link href="/output.css" rel="stylesheet">
+<script src="/theme-init.js"></script>          <!-- dark mode, before first paint -->
+<script type="module" src="/components/index.js"></script>  <!-- all components -->
+```
+
+### Rules
+
+1. **One page = one `<hq-page-shell>`.** It owns the gradient background, safe-area
+   padding, and the "Back to" link. Everything else goes in its default slot (`<main>`).
+2. **Nest freely** — components are light-DOM custom elements, so `hq-state-view`
+   can wrap `hq-empty-state`, which can contain `hq-button`, and so on.
+3. **Wire with `addEventListener`**, never inline `onClick`. Each component fires a
+   bubbled custom event carrying the data you need:
+   - `hq-select` → `change` with `detail.value`
+   - `hq-pagination` → `page-change` with `detail.page`
+   - `hq-file-tree` → `file-select` with `detail.path`
+   - `hq-modal` → `close`
+4. **Read state back from attributes** (e.g. `filter.getAttribute('value')`) and
+   **drive state by setting attributes** (e.g. `view.setAttribute('state', 'loading')`).
+5. **Use the `html` serializer from `/components/lib/html.js`** for any data-driven
+   markup you build in JS — it auto-escapes strings and drops `on*` handlers.
+
+### Example — a "Tasks" page
+
+```html
+<body>
+  <hq-page-shell title="Tasks" back-href="/" back-label="Home">
+
+    <div class="flex items-end justify-between gap-4 mb-6 flex-wrap">
+      <hq-select id="task-filter" label="Status">
+        <option value="all" selected>All</option>
+        <option value="open">Open</option>
+        <option value="done">Done</option>
+      </hq-select>
+      <hq-button id="new-task">+ New task</hq-button>
+    </div>
+
+    <hq-state-view id="task-view" state="loading">
+      <div slot="empty">
+        <hq-empty-state icon="search" title="No tasks match">
+          Try a different filter.
+        </hq-empty-state>
+      </div>
+      <div slot="content">
+        <div id="task-list" class="space-y-4"></div>
+        <hq-pagination id="task-pagination" page="1" total-pages="5"></hq-pagination>
+      </div>
+    </hq-state-view>
+
+  </hq-page-shell>
+</body>
+```
+
+```js
+import { html } from '/components/lib/html.js';
+
+const view = document.getElementById('task-view');
+const filter = document.getElementById('task-filter');
+const pagination = document.getElementById('task-pagination');
+const list = document.getElementById('task-list');
+
+filter.addEventListener('change', async (e) => {
+  view.setAttribute('state', 'loading');
+  await loadTasks(e.detail.value, 1);
+});
+
+pagination.addEventListener('page-change', (e) => {
+  view.setAttribute('state', 'loading');
+  loadTasks(filter.getAttribute('value'), e.detail.page);
+});
+
+async function loadTasks(status, page) {
+  const res = await fetch(`/api/tasks?status=${status}&page=${page}`);
+  const tasks = await res.json();
+
+  if (!tasks.length) {
+    view.setAttribute('state', 'empty');
+    return;
+  }
+
+  list.innerHTML = tasks
+    .map((t) => html`
+      <hq-card max-width="full">
+        <div slot="header">
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">${t.title}</h3>
+            <hq-badge tone="${t.status === 'done' ? 'green' : 'yellow'}">${t.status}</hq-badge>
+          </div>
+        </div>
+        <p class="text-sm text-gray-600 dark:text-gray-400">${t.summary}</p>
+      </hq-card>
+    `)
+    .map((r) => r.value)
+    .join('');
+
+  pagination.setAttribute('total-pages', String(tasks.totalPages));
+  view.setAttribute('state', 'content');
+}
+```
+
 ## Conventions
 
 - **Light DOM** — no Shadow DOM. Tailwind classes work directly.
