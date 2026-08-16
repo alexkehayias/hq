@@ -1,13 +1,25 @@
 use std::sync::{Arc, RwLock};
 
-use axum::middleware;
-use axum::{Router, extract::Request, response::Response};
-use http::{HeaderValue, header};
-use tower::ServiceBuilder;
+use axum::Router;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[cfg(feature = "embed-assets")]
+use super::embed;
+
+#[cfg(not(feature = "embed-assets"))]
+use axum::middleware;
+#[cfg(not(feature = "embed-assets"))]
+use axum::extract::Request;
+#[cfg(not(feature = "embed-assets"))]
+use axum::response::Response;
+#[cfg(not(feature = "embed-assets"))]
+use http::{HeaderValue, header};
+#[cfg(not(feature = "embed-assets"))]
+use tower::ServiceBuilder;
+#[cfg(not(feature = "embed-assets"))]
+use tower_http::services::ServeDir;
 
 use super::routes;
 use crate::ai::skills::SkillRegistry;
@@ -17,6 +29,7 @@ use crate::jobs::{
     DailyAgenda, GenerateSessionTitles, GitSync, ResearchMeetingAttendees, spawn_periodic_job,
 };
 
+#[cfg(not(feature = "embed-assets"))]
 async fn set_static_cache_control(request: Request, next: middleware::Next) -> Response {
     let mut response = next.run(request).await;
     response
@@ -28,11 +41,20 @@ async fn set_static_cache_control(request: Request, next: middleware::Next) -> R
 pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
     let cors = CorsLayer::permissive();
 
-    Router::new()
+    let mut router = Router::new()
         // API routes
-        .nest("/api", routes::router())
-        // Static server of assets in ./web-ui
-        .fallback_service(
+        .nest("/api", routes::router());
+
+    #[cfg(feature = "embed-assets")]
+    {
+        // Serve assets embedded in the binary (prod build)
+        router = router.fallback(embed::handler);
+    }
+
+    #[cfg(not(feature = "embed-assets"))]
+    {
+        // Dev: serve assets from disk so changes appear without a rebuild
+        router = router.fallback_service(
             ServiceBuilder::new()
                 .layer(middleware::from_fn(set_static_cache_control))
                 .service(
@@ -40,7 +62,10 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
                         .precompressed_br()
                         .precompressed_gzip(),
                 ),
-        )
+        );
+    }
+
+    router
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(Arc::clone(&shared_state))
