@@ -1,6 +1,7 @@
 //! Embedded web assets, compiled into the binary when built with
 //! `--features embed-assets` (prod). Dev builds serve `web-ui/src` from disk.
 
+use axum::Router;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
 use http::{HeaderValue, StatusCode, header};
@@ -45,6 +46,14 @@ pub async fn handler(request: Request) -> Response {
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Attach the embedded-assets fallback to `router`.
+pub fn attach_assets<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router.fallback(handler)
 }
 
 #[cfg(test)]
