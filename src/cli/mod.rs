@@ -400,7 +400,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 tasks::run_list(&task_db, &notes_path, project.as_deref(), status.as_deref()).await?;
             }
             TasksCommand::Refile { id, project } => {
-                tasks::run_refile(&task_db, &notes_path, &id, &project).await?;
+                tasks::run_refile(&task_db, &notes_path, &index_path, &id, &project).await?;
             }
         }
         }

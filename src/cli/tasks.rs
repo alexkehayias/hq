@@ -46,7 +46,7 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
         .filetags(if special { "private inbox" } else { "private project" })
         .build()
         .to_string();
-    fs::write(&full_path, &content)
+    orgmode::atomic_write(std::path::Path::new(&full_path), &content)
         .await
         .context("Failed to create project file")?;
 
@@ -103,6 +103,7 @@ pub async fn run_create(
     let id = Uuid::new_v4().to_string();
     let body = body.unwrap_or_default();
     let status_upper = status.to_uppercase();
+    let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
 
     let file_path = if let Some(project_name) = project {
         // Look up existing project in DB, or create a new project file
@@ -111,44 +112,49 @@ pub async fn run_create(
             None => create_project_file(db, notes_path, project_name).await?,
         };
         println!("Created project file: {}", project_path.display());
-        let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
-        let mut project_content = fs::read_to_string(&project_path).await?;
-        if !project_content.ends_with('\n') {
+        orgmode::with_file_lock(&project_path, || async {
+            let mut project_content = fs::read_to_string(&project_path).await?;
+            if !project_content.ends_with('\n') {
+                project_content.push('\n');
+            }
+            project_content.push_str(&headline);
             project_content.push('\n');
-        }
-        project_content.push_str(&headline);
-        project_content.push('\n');
-        fs::write(&project_path, &project_content)
-            .await
-            .context("Failed to write project file")?;
+            orgmode::atomic_write(&project_path, &project_content)
+                .await
+                .context("Failed to write project file")
+        })
+        .await?;
         println!("Created task '{title}' in project '{project_name}' (id: {id})");
         project_path
     } else {
         // Standalone tasks go into the capture.org inbox so the default
         // `tasks list` (which scans capture.org) finds them.
         let capture_path = PathBuf::from(format!("{notes_path}/capture.org"));
-        let mut content = if capture_path.exists() {
-            fs::read_to_string(&capture_path).await?
-        } else {
-            let capture_id = Uuid::new_v4().to_string();
-            let today = Local::now().format("%Y-%m-%d");
-            org::Document::builder()
-                .property("ID", &capture_id)
-                .title("Capture")
-                .category("capture")
-                .date(&today.to_string())
-                .filetags("private inbox")
-                .build()
-                .to_string()
-        };
-        if !content.ends_with('\n') {
+        orgmode::with_file_lock(&capture_path, || async {
+            let mut content = if capture_path.exists() {
+                fs::read_to_string(&capture_path).await?
+            } else {
+                let capture_id = Uuid::new_v4().to_string();
+                let today = Local::now().format("%Y-%m-%d");
+                org::Document::builder()
+                    .property("ID", &capture_id)
+                    .title("Capture")
+                    .category("capture")
+                    .date(&today.to_string())
+                    .filetags("private inbox")
+                    .build()
+                    .to_string()
+            };
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&headline);
             content.push('\n');
-        }
-        content.push_str(&orgmode::build_headline(&id, title, body, &status_upper, 1));
-        content.push('\n');
-        fs::write(&capture_path, &content)
-            .await
-            .context("Failed to write task file")?;
+            orgmode::atomic_write(&capture_path, &content)
+                .await
+                .context("Failed to write task file")
+        })
+        .await?;
         println!(
             "Created task '{title}' (id: {id}, file: {})",
             capture_path.display()
@@ -179,6 +185,7 @@ pub async fn run_update(
             .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
         let filename = path.file_name().and_then(|s| s.to_str()).unwrap();
         orgmode::update_task(
+            db,
             notes_path,
             id,
             Some(filename),
@@ -190,12 +197,12 @@ pub async fn run_update(
         )
         .await?;
     } else {
-        orgmode::update_task(notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
+        orgmode::update_task(db, notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
     }
     println!("Task {id} updated");
 
     // Re-index the modified file so the task changes are immediately queryable
-    let location = orgmode::find_task(notes_path, id).await?;
+    let location = orgmode::find_task(db, notes_path, id).await?;
     index_single_file(db, index_path, location.path).await?;
 
     Ok(())
@@ -206,8 +213,16 @@ pub async fn run_update(
 /// Finds the task by UUID across all org files, removes the headline from its
 /// source, and appends it to the target project file (creating the project
 /// file if it doesn't exist yet).
-pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &str) -> Result<()> {
-    let location = orgmode::find_task(notes_path, id).await?;
+pub async fn run_refile(
+    db: &Connection,
+    notes_path: &str,
+    index_path: &str,
+    id: &str,
+    project: &str,
+) -> Result<()> {
+    // Resolve which file holds the task (via the index) so we know which
+    // file to lock before doing the read-modify-write.
+    let source_path = orgmode::find_task(db, notes_path, id).await?.path;
 
     // Look up existing project in DB, or create a new project file
     let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
@@ -215,39 +230,59 @@ pub async fn run_refile(db: &Connection, notes_path: &str, id: &str, project: &s
         None => create_project_file(db, notes_path, project).await?,
     };
 
-    if location.path == target_path {
+    if source_path == target_path {
         anyhow::bail!("Task is already in project '{project}'");
     }
 
-    // Extract the raw headline text (preserves all org-mode structure)
-    let headline_text = &location.content[location.range.start..location.range.end];
+    orgmode::with_file_locks(
+        &[source_path.clone(), target_path.clone()],
+        || async {
+            // Re-read the task under the lock so a concurrent refile can't be
+            // overwritten (lost update) and the git sync never sees a partial file.
+            let location = orgmode::find_task_in_file(&source_path, id).await?;
 
-    // Remove the headline from the source file
-    let before = &location.content[..location.range.start];
-    let after = &location.content[location.range.end..];
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    let new_source = format!("{before}{after}");
-    fs::write(&location.path, &new_source)
-        .await
-        .context("Failed to write source file after refile")?;
+            // Extract the raw headline text (preserves all org-mode structure)
+            let headline_text = &location.content[location.range.start..location.range.end];
 
-    // Append the raw headline verbatim to the target project file
-    let mut target_content = fs::read_to_string(&target_path).await?;
-    if !target_content.ends_with('\n') {
-        target_content.push('\n');
-    }
-    target_content.push_str(headline_text);
-    target_content.push('\n');
-    fs::write(&target_path, &target_content)
-        .await
-        .context("Failed to write target project file")?;
+            // Remove the headline from the source file
+            let before = &location.content[..location.range.start];
+            let after = &location.content[location.range.end..];
+            let after = after.strip_prefix('\n').unwrap_or(after);
+            let new_source = format!("{before}{after}");
+            orgmode::atomic_write(&location.path, &new_source)
+                .await
+                .context("Failed to write source file after refile")?;
 
-    println!(
-        "Refiled task {id} ('{}') from {} to {}",
-        location.current_title,
-        location.path.display(),
-        target_path.display()
-    );
+            // Append the raw headline verbatim to the target project file
+            let mut target_content = fs::read_to_string(&target_path).await?;
+            if !target_content.ends_with('\n') {
+                target_content.push('\n');
+            }
+            target_content.push_str(headline_text);
+            target_content.push('\n');
+            orgmode::atomic_write(&target_path, &target_content)
+                .await
+                .context("Failed to write target project file")?;
+
+            println!(
+                "Refiled task {id} ('{}') from {} to {}",
+                location.current_title,
+                location.path.display(),
+                target_path.display()
+            );
+
+            // Re-index both files so note_meta and full-text search reflect the
+            // move: the task now lives in target, not source. Done under the
+            // file locks so concurrent refiles sharing these files also
+            // serialize their Tantivy index writes (an IndexWriter is exclusive
+            // per directory, so parallel writers would panic on LockBusy).
+            index_single_file(db, index_path, source_path.clone()).await?;
+            index_single_file(db, index_path, target_path.clone()).await?;
+
+            Ok(())
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -258,17 +293,26 @@ pub async fn run_delete(
     index_path: &str,
     id: &str,
 ) -> Result<()> {
-    let location = orgmode::find_task(notes_path, id).await?;
+    let location = orgmode::find_task(db, notes_path, id).await?;
+    let path = location.path.clone();
 
-    let before = &location.content[..location.range.start];
-    let after = &location.content[location.range.end..];
-    // Remove one trailing newline if present to avoid blank-line gaps
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    let new_content = format!("{before}{after}");
-    fs::write(&location.path, &new_content)
-        .await
-        .context("Failed to write project file after deletion")?;
-    println!("Deleted task {id} from {}", location.path.display());
+    orgmode::with_file_lock(&path, || async {
+        // Re-read under the lock so a concurrent writer can't be overwritten.
+        let location = orgmode::find_task_in_file(&path, id).await?;
+
+        let before = &location.content[..location.range.start];
+        let after = &location.content[location.range.end..];
+        // Remove one trailing newline if present to avoid blank-line gaps
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        let new_content = format!("{before}{after}");
+        orgmode::atomic_write(&location.path, &new_content)
+            .await
+            .context("Failed to write project file after deletion")?;
+        println!("Deleted task {id} from {}", location.path.display());
+
+        Ok(())
+    })
+    .await?;
 
     remove_task_from_indexes(db, index_path, id).await?;
 
@@ -1442,7 +1486,7 @@ Investigate the redirect
         let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a project
-        run_refile(&db, &notes, &task_id, "errands").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "errands").await.unwrap();
 
         // Task headline should be removed from the standalone file
         // (document-level preamble with #+TITLE: may retain the title)
@@ -1492,7 +1536,7 @@ Investigate the redirect
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refile to a different project
-        run_refile(&db, &notes, &task_id, "security").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "security").await.unwrap();
 
         // Task should no longer be in the original project
         let sprint_content = fs::read_to_string(&project_path).unwrap();
@@ -1516,14 +1560,62 @@ Investigate the redirect
     }
 
     #[tokio::test]
+    async fn test_refile_twice_keeps_index_in_sync() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        run_create(&db, &notes, &index, "Move me", None, None, "TODO")
+            .await
+            .unwrap();
+
+        // Find the standalone task's ID (document-level :ID: is first, task is second)
+        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture = fs::read_to_string(&capture_path).unwrap();
+        let id_start = capture.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
+        let task_id = capture[id_start..].lines().next().unwrap().trim().to_string();
+
+        // Refile to project alpha, then refile again to project beta. The second
+        // refile depends on find_task locating the task in alpha — i.e. the index
+        // must have been updated by the first refile.
+        run_refile(&db, &notes, &index, &task_id, "alpha").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "beta").await.unwrap();
+
+        // find_task (index-driven, no fallback) must point at the beta file.
+        let loc = orgmode::find_task(&db, &notes, &task_id).await.unwrap();
+        let file_name = loc.path.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(
+            file_name.contains("--project-beta"),
+            "task should now live in beta, find_task resolved to {file_name}"
+        );
+
+        // Task appears exactly once, only in beta.
+        let beta = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-beta") { Some(p) } else { None }
+            })
+            .next()
+            .unwrap();
+        let beta_content = fs::read_to_string(&beta).unwrap();
+        assert_eq!(beta_content.matches(&task_id).count(), 1);
+        assert_eq!(headline_count(&beta), 1);
+    }
+
+    #[tokio::test]
     async fn test_refile_preserves_org_structure() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Create a task with body text via refile.org
         let refile_path = std::path::Path::new(&notes).join("refile.org");
         fs::write(
             &refile_path,
             "\
+:PROPERTIES:
+:ID:       refile
+:END:
+#+TITLE: Refile
+
 * TODO Research API design
 :PROPERTIES:
 :ID:       task-with-body
@@ -1533,9 +1625,10 @@ Consider authentication requirements.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, refile_path.clone()).await.unwrap();
 
         // Refile to a project
-        run_refile(&db, &notes, "task-with-body", "research").await.unwrap();
+        run_refile(&db, &notes, &index, "task-with-body", "research").await.unwrap();
 
         // Read the project file
         let project_path = fs::read_dir(&notes)
@@ -1584,7 +1677,7 @@ Consider authentication requirements.
         let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
         // Refiling to the same project should fail
-        let result = run_refile(&db, &notes, &task_id, "my-project").await;
+        let result = run_refile(&db, &notes, &index, &task_id, "my-project").await;
         assert!(result.is_err(), "should error when refiling to same project");
         assert!(
             result.unwrap_err().to_string().contains("already in project"),
@@ -1594,15 +1687,15 @@ Consider authentication requirements.
 
     #[tokio::test]
     async fn test_refile_nonexistent_task() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_refile(&db, &notes, "nonexistent-uuid", "some-project").await;
+        let result = run_refile(&db, &notes, &index, "nonexistent-uuid", "some-project").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_refile_from_refile_org_to_project() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Simulate a task sitting in refile.org
         let refile_path = std::path::Path::new(&notes).join("refile.org");
@@ -1627,9 +1720,10 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, refile_path.clone()).await.unwrap();
 
         // Refile one task to a project
-        run_refile(&db, &notes, "review-pr-42", "ops").await.unwrap();
+        run_refile(&db, &notes, &index, "review-pr-42", "ops").await.unwrap();
 
         // The refiled task should be gone from refile.org
         let refile_content = fs::read_to_string(&refile_path).unwrap();
@@ -1655,6 +1749,77 @@ Need to check the middleware changes.
         assert!(project_content.contains("Review PR"));
         assert!(project_content.contains("middleware changes"));
         assert_eq!(headline_count(&project_path), 1);
+    }
+
+    /// Concurrent refiles of several tasks from the same capture.org must not
+    /// lose updates: every task ends up in the project exactly once, and none
+    /// remain behind in the source (regression test for the lost-update / task
+    /// duplication seen when refiles raced the git sync).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_refile_concurrent_from_same_file_no_duplication() {
+        let (db, _dir, notes, index) = test_env().await;
+
+        // Create several standalone tasks in capture.org.
+        for i in 0..8 {
+            run_create(&db, &notes, &index, &format!("Task {i}"), Some("body"), None, "TODO")
+                .await
+                .unwrap();
+        }
+        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture = fs::read_to_string(&capture_path).unwrap();
+        // Skip the document-level :ID: (first) and collect each task's ID.
+        let ids: Vec<String> = capture
+            .match_indices(":ID:")
+            .skip(1)
+            .filter_map(|(i, _)| {
+                let rest = &capture[i + ":ID:".len()..];
+                let line = rest.lines().next()?.trim().to_string();
+                Some(line)
+            })
+            .collect();
+        assert_eq!(ids.len(), 8, "expected 8 task IDs, got: {ids:?}");
+
+        // Refile all of them concurrently to the same project.
+        let mut set = tokio::task::JoinSet::new();
+        for id in ids.clone() {
+            let db = db.clone();
+            let notes = notes.clone();
+            let index = index.clone();
+            set.spawn(async move {
+                run_refile(&db, &notes, &index, &id, "errands").await.unwrap();
+            });
+        }
+        while let Some(_) = set.join_next().await {}
+
+        // Every task must appear in the project file exactly once.
+        let project_path = fs::read_dir(&notes)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                let n = p.file_name().unwrap().to_str().unwrap().to_string();
+                if n.contains("--project-errands") { Some(p) } else { None }
+            })
+            .next()
+            .expect("errands project file should exist");
+        let project = fs::read_to_string(&project_path).unwrap();
+        for id in &ids {
+            assert_eq!(
+                project.matches(id).count(),
+                1,
+                "task {id} should appear exactly once in project, got:\n{project}"
+            );
+        }
+        assert_eq!(headline_count(&project_path), 8);
+
+        // None should remain in capture.org (no lost updates).
+        let capture = fs::read_to_string(&capture_path).unwrap();
+        for id in &ids {
+            assert!(
+                !capture.contains(id.as_str()),
+                "task {id} should have been removed from capture.org, got:\n{capture}"
+            );
+        }
+        assert_eq!(headline_count(&capture_path), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -1718,13 +1883,18 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_refile_to_existing_special_file() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         // Task in capture.org
         let capture_path = std::path::Path::new(&notes).join("capture.org");
         fs::write(
             &capture_path,
             "\
+:PROPERTIES:
+:ID:       capture
+:END:
+#+TITLE: capture
+
 * TODO Refile me
 :PROPERTIES:
 :ID:       special-task
@@ -1732,12 +1902,18 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, capture_path.clone()).await.unwrap();
 
         // Pre-existing work.org
         let work_path = std::path::Path::new(&notes).join("work.org");
         fs::write(
             &work_path,
             "\
+:PROPERTIES:
+:ID:       work-file
+:END:
+#+TITLE: work
+
 * TODO Work task
 :PROPERTIES:
 :ID:       work-task
@@ -1746,7 +1922,7 @@ Need to check the middleware changes.
         )
         .unwrap();
 
-        run_refile(&db, &notes, "special-task", "work").await.unwrap();
+        run_refile(&db, &notes, &index, "special-task", "work").await.unwrap();
 
         // Task removed from capture.org, appended to work.org
         let capture_content = fs::read_to_string(&capture_path).unwrap();
@@ -1762,12 +1938,17 @@ Need to check the middleware changes.
 
     #[tokio::test]
     async fn test_refile_creates_special_file_when_missing() {
-        let (db, _dir, notes, _index) = test_env().await;
+        let (db, _dir, notes, index) = test_env().await;
 
         let capture_path = std::path::Path::new(&notes).join("capture.org");
         fs::write(
             &capture_path,
             "\
+:PROPERTIES:
+:ID:       capture
+:END:
+#+TITLE: capture
+
 * TODO Refile me
 :PROPERTIES:
 :ID:       special-task
@@ -1775,8 +1956,9 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
+        index_single_file(&db, &index, capture_path.clone()).await.unwrap();
 
-        run_refile(&db, &notes, "special-task", "personal").await.unwrap();
+        run_refile(&db, &notes, &index, "special-task", "personal").await.unwrap();
 
         // personal.org created with bare name (no date prefix)
         let personal_path = std::path::Path::new(&notes).join("personal.org");

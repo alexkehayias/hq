@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -10,6 +13,7 @@ use orgize::rowan::ast::AstNode;
 use orgize::SyntaxElement;
 use regex::Regex;
 use tokio::fs;
+use tokio_rusqlite::Connection;
 
 use crate::org;
 
@@ -18,6 +22,78 @@ use crate::org;
 /// SOMEDAY is intentionally excluded — only DONE and CANCELED mark a task as
 /// closed (per user requirement).
 const CLOSED_STATUSES: &[&str] = &["DONE", "CANCELED"];
+
+/// Write `contents` to `path` atomically: write a temp file in the same
+/// directory, then `rename` it over the target. Because rename is atomic on
+/// the same filesystem, a concurrent reader — most importantly the git sync's
+/// `git add -A`, which runs every few minutes — can never observe a
+/// half-written note file. This is what caused the tail corruption seen when a
+/// plain truncate+write raced with the git sync.
+pub async fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("note.org");
+    let tmp_path = dir.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&tmp_path, contents).await?;
+    fs::rename(&tmp_path, path).await?;
+    Ok(())
+}
+
+/// Counter to keep atomic-write temp names unique within this process.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Process-global registry of per-path async mutexes, used to serialize
+/// read-modify-write mutations to the same note file so concurrent operations
+/// (e.g. several refiles from the same file, or a refile racing an update)
+/// don't lose each other's changes.
+static FILE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+/// Run `f` while holding exclusive locks for each path in `paths`. Locks are
+/// acquired in sorted order so concurrent multi-file operations can't deadlock.
+pub async fn with_file_locks<F, Fut>(paths: &[PathBuf], f: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = Result<()>> + Send,
+{
+    let map = FILE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    sorted.dedup();
+
+    // Collect the Arc handles first, then acquire guards. `locks` is declared
+    // before `guards` so the guards (which borrow it) drop first.
+    let mut locks: Vec<Arc<tokio::sync::Mutex<()>>> = Vec::with_capacity(sorted.len());
+    for path in &sorted {
+        let lock = {
+            let mut m = map.lock().unwrap();
+            m.entry(path.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        locks.push(lock);
+    }
+    let mut guards = Vec::with_capacity(locks.len());
+    for lock in &locks {
+        guards.push(lock.lock().await);
+    }
+    f().await
+}
+
+/// Run `f` while holding an exclusive lock for `path`.
+pub async fn with_file_lock<F, Fut>(path: &Path, f: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = Result<()>> + Send,
+{
+    with_file_locks(&[path.to_path_buf()], f).await
+}
 
 /// Format the current local time as an inactive org timestamp:
 /// `[YYYY-MM-DD Ddd HH:MM]`.
@@ -270,25 +346,6 @@ fn compute_state_transition(
     (new_closed, new_logbook)
 }
 
-/// Recursively collect all .org files in a directory tree.
-pub async fn collect_org_files(path: &std::path::Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
-        return files;
-    };
-    while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
-        let p = entry.path();
-        if p.is_dir() {
-            files.extend(Box::pin(collect_org_files(&p)).await);
-        } else if p.extension().map_or(false, |e| e == "org")
-            && p.file_name().unwrap_or_default() != "config.org"
-        {
-            files.push(p);
-        }
-    }
-    files
-}
-
 /// Build a regex pattern that matches `:ID:` followed by the given value,
 /// regardless of the amount of whitespace between the key and value.
 fn id_pattern(id: &str) -> Regex {
@@ -349,67 +406,30 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
     );
 }
 
-/// Find a task by UUID across all org files in the notes directory.
-pub async fn find_task(notes_path: &str, id: &str) -> Result<TaskLocation> {
-    let pattern = id_pattern(id);
-    let files = collect_org_files(std::path::Path::new(notes_path)).await;
+/// Find a task by UUID, using the index to locate its file.
+///
+/// Looks up the task's `file_name` in `note_meta`, then reads just that one
+/// file. Tasks are only findable once indexed (created via the CLI or picked
+/// up by the periodic index job) — this matches `run_list`, which also queries
+/// `note_meta`. Callers that move a task between files (e.g. refile) must
+/// re-index so the entry stays in sync.
+pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<TaskLocation> {
+    let id_owned = id.to_string();
+    let db_file: Option<String> = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT file_name FROM note_meta WHERE id = ?1 AND type = 'task'",
+            )?;
+            let mut rows = stmt.query_map([id_owned.as_str()], |row| row.get::<_, String>(0))?;
+            Ok(rows.next().transpose()?)
+        })
+        .await?;
 
-    for path in files {
-        if path.file_name().unwrap_or_default() == "config.org" {
-            continue;
-        }
-
-        let content = fs::read_to_string(&path).await?;
-        if !pattern.is_match(&content) {
-            continue;
-        }
-
-        // Parse to find the matching headline
-        let config = org::todo_keywords_config();
-        let org = config.parse(&content);
-        for headline in org.document().headlines() {
-            if let Some(props) = headline.properties() {
-                if props.get("ID").is_some_and(|v| v == id) {
-                    let range = headline.syntax().text_range();
-                    let usize_range =
-                        u32::from(range.start()) as usize..u32::from(range.end()) as usize;
-                    let current_status = headline
-                        .todo_keyword()
-                        .map(|k| k.to_string())
-                        .unwrap_or_else(|| "TODO".to_string());
-                    let current_title = headline.title_raw().trim().to_string();
-                    let current_level = headline.level();
-                    let current_body = body_from_headline(&headline);
-                    let current_closed = extract_closed(&headline);
-                    let current_logbook = extract_logbook(&headline);
-                    let current_tags = headline
-                        .tags()
-                        .map(|t| t.to_string())
-                        .collect::<Vec<String>>();
-
-                    return Ok(TaskLocation {
-                        path,
-                        range: usize_range,
-                        content,
-                        current_title,
-                        current_body,
-                        current_status,
-                        current_level,
-                        current_closed,
-                        current_logbook,
-                        current_tags,
-                    });
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "Found ID {id} in {} but could not locate its headline",
-            path.display()
-        );
-    }
-
-    anyhow::bail!("Task with ID {id} not found in {notes_path}");
+    let Some(file_name) = db_file else {
+        anyhow::bail!("Task with ID {id} not found in {notes_path}");
+    };
+    let path = std::path::Path::new(notes_path).join(&file_name);
+    find_task_in_file(&path, id).await
 }
 
 /// Traverses a headline's syntax subtree and extracts body text,
@@ -498,14 +518,31 @@ pub async fn update_task_in_file(
     add_tags: &[String],
     remove_tags: &[String],
 ) -> Result<()> {
-    let location = find_task_in_file(file_path, id).await?;
+    with_file_lock(file_path, || async {
+        let location = find_task_in_file(file_path, id).await?;
+        apply_update(&location, id, title, body, status, add_tags, remove_tags).await
+    })
+    .await
+}
+
+/// Rebuild the headline for a located task and write the file back atomically.
+/// Callers must hold the file lock for `location.path`.
+async fn apply_update(
+    location: &TaskLocation,
+    id: &str,
+    title: Option<&str>,
+    body: Option<&str>,
+    status: Option<&str>,
+    add_tags: &[String],
+    remove_tags: &[String],
+) -> Result<()> {
     let new_title = title.unwrap_or(&location.current_title);
     let new_body = body.unwrap_or(&location.current_body);
     let status = status.map(|s| s.to_uppercase());
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
     let (new_closed, new_logbook) =
-        compute_state_transition(&location, new_status);
+        compute_state_transition(location, new_status);
     let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
 
     let new_headline = build_updated_headline(
@@ -523,11 +560,9 @@ pub async fn update_task_in_file(
         before = &location.content[..location.range.start],
         after = &location.content[location.range.end..]
     );
-    fs::write(&location.path, &new_content)
+    atomic_write(&location.path, &new_content)
         .await
-        .context("Failed to write updated task file")?;
-
-    Ok(())
+        .context("Failed to write updated task file")
 }
 
 /// Update a task by UUID, optionally scoped to a specific file.
@@ -544,6 +579,7 @@ pub async fn update_task_in_file(
 /// Tag updates (`add_tags` / `remove_tags`) apply to the headline's existing tag
 /// list (deduped, order-preserving). Removing a tag not currently set is silent.
 pub async fn update_task(
+    db: &Connection,
     notes_path: &str,
     id: &str,
     file_name: Option<&str>,
@@ -559,36 +595,15 @@ pub async fn update_task(
             format!("Task {id} not found in scoped file {fname}")
         })?
     } else {
-        find_task(notes_path, id).await?
+        find_task(db, notes_path, id).await?
     };
-    let new_title = title.unwrap_or(&location.current_title);
-    let new_body = body.unwrap_or(&location.current_body);
-    let status = status.map(|s| s.to_uppercase());
-    let new_status = status.as_deref().unwrap_or(&location.current_status);
-
-    let (new_closed, new_logbook) = compute_state_transition(&location, new_status);
-    let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
-
-    let new_headline = build_updated_headline(
-        id,
-        new_title,
-        new_body,
-        new_status,
-        location.current_level,
-        new_closed.as_deref(),
-        &new_logbook,
-        &new_tags,
-    );
-    let new_content = format!(
-        "{before}{new_headline}{after}",
-        before = &location.content[..location.range.start],
-        after = &location.content[location.range.end..]
-    );
-    fs::write(&location.path, &new_content)
-        .await
-        .context("Failed to write updated task file")?;
-
-    Ok(())
+    let path = location.path.clone();
+    with_file_lock(&path, || async {
+        // Re-read under the lock so a concurrent writer can't be overwritten.
+        let location = find_task_in_file(&path, id).await?;
+        apply_update(&location, id, title, body, status, add_tags, remove_tags).await
+    })
+    .await
 }
 
 /// Build a full org-mode document string for a standalone task.
