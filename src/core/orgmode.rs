@@ -31,6 +31,9 @@ const CLOSED_STATUSES: &[&str] = &["DONE", "CANCELED"];
 /// plain truncate+write raced with the git sync.
 pub async fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    // Notes can live in subdirectories (e.g. projects/), so ensure the
+    // parent directory exists before writing the temp file.
+    fs::create_dir_all(dir).await?;
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())

@@ -459,7 +459,6 @@ fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) 
 
     // Update the note meta table
     note_meta_stmt
-        // TODO: Don't hardcode the note path, save the file name instead
         .execute(tokio_rusqlite::params![
             note.id,
             "note",
@@ -575,8 +574,15 @@ pub async fn index_all(
             }
         };
         // Arc the shared items so that it can be safely passed to the
-        // async closure.
-        let file_name = Arc::new(p.file_name().unwrap().to_str().unwrap().to_owned());
+        // async closure. Store the path relative to the notes root so
+        // files in subdirectories (notes/, projects/) are locatable.
+        let file_name = Arc::new(
+            p.strip_prefix(notes_dir_path)
+                .unwrap_or_else(|_| p.as_path())
+                .to_str()
+                .unwrap_or_default()
+                .to_owned(),
+        );
         let note = match parse_note(&content) {
             Ok(note) => Arc::new(note),
             Err(e) => {
@@ -654,11 +660,12 @@ pub async fn index_all(
 pub async fn index_single_file(
     db: &Connection,
     index_dir_path: &str,
+    notes_path: &str,
     file_path: PathBuf,
 ) -> Result<()> {
     let file_name = file_path
-        .file_name()
-        .unwrap_or_default()
+        .strip_prefix(notes_path)
+        .unwrap_or_else(|_| file_path.as_path())
         .to_str()
         .unwrap_or_default()
         .to_owned();

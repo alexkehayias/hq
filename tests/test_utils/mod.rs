@@ -93,8 +93,9 @@ async fn index_dummy_notes_async(db: &tokio_rusqlite::Connection, temp_dir: Path
     let notes_dir = temp_dir.join("notes");
     let notes_dir_path = notes_dir.to_str().unwrap();
     fs::create_dir_all(notes_dir_path).expect("Failed to create directory");
+    fs::create_dir_all(notes_dir.join("notes")).expect("Failed to create notes subdirectory");
 
-    let test_note_path = notes_dir.join("test.org");
+    let test_note_path = notes_dir.join("notes").join("test.org");
     let paths = vec![test_note_path.clone()];
 
     fs::write(

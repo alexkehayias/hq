@@ -53,7 +53,7 @@ pub fn is_special_file(name: &str) -> bool {
 /// `--project-{slug}.org` scheme.
 pub async fn find_project_file(db: &Connection, notes_path: &str, project_ref: &str) -> Result<Option<PathBuf>> {
     if is_special_file(project_ref) {
-        let path = PathBuf::from(format!("{notes_path}/{project_ref}.org"));
+        let path = PathBuf::from(format!("{notes_path}/projects/{project_ref}.org"));
         if path.exists() {
             return Ok(Some(path));
         }
