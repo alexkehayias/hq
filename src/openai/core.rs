@@ -528,9 +528,12 @@ pub async fn completion_stream(
         }
     }
 
-    // Check for leftover data in buffer that wasn't processed
+    // Leftover data here is expected: when we break out on a finish_reason
+    // or [DONE], the remainder of that network chunk (final usage chunk and
+    // [DONE]) is left unprocessed. It carries nothing we need, so just log at
+    // trace level for debugging.
     if !buffer.is_empty() {
-        tracing::warn!("Leftover data in buffer after processing: {:?}", buffer);
+        tracing::trace!("Leftover data in buffer after processing: {:?}", buffer);
     }
 
     // Handle if this is a tool call or a content message
