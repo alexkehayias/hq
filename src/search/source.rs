@@ -1,13 +1,10 @@
 /// Utilities for getting source documents for indexing
 use std::path::PathBuf;
 
-/// Recursively walk the `notes/` subdirectory of `path` for `.org` files.
-/// Only files under the `notes/` subdirectory are treated as notes; the repo
-/// root and the `projects/` subdirectory are excluded.
-pub async fn notes(path: &str) -> Vec<PathBuf> {
-    let root = format!("{path}/notes");
+/// Recursively walk `roots` (absolute paths) for `.org` files.
+async fn walk_org_files(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut result = Vec::new();
-    let mut pending = vec![root];
+    let mut pending = roots;
 
     while let Some(dir) = pending.pop() {
         let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
@@ -19,7 +16,7 @@ pub async fn notes(path: &str) -> Vec<PathBuf> {
             };
             let p = entry.path();
             if meta.is_dir() {
-                pending.push(p.to_str().unwrap_or_default().to_string());
+                pending.push(p);
             } else {
                 let ext = p.extension().unwrap_or_default();
                 if ext == "org" {
@@ -29,6 +26,17 @@ pub async fn notes(path: &str) -> Vec<PathBuf> {
         }
     }
     result
+}
+
+/// Recursively walk the `notes/` and `projects/` subdirectories of `path`
+/// (the notes repo root) for `.org` files. The repo root itself is excluded,
+/// but both source subdirectories are indexed.
+pub async fn notes(path: &str) -> Vec<PathBuf> {
+    walk_org_files(vec![
+        PathBuf::from(format!("{path}/notes")),
+        PathBuf::from(format!("{path}/projects")),
+    ])
+    .await
 }
 
 /// Return a list of notes filtered by file names
@@ -41,4 +49,40 @@ pub async fn note_filter(path: &str, file_paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .into_iter()
         .filter(|p| file_paths.contains(p))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// `notes()` must walk both the `notes/` and `projects/` subdirectories so
+    /// project files are indexed alongside regular notes, and must recurse into
+    /// nested subdirectories within each.
+    #[tokio::test]
+    async fn notes_walks_notes_and_projects() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        fs::create_dir_all(root.join("notes/sub")).unwrap();
+        fs::create_dir_all(root.join("projects")).unwrap();
+        fs::create_dir_all(root.join("ignored")).unwrap();
+
+        fs::write(root.join("notes/top.org"), "").unwrap();
+        fs::write(root.join("notes/sub/nested.org"), "").unwrap();
+        fs::write(root.join("projects/project.org"), "").unwrap();
+        fs::write(root.join("ignored/root.org"), "").unwrap();
+        fs::write(root.join("top_level.org"), "").unwrap();
+
+        let mut found = notes(root.to_str().unwrap()).await;
+        found.sort();
+
+        let expected: Vec<PathBuf> = vec![
+            root.join("notes/sub/nested.org"),
+            root.join("notes/top.org"),
+            root.join("projects/project.org"),
+        ];
+        assert_eq!(found, expected);
+    }
 }
