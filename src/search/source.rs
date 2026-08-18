@@ -1,25 +1,31 @@
 /// Utilities for getting source documents for indexing
 use std::path::PathBuf;
 
-/// Get first level files in the directory, does not follow sub
-/// directories.
+/// Recursively walk the `notes/` subdirectory of `path` for `.org` files.
+/// Only files under the `notes/` subdirectory are treated as notes; the repo
+/// root and the `projects/` subdirectory are excluded.
 pub async fn notes(path: &str) -> Vec<PathBuf> {
-    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
-        return vec![];
-    };
-
-    // TODO: make this recursive if there is more than one directory of notes
+    let root = format!("{path}/notes");
     let mut result = Vec::new();
-    while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
-        let Ok(meta) = entry.metadata().await else {
+    let mut pending = vec![root];
+
+    while let Some(dir) = pending.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
             continue;
         };
-        // Skip directories and non org files
-        let path = entry.path();
-        let ext = path.extension().unwrap_or_default();
-        let name = path.file_name().unwrap_or_default();
-        if meta.is_file() && ext == "org" && name != "config.org" {
-            result.push(entry.path());
+        while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
+            let p = entry.path();
+            if meta.is_dir() {
+                pending.push(p.to_str().unwrap_or_default().to_string());
+            } else {
+                let ext = p.extension().unwrap_or_default();
+                if ext == "org" {
+                    result.push(p);
+                }
+            }
         }
     }
     result

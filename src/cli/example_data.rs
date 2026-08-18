@@ -19,19 +19,21 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
     // Ensure the target notes, db, and index directories exist
     fs::create_dir_all(notes_path).await
         .unwrap_or_else(|err| println!("Ignoring notes directory create failed: {}", err));
+    fs::create_dir_all(format!("{notes_path}/notes")).await
+        .unwrap_or_else(|err| println!("Ignoring notes/notes directory create failed: {}", err));
     fs::create_dir_all(vec_db_path).await
         .unwrap_or_else(|err| println!("Ignoring vector DB create failed: {}", err));
     fs::create_dir_all(index_path).await
         .unwrap_or_else(|err| println!("Ignoring index directory create failed: {}", err));
 
-    // Copy each .org file from examples to the notes directory
+    // Copy each .org file from examples into the notes/ subdirectory
     let mut count = 0;
     if let Ok(mut entries) = fs::read_dir(examples_path).await {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().map_or(false, |ext| ext == "org") {
                 let file_name = path.file_name().unwrap();
-                let dest = Path::new(notes_path).join(file_name);
+                let dest = Path::new(notes_path).join("notes").join(file_name);
                 match fs::copy(&path, &dest).await {
                     Ok(_) => {
                         println!("  Copied {}", file_name.to_string_lossy());

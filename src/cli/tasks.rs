@@ -36,7 +36,8 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
     } else {
         format!("{today}--project-{slug}.org")
     };
-    let full_path = format!("{notes_path}/{filename}");
+    let full_path = format!("{notes_path}/projects/{filename}");
+    let db_filename = format!("projects/{filename}");
 
     let content = org::Document::builder()
         .property("ID", &project_id)
@@ -53,7 +54,6 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
     // Register in DB so subsequent lookups find the project without
     // requiring a full re-index.
     let db_id = project_id;
-    let db_filename = filename;
     let db_title = project_name.to_string();
     db.call(move |conn| {
         conn.execute(
@@ -129,7 +129,7 @@ pub async fn run_create(
     } else {
         // Standalone tasks go into the capture.org inbox so the default
         // `tasks list` (which scans capture.org) finds them.
-        let capture_path = PathBuf::from(format!("{notes_path}/capture.org"));
+        let capture_path = PathBuf::from(format!("{notes_path}/projects/capture.org"));
         orgmode::with_file_lock(&capture_path, || async {
             let mut content = if capture_path.exists() {
                 fs::read_to_string(&capture_path).await?
@@ -163,7 +163,7 @@ pub async fn run_create(
     };
 
     // Re-index the affected file so the task is immediately queryable
-    index_single_file(db, index_path, file_path).await?;
+    index_single_file(db, index_path, notes_path, file_path).await?;
 
     Ok(())
 }
@@ -183,7 +183,11 @@ pub async fn run_update(
     if let Some(project_ref) = project {
         let path = projects::db::find_project_file(db, notes_path, project_ref).await?
             .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
-        let filename = path.file_name().and_then(|s| s.to_str()).unwrap();
+        let filename = path
+            .strip_prefix(notes_path)
+            .unwrap_or_else(|_| path.as_path())
+            .to_str()
+            .unwrap();
         orgmode::update_task(
             db,
             notes_path,
@@ -203,7 +207,7 @@ pub async fn run_update(
 
     // Re-index the modified file so the task changes are immediately queryable
     let location = orgmode::find_task(db, notes_path, id).await?;
-    index_single_file(db, index_path, location.path).await?;
+    index_single_file(db, index_path, notes_path, location.path).await?;
 
     Ok(())
 }
@@ -276,8 +280,8 @@ pub async fn run_refile(
             // file locks so concurrent refiles sharing these files also
             // serialize their Tantivy index writes (an IndexWriter is exclusive
             // per directory, so parallel writers would panic on LockBusy).
-            index_single_file(db, index_path, source_path.clone()).await?;
-            index_single_file(db, index_path, target_path.clone()).await?;
+            index_single_file(db, index_path, notes_path, source_path.clone()).await?;
+            index_single_file(db, index_path, notes_path, target_path.clone()).await?;
 
             Ok(())
         },
@@ -327,21 +331,28 @@ pub async fn run_list(
 ) -> Result<()> {
     let tasks = if let Some(project_ref) = project {
         let (filenames, display_prefix) = if projects::db::is_special_file(project_ref) {
-            let filename = format!("{project_ref}.org");
+            let filename = format!("projects/{project_ref}.org");
             (vec![filename], None)
         } else {
             let path = projects::db::find_project_file(db, notes_path, project_ref).await?
                 .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
             let filename = path
-                .file_name()
-                .and_then(|s| s.to_str())
+                .strip_prefix(notes_path)
+                .unwrap_or_else(|_| path.as_path())
+                .to_str()
                 .unwrap_or(project_ref)
                 .to_string();
             (vec![filename], None)
         };
         list_tasks_from_files(db, &filenames, status, display_prefix).await?
     } else {
-        list_tasks_from_files(db, &["refile.org".into(), "capture.org".into()], status, None).await?
+        list_tasks_from_files(
+            db,
+            &["projects/refile.org".into(), "projects/capture.org".into()],
+            status,
+            None,
+        )
+        .await?
     };
 
     if tasks.is_empty() {
@@ -503,7 +514,7 @@ mod tests {
             .unwrap();
 
         // Should create a single .org file
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert!(path.extension().unwrap() == "org");
@@ -522,7 +533,7 @@ mod tests {
             .await
             .unwrap();
 
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         let path = entries[0].as_ref().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("Milk, eggs, bread"));
@@ -536,7 +547,7 @@ mod tests {
             .await
             .unwrap();
 
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         let path = entries[0].as_ref().unwrap().path();
         let (_, status, _) = parse_headline(&path);
         assert_eq!(status, "NEXT");
@@ -555,7 +566,7 @@ mod tests {
             .unwrap();
 
         // Should create project file with one headline
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert!(path.to_str().unwrap().contains("--project-sprint-12"));
@@ -581,7 +592,7 @@ mod tests {
             .unwrap();
 
         // Single project file with two headlines
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert_eq!(headline_count(&path), 2);
@@ -626,7 +637,7 @@ mod tests {
         assert_eq!(count_tasks_by_title(&db, "Doomed task").await, 1);
 
         // Extract the task ID from the capture file.
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -651,7 +662,7 @@ mod tests {
             .unwrap();
 
         // Find the created task's ID
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -672,7 +683,7 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -698,7 +709,7 @@ mod tests {
             .unwrap();
 
         // Find the task ID from the project file
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         // The headline ID is the second occurrence (after the project-level ID)
         let id_marker = ":ID:       ";
@@ -737,7 +748,7 @@ mod tests {
         run_create(db, notes, &index, "Test task", None, None, "TODO")
             .await
             .unwrap();
-        let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -932,7 +943,7 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         assert!(
             !content.contains("CLOSED:"),
@@ -956,7 +967,7 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -982,7 +993,7 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         // Find the first headline's ID (second :ID: in file)
         let id_marker = ":ID:       ";
@@ -1003,7 +1014,7 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
@@ -1051,6 +1062,7 @@ mod tests {
         let notes = format!("{}/notes", dir.path().to_str().unwrap());
         let index = format!("{}/index", dir.path().to_str().unwrap());
         std::fs::create_dir_all(&notes).unwrap();
+        std::fs::create_dir_all(format!("{notes}/projects")).unwrap();
         std::fs::create_dir_all(&index).unwrap();
         let db = crate::core::db::async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
@@ -1060,6 +1072,11 @@ mod tests {
         .await
         .unwrap();
         (db, dir, notes, index)
+    }
+
+    /// Task/project files are written under `notes/projects/`.
+    fn projects_dir(notes: &str) -> String {
+        format!("{notes}/projects")
     }
 
     /// Insert a task row into note_meta for testing.
@@ -1106,9 +1123,9 @@ mod tests {
     async fn test_list_refile_and_capture_with_tasks() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
-            insert_task(conn, "task-1", "refile.org", "Buy groceries", "todo");
-            insert_task(conn, "task-2", "refile.org", "Fix login", "done");
-            insert_task(conn, "task-3", "capture.org", "Quick idea", "todo");
+            insert_task(conn, "task-1", "projects/refile.org", "Buy groceries", "todo");
+            insert_task(conn, "task-2", "projects/refile.org", "Fix login", "done");
+            insert_task(conn, "task-3", "projects/capture.org", "Quick idea", "todo");
             Ok(())
         })
         .await
@@ -1122,9 +1139,9 @@ mod tests {
     async fn test_list_refile_only() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
-            insert_task(conn, "t1", "refile.org", "Task one", "todo");
-            insert_task(conn, "t2", "refile.org", "Task two", "done");
-            insert_task(conn, "t3", "capture.org", "Capture task", "todo");
+            insert_task(conn, "t1", "projects/refile.org", "Task one", "todo");
+            insert_task(conn, "t2", "projects/refile.org", "Task two", "done");
+            insert_task(conn, "t3", "projects/capture.org", "Capture task", "todo");
             Ok(())
         })
         .await
@@ -1138,8 +1155,8 @@ mod tests {
     async fn test_list_capture_only() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
-            insert_task(conn, "t1", "refile.org", "Refile task", "todo");
-            insert_task(conn, "t2", "capture.org", "Capture task", "todo");
+            insert_task(conn, "t1", "projects/refile.org", "Refile task", "todo");
+            insert_task(conn, "t2", "projects/capture.org", "Capture task", "todo");
             Ok(())
         })
         .await
@@ -1153,9 +1170,9 @@ mod tests {
     async fn test_list_special_file_personal() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
-            insert_task(conn, "p1", "personal.org", "Personal task", "todo");
-            insert_task(conn, "w1", "work.org", "Work task", "todo");
-            insert_task(conn, "t1", "capture.org", "Capture task", "todo");
+            insert_task(conn, "p1", "projects/personal.org", "Personal task", "todo");
+            insert_task(conn, "w1", "projects/work.org", "Work task", "todo");
+            insert_task(conn, "t1", "projects/capture.org", "Capture task", "todo");
             Ok(())
         })
         .await
@@ -1173,9 +1190,9 @@ mod tests {
     async fn test_list_refile_filter_by_status() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
-            insert_task(conn, "t1", "refile.org", "Task one", "todo");
-            insert_task(conn, "t2", "refile.org", "Task two", "done");
-            insert_task(conn, "t3", "refile.org", "Task three", "todo");
+            insert_task(conn, "t1", "projects/refile.org", "Task one", "todo");
+            insert_task(conn, "t2", "projects/refile.org", "Task two", "done");
+            insert_task(conn, "t3", "projects/refile.org", "Task three", "todo");
             Ok(())
         })
         .await
@@ -1368,13 +1385,18 @@ Investigate the redirect
             .unwrap();
 
         // Find the task ID from the project file
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
         let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
 
-        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        let filename = path
+            .strip_prefix(&notes)
+            .unwrap_or_else(|_| path.as_path())
+            .to_str()
+            .unwrap()
+            .to_string();
 
         // Update using --project with filename
         run_update(&db, &notes, &index, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[])            .await
@@ -1397,7 +1419,7 @@ Investigate the redirect
             .unwrap();
 
         // Find the project file's ID (first :ID: in the file)
-        let path = fs::read_dir(&notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let first_id_start = content.find(id_marker).unwrap() + id_marker.len();
@@ -1433,7 +1455,7 @@ Investigate the redirect
             .unwrap();
 
         // Find the standalone task's ID
-        let standalone_path = fs::read_dir(&notes)
+        let standalone_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1472,7 +1494,7 @@ Investigate the redirect
             .unwrap();
 
         // Find the standalone task's ID
-        let standalone_path = fs::read_dir(&notes)
+        let standalone_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1496,7 +1518,7 @@ Investigate the redirect
         assert_eq!(headline_count(&standalone_path), 0);
 
         // Task should now be in the project file
-        let project_path = fs::read_dir(&notes)
+        let project_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1521,7 +1543,7 @@ Investigate the redirect
             .unwrap();
 
         // Find the task ID from the project file
-        let project_path = fs::read_dir(&notes)
+        let project_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1544,7 +1566,7 @@ Investigate the redirect
         assert_eq!(headline_count(&project_path), 0);
 
         // Task should now be in the new project
-        let security_path = fs::read_dir(&notes)
+        let security_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1568,7 +1590,7 @@ Investigate the redirect
             .unwrap();
 
         // Find the standalone task's ID (document-level :ID: is first, task is second)
-        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
         let capture = fs::read_to_string(&capture_path).unwrap();
         let id_start = capture.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
         let task_id = capture[id_start..].lines().next().unwrap().trim().to_string();
@@ -1588,7 +1610,7 @@ Investigate the redirect
         );
 
         // Task appears exactly once, only in beta.
-        let beta = fs::read_dir(&notes)
+        let beta = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1607,7 +1629,7 @@ Investigate the redirect
         let (db, _dir, notes, index) = test_env().await;
 
         // Create a task with body text via refile.org
-        let refile_path = std::path::Path::new(&notes).join("refile.org");
+        let refile_path = std::path::Path::new(&notes).join("projects").join("refile.org");
         fs::write(
             &refile_path,
             "\
@@ -1625,13 +1647,13 @@ Consider authentication requirements.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, refile_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, refile_path.clone()).await.unwrap();
 
         // Refile to a project
         run_refile(&db, &notes, &index, "task-with-body", "research").await.unwrap();
 
         // Read the project file
-        let project_path = fs::read_dir(&notes)
+        let project_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1662,7 +1684,7 @@ Consider authentication requirements.
             .unwrap();
 
         // Find the task ID
-        let project_path = fs::read_dir(&notes)
+        let project_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1698,7 +1720,7 @@ Consider authentication requirements.
         let (db, _dir, notes, index) = test_env().await;
 
         // Simulate a task sitting in refile.org
-        let refile_path = std::path::Path::new(&notes).join("refile.org");
+        let refile_path = std::path::Path::new(&notes).join("projects").join("refile.org");
         fs::write(
             &refile_path,
             "\
@@ -1720,7 +1742,7 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, refile_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, refile_path.clone()).await.unwrap();
 
         // Refile one task to a project
         run_refile(&db, &notes, &index, "review-pr-42", "ops").await.unwrap();
@@ -1735,7 +1757,7 @@ Need to check the middleware changes.
         assert!(refile_content.contains("Setup CI"));
 
         // The refiled task should be in the project file
-        let project_path = fs::read_dir(&notes)
+        let project_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1765,7 +1787,7 @@ Need to check the middleware changes.
                 .await
                 .unwrap();
         }
-        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
         let capture = fs::read_to_string(&capture_path).unwrap();
         // Skip the document-level :ID: (first) and collect each task's ID.
         let ids: Vec<String> = capture
@@ -1792,7 +1814,7 @@ Need to check the middleware changes.
         while let Some(_) = set.join_next().await {}
 
         // Every task must appear in the project file exactly once.
-        let project_path = fs::read_dir(&notes)
+        let project_path = fs::read_dir(projects_dir(&notes))
             .unwrap()
             .filter_map(|e| {
                 let p = e.unwrap().path();
@@ -1833,7 +1855,7 @@ Need to check the middleware changes.
         let (db, _dir, notes, index) = test_env().await;
 
         // Pre-existing special file with no date in its filename
-        let work_path = std::path::Path::new(&notes).join("work.org");
+        let work_path = std::path::Path::new(&notes).join("projects").join("work.org");
         fs::write(
             &work_path,
             "\
@@ -1855,7 +1877,7 @@ Need to check the middleware changes.
             .unwrap();
 
         // No new dated project file — only work.org exists, with both tasks
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "work.org");
@@ -1874,7 +1896,7 @@ Need to check the middleware changes.
             .unwrap();
 
         // Special file is created with its bare name, not a dated --project-* name
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "personal.org");
@@ -1886,7 +1908,7 @@ Need to check the middleware changes.
         let (db, _dir, notes, index) = test_env().await;
 
         // Task in capture.org
-        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
         fs::write(
             &capture_path,
             "\
@@ -1902,10 +1924,10 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, capture_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, capture_path.clone()).await.unwrap();
 
         // Pre-existing work.org
-        let work_path = std::path::Path::new(&notes).join("work.org");
+        let work_path = std::path::Path::new(&notes).join("projects").join("work.org");
         fs::write(
             &work_path,
             "\
@@ -1932,7 +1954,7 @@ Need to check the middleware changes.
         assert!(work_content.contains("Refile me"));
 
         // No new dated project file created
-        let entries: Vec<_> = fs::read_dir(&notes).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         assert_eq!(entries.len(), 2);
     }
 
@@ -1940,7 +1962,7 @@ Need to check the middleware changes.
     async fn test_refile_creates_special_file_when_missing() {
         let (db, _dir, notes, index) = test_env().await;
 
-        let capture_path = std::path::Path::new(&notes).join("capture.org");
+        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
         fs::write(
             &capture_path,
             "\
@@ -1956,12 +1978,12 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, capture_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, capture_path.clone()).await.unwrap();
 
         run_refile(&db, &notes, &index, "special-task", "personal").await.unwrap();
 
         // personal.org created with bare name (no date prefix)
-        let personal_path = std::path::Path::new(&notes).join("personal.org");
+        let personal_path = std::path::Path::new(&notes).join("projects").join("personal.org");
         assert!(personal_path.exists());
         let content = fs::read_to_string(&personal_path).unwrap();
         assert!(content.contains("special-task"));
@@ -1980,7 +2002,7 @@ Need to check the middleware changes.
         run_create(db, notes, &index, "Tag test task", None, None, "TODO")
             .await
             .unwrap();
-        let path = fs::read_dir(notes).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(notes)).unwrap().next().unwrap().unwrap().path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
