@@ -49,44 +49,82 @@ async fn get_metrics(
     // Default to last 30 days if not specified
     let limit_days = params.limit_days.unwrap_or(30);
 
-    // Aggregate token buckets by calendar day. Legacy rows (migrated
-    // from the pre-bucket schema) have 0 in all bucket columns so they
-    // don't contribute to the new aggregations; their name/value stay
-    // readable via direct queries for historical purposes.
-    let results = db
-        .call(move |conn| {
-            let mut stmt = conn.prepare(
-                r#"
-            SELECT DATE(timestamp) AS day,
-                   SUM(input),
-                   SUM(output),
-                   SUM(cache_read),
-                   SUM(cache_write),
-                   SUM(reasoning)
-            FROM metric_event
-            WHERE timestamp >= datetime('now', '-' || ? || ' days')
-            GROUP BY day
-            ORDER BY day DESC
-            "#,
-            )?;
+    // Select which metric to aggregate. "sessions" counts chat sessions
+    // created per day; anything else defaults to token buckets.
+    let metric = params.metric.unwrap_or_else(|| "tokens".to_string());
 
-            let events = stmt
-                .query_map([limit_days], |row| {
-                    Ok(public::MetricEvent {
-                        timestamp: row.get(0)?,
-                        input: row.get(1)?,
-                        output: row.get(2)?,
-                        cache_read: row.get(3)?,
-                        cache_write: row.get(4)?,
-                        reasoning: row.get(5)?,
-                    })
-                })?
-                .filter_map(Result::ok)
-                .collect::<Vec<public::MetricEvent>>();
+    let results = match metric.as_str() {
+        "sessions" => db
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT DATE(created_at) AS day, COUNT(*)
+                    FROM session
+                    WHERE created_at >= datetime('now', '-' || ? || ' days')
+                    GROUP BY day
+                    ORDER BY day DESC
+                    "#,
+                )?;
 
-            Ok(events)
-        })
-        .await?;
+                let events = stmt
+                    .query_map([limit_days], |row| {
+                        Ok(public::MetricEvent {
+                            timestamp: row.get(0)?,
+                            input: 0,
+                            output: 0,
+                            cache_read: 0,
+                            cache_write: 0,
+                            reasoning: None,
+                            value: Some(row.get(1)?),
+                        })
+                    })?
+                    .filter_map(Result::ok)
+                    .collect::<Vec<public::MetricEvent>>();
+
+                Ok(events)
+            })
+            .await?,
+        _ => {
+            // Aggregate token buckets by calendar day. Legacy rows (migrated
+            // from the pre-bucket schema) have 0 in all bucket columns so they
+            // don't contribute to the new aggregations; their name/value stay
+            // readable via direct queries for historical purposes.
+            db.call(move |conn| {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT DATE(timestamp) AS day,
+                           SUM(input),
+                           SUM(output),
+                           SUM(cache_read),
+                           SUM(cache_write),
+                           SUM(reasoning)
+                    FROM metric_event
+                    WHERE timestamp >= datetime('now', '-' || ? || ' days')
+                    GROUP BY day
+                    ORDER BY day DESC
+                    "#,
+                )?;
+
+                let events = stmt
+                    .query_map([limit_days], |row| {
+                        Ok(public::MetricEvent {
+                            timestamp: row.get(0)?,
+                            input: row.get(1)?,
+                            output: row.get(2)?,
+                            cache_read: row.get(3)?,
+                            cache_write: row.get(4)?,
+                            reasoning: row.get(5)?,
+                            value: None,
+                        })
+                    })?
+                    .filter_map(Result::ok)
+                    .collect::<Vec<public::MetricEvent>>();
+
+                Ok(events)
+            })
+            .await?
+        }
+    };
 
     Ok(Json(public::MetricsResponse { events: results }))
 }

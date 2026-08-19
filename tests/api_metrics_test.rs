@@ -191,6 +191,53 @@ mod tests {
         assert!(body.contains("\"events\""));
     }
 
+    /// Tests getting the sessions metric counts sessions created per day
+    #[tokio::test]
+    #[serial]
+    async fn it_gets_session_metrics() {
+        let app = test_app().await;
+
+        // Create two distinct chat sessions
+        for session_id in ["sess-one", "sess-two"] {
+            let _response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/chat")
+                        .method("POST")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "message": "Hello"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Get the sessions metric
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/metrics?metric=sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"events\""));
+        // Session counts are returned in the generic `value` field
+        assert!(body.contains("\"value\""));
+    }
+
     /// Tests that a payload missing all required bucket fields returns 422
     #[tokio::test]
     #[serial]
