@@ -10,11 +10,10 @@ use crate::search::index_all;
 /// Periodic job that syncs the notes repo to git.
 ///
 /// Every 5 minutes:
-///   1. Non-destructively pulls (rebase local commits on top of origin)
-///   2. Commits and pushes any local changes (note edits from API, CLI,
-///      or external editors)
-///   3. Reindexes files that changed as a result of the rebase (origin's
-///      new contributions + our own rebased commit)
+///   1. Commits any local changes (note edits from API, CLI, or external
+///      editors) on top of origin, then pushes (fetch + rebase + push)
+///   2. Reindexes files that changed as a result of the rebase (origin's
+///      new contributions + our own commit)
 ///
 /// On conflict, `sync_repo` aborts the rebase and logs an error; the next
 /// tick retries. On push failure (remote moved), it logs a warning and
@@ -42,15 +41,12 @@ impl PeriodicJob for GitSync {
             return;
         }
 
-        // 1. Pull latest non-destructively (rebase local commits on top of origin)
-        if let Err(e) = git::maybe_pull_rebase(&config.deploy_key_path, &config.notes_path).await {
-            tracing::error!("GitSync: pull/rebase failed: {e}");
-        }
-
-        // 2. Commit and push any local changes; get back files changed by rebase
+        // Commit local changes, pull origin, and push; get back files changed
+        // by the rebase. sync_repo stages and commits before rebasing, so it
+        // (unlike maybe_pull_rebase) tolerates an otherwise-dirty working tree.
         match git::sync_repo(&config.deploy_key_path, &config.notes_path).await {
             Ok(changed) if !changed.is_empty() => {
-                // 3. Reindex only files that changed as a result of the rebase
+                // 2. Reindex only files that changed as a result of the rebase
                 let paths: Vec<PathBuf> = changed
                     .iter()
                     .map(|f| PathBuf::from(format!("{}/{}", &config.notes_path, f)))
