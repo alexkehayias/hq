@@ -21,10 +21,13 @@ pub(crate) fn parse_tag_list(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Create a new project file on disk and register it in the database.
-async fn create_project_file(db: &Connection, notes_path: &str, project_name: &str) -> Result<PathBuf> {
+/// Deterministic path a project file would use, so callers can lock it before
+/// creating. Creation must be serialized on the target path: when concurrent
+/// refiles target a brand-new project they can all miss the DB lookup and race
+/// to create it, and an unlocked create can clobber a task another refile just
+/// appended.
+fn project_file_path(notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
-    let project_id = Uuid::new_v4().to_string();
     let today = Local::now().format("%Y-%m-%d");
 
     // Special files (capture, refile, personal, work) are addressed by their
@@ -36,7 +39,20 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
     } else {
         format!("{today}--project-{slug}.org")
     };
-    let full_path = format!("{notes_path}/projects/{filename}");
+    Ok(PathBuf::from(format!("{notes_path}/projects/{filename}")))
+}
+
+/// Create a new project file on disk and register it in the database.
+async fn create_project_file(db: &Connection, notes_path: &str, project_name: &str) -> Result<PathBuf> {
+    let project_id = Uuid::new_v4().to_string();
+    let slug = slugify(project_name)?;
+    let today = Local::now().format("%Y-%m-%d");
+    let special = projects::db::is_special_file(project_name);
+    let full_path = project_file_path(notes_path, project_name)?;
+    let filename = full_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid project file name"))?;
     let db_filename = format!("projects/{filename}");
 
     let content = org::Document::builder()
@@ -47,7 +63,7 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
         .filetags(if special { "private inbox" } else { "private project" })
         .build()
         .to_string();
-    orgmode::atomic_write(std::path::Path::new(&full_path), &content)
+    orgmode::atomic_write(&full_path, &content)
         .await
         .context("Failed to create project file")?;
 
@@ -228,10 +244,27 @@ pub async fn run_refile(
     // file to lock before doing the read-modify-write.
     let source_path = orgmode::find_task(db, notes_path, id).await?.path;
 
-    // Look up existing project in DB, or create a new project file
-    let target_path = match projects::db::find_project_file(db, notes_path, project).await? {
+    // Look up existing project in DB, or create a new project file. Creation is
+    // serialized on the target file's lock: when several concurrent refiles
+    // target a brand-new project, they can all miss the lookup (no DB row yet)
+    // and race to create it. Creating under the lock — re-checking first so only
+    // the first creator writes the header — prevents one creator's write from
+    // clobbering a task another refile already appended.
+    let target_path = projects::db::find_project_file(db, notes_path, project).await?;
+    let target_path = match target_path {
         Some(path) => path,
-        None => create_project_file(db, notes_path, project).await?,
+        None => {
+            let path = project_file_path(notes_path, project)?;
+            orgmode::with_file_lock(&path, || async {
+                if let Some(existing) =
+                    projects::db::find_project_file(db, notes_path, project).await?
+                {
+                    return Ok(existing);
+                }
+                create_project_file(db, notes_path, project).await
+            })
+            .await?
+        }
     };
 
     if source_path == target_path {

@@ -60,10 +60,10 @@ static FILE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>
 
 /// Run `f` while holding exclusive locks for each path in `paths`. Locks are
 /// acquired in sorted order so concurrent multi-file operations can't deadlock.
-pub async fn with_file_locks<F, Fut>(paths: &[PathBuf], f: F) -> Result<()>
+pub async fn with_file_locks<F, Fut, T>(paths: &[PathBuf], f: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send,
-    Fut: std::future::Future<Output = Result<()>> + Send,
+    Fut: std::future::Future<Output = Result<T>> + Send,
 {
     let map = FILE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut sorted = paths.to_vec();
@@ -90,10 +90,10 @@ where
 }
 
 /// Run `f` while holding an exclusive lock for `path`.
-pub async fn with_file_lock<F, Fut>(path: &Path, f: F) -> Result<()>
+pub async fn with_file_lock<F, Fut, T>(path: &Path, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send,
-    Fut: std::future::Future<Output = Result<()>> + Send,
+    Fut: std::future::Future<Output = Result<T>> + Send,
 {
     with_file_locks(&[path.to_path_buf()], f).await
 }
