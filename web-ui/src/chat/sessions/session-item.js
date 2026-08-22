@@ -31,13 +31,16 @@ class HqSessionItem extends HTMLElement {
     const result = html`<article class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
       <h2 class="font-semibold text-gray-900 dark:text-white">${title}</h2>
       ${tags.length ? html`<div class="flex flex-wrap gap-2 mt-2">${tags}</div>` : null}
-      <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">${summary}</p>
+      <p class="text-sm text-gray-600 dark:text-gray-400 mt-2 line-clamp-2">${summary}</p>
       <a href="/chat/index.html?session_id=${id}" class="text-sm text-blue-500 hover:underline mt-2 inline-block">View »</a>
     </article>`;
     this.innerHTML = result.value;
   }
 
   connectedCallback() {
+    // Custom elements default to inline; block keeps the host a proper list
+    // item so container spacing (e.g. space-y-4) applies between cards.
+    this.style.display = 'block';
     this.#update();
   }
 

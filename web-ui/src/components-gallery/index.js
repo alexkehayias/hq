@@ -18,7 +18,7 @@ function pageShellDemo(c) {
     </p>
     <div class="border rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">Live demo (this page uses hq-page-shell):</p>
-      <hq-page-shell title="Gallery Demo" back-href="/" back-label="Home">
+      <hq-page-shell meta-title="Gallery Demo" back-href="/" back-label="Home">
         <p class="text-sm">This content is slotted inside &lt;hq-page-shell&gt;'s <code>&lt;main&gt;</code>.</p>
       </hq-page-shell>
     </div>
@@ -293,34 +293,6 @@ function statCardDemo(c) {
   `;
 }
 sections.push({ title: 'hq-stat-card', render: statCardDemo });
-
-function sessionItemDemo(c) {
-  const sessions = [
-    JSON.stringify({
-      id: 'abc123',
-      title: 'Research meeting prep',
-      summary: 'Compiled attendee backgrounds and recent project history.',
-      tags: ['work', 'research'],
-    }),
-    JSON.stringify({ id: 'def456' }),
-    JSON.stringify({
-      id: 'ghi789',
-      title: 'Weekend planning',
-      summary: null,
-      tags: ['personal'],
-    }),
-  ];
-  c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-session-item&gt;</h2>
-    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-      Chat session list row. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: session (JSON)</code>
-    </p>
-    <div class="space-y-4">
-      ${sessions.map((s) => `<hq-session-item session='${s}'></hq-session-item>`).join('')}
-    </div>
-  `;
-}
-sections.push({ title: 'hq-session-item', render: sessionItemDemo });
 
 // Render all sections
 function renderAll() {
