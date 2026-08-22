@@ -95,11 +95,6 @@ For visual review, see `/components-gallery/`.
 - **Slots:** default (optional formatted value, overrides `value` attr)
 - KPI stat card with label and large value. CSS-only.
 
-#### `<hq-session-item>`
-- **File:** `./hq-session-item.js`
-- **Attrs:** `session` (JSON: `{ id, title?, summary?, tags? }`)
-- Chat session list row with title (falls back to `Session {id}`), optional tag chips, summary, and "View »" link. Uses HTM.
-
 ## Composing components
 
 Components nest like regular HTML and talk to each other **only through events**.
@@ -212,6 +207,7 @@ async function loadTasks(status, page) {
 - **HTM for data-driven HTML** — `import { html } from '/components/lib/html.js'`. CSS-only components (badge, spinner) don't need HTM.
 - **Event handlers via `addEventListener`** — inline `onClick` props are dropped by the serializer.
 - **Dark mode** — every page must load `/theme-init.js` in `<head>` (before the body renders) so the `.dark` class is set without a flash. Without it, a page silently loses dark mode.
+- **Page-specific components colocate with their page** — `components/` holds only reusable, cross-page components. A component used by a single page lives next to that page (e.g. `chat/sessions/session-item.js`) and is imported only by that page's module. When a second page needs it, move it into `components/`, add it to `index.js`, and update both importers. (Legacy exceptions still in `components/`: `hq-file-tree`, `hq-stat-card`.)
 - **Reference:** `web-ui/src/chat/message-bubble.js` (the existing web component pattern, not migrated).
 
 ## File layout

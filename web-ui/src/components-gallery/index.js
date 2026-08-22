@@ -294,34 +294,6 @@ function statCardDemo(c) {
 }
 sections.push({ title: 'hq-stat-card', render: statCardDemo });
 
-function sessionItemDemo(c) {
-  const sessions = [
-    JSON.stringify({
-      id: 'abc123',
-      title: 'Research meeting prep',
-      summary: 'Compiled attendee backgrounds and recent project history.',
-      tags: ['work', 'research'],
-    }),
-    JSON.stringify({ id: 'def456' }),
-    JSON.stringify({
-      id: 'ghi789',
-      title: 'Weekend planning',
-      summary: null,
-      tags: ['personal'],
-    }),
-  ];
-  c.innerHTML = `
-    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-session-item&gt;</h2>
-    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-      Chat session list row. <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: session (JSON)</code>
-    </p>
-    <div class="space-y-4">
-      ${sessions.map((s) => `<hq-session-item session='${s}'></hq-session-item>`).join('')}
-    </div>
-  `;
-}
-sections.push({ title: 'hq-session-item', render: sessionItemDemo });
-
 // Render all sections
 function renderAll() {
   const root = document.getElementById('gallery-root');

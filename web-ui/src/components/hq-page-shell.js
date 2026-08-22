@@ -22,7 +22,7 @@ class HqPageShell extends HTMLElement {
 
     this.innerHTML = `
       <div class="min-h-dvh bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-        <div class="flex flex-col items-start px-4 sm:px-6 lg:px-8 py-12 max-w-7xl mx-auto">
+        <div class="flex flex-col items-start px-4 sm:px-6 lg:px-8 pt-6 pb-12 max-w-7xl mx-auto">
           <a id="hq-back-link" href="/" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors mb-6">
             <svg class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />

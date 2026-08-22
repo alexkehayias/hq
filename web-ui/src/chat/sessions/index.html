@@ -6,15 +6,30 @@
   <link href="/output.css" rel="stylesheet">
   <title>Chat Sessions</title>
   <script src="/theme-init.js"></script>
+  <script type="module" src="/components/index.js"></script>
 </head>
 <body>
-  <div class="container mx-auto p-4">
-    <h1 class="text-2xl font-bold mb-4">Chat Sessions</h1>
-    <div id="sessions-list" class="space-y-4">
-      <p>Loading chat sessions...</p>
-    </div>
-    <div id="pagination-controls"></div>
-  </div>
-  <script src="index.js"></script>
+  <hq-page-shell title="Chat Sessions" back-href="/" back-label="Home">
+    <h1 class="text-2xl font-bold mb-6 text-gray-900 dark:text-white">Chat Sessions</h1>
+
+    <hq-state-view id="sessions-view" state="loading">
+      <div slot="empty">
+        <hq-empty-state icon="sessions" title="No chat sessions found">
+          Start a conversation and it will show up here.
+        </hq-empty-state>
+      </div>
+      <div slot="error">
+        <hq-empty-state icon="alert" title="Error loading chat sessions">
+          Something went wrong while fetching your sessions. Please try again.
+        </hq-empty-state>
+      </div>
+      <div slot="content">
+        <div id="sessions-list" class="space-y-4"></div>
+        <hq-pagination id="sessions-pagination" page="1" total-pages="1"></hq-pagination>
+      </div>
+    </hq-state-view>
+
+  </hq-page-shell>
+  <script type="module" src="index.js"></script>
 </body>
 </html>
