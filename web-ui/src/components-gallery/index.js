@@ -18,7 +18,7 @@ function pageShellDemo(c) {
     </p>
     <div class="border rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">Live demo (this page uses hq-page-shell):</p>
-      <hq-page-shell title="Gallery Demo" back-href="/" back-label="Home">
+      <hq-page-shell meta-title="Gallery Demo" back-href="/" back-label="Home">
         <p class="text-sm">This content is slotted inside &lt;hq-page-shell&gt;'s <code>&lt;main&gt;</code>.</p>
       </hq-page-shell>
     </div>

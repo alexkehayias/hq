@@ -16,7 +16,7 @@ For visual review, see `/components-gallery/`.
 
 #### `<hq-page-shell>`
 - **File:** `./hq-page-shell.js`
-- **Attrs:** `title` (sets document.title), `back-href` (URL, default `/`), `back-label` (default `Home`)
+- **Attrs:** `meta-title` (sets document.title / browser tab), `back-href` (URL, default `/`), `back-label` (default `Home`)
 - **Slots:** default (page body, placed in `<main>`)
 - Wraps gradient background + safe-area padding + "Back to" link. Used by every page.
 
@@ -127,7 +127,7 @@ Every page that uses them must load two things in `<head>`:
 
 ```html
 <body>
-  <hq-page-shell title="Tasks" back-href="/" back-label="Home">
+  <hq-page-shell meta-title="Tasks" back-href="/" back-label="Home">
 
     <div class="flex items-end justify-between gap-4 mb-6 flex-wrap">
       <hq-select id="task-filter" label="Status">

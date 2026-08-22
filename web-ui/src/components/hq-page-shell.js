@@ -1,7 +1,7 @@
 /**
  * <hq-page-shell> — page wrapper with gradient background and "Back to" link.
  *
- * @attr {string} title - sets document.title (e.g. "Skills - HQ")
+ * @attr {string} meta-title - sets document.title / browser tab (e.g. "Skills - HQ")
  * @attr {string} back-href - URL for the back link (default "/")
  * @attr {string} back-label - destination label, rendered as "Back to {label}" (default "Home")
  * @slot default - page body, placed inside <main>
@@ -9,7 +9,7 @@
  * Light DOM: original children are moved into a <main> container on first connect.
  */
 class HqPageShell extends HTMLElement {
-  static observedAttributes = ['title', 'back-href', 'back-label'];
+  static observedAttributes = ['meta-title', 'back-href', 'back-label'];
 
   #initialized = false;
 
@@ -43,7 +43,7 @@ class HqPageShell extends HTMLElement {
   }
 
   #updateAttrs() {
-    const title = this.getAttribute('title');
+    const title = this.getAttribute('meta-title');
     if (title) document.title = `${title} - HQ`;
 
     const link = this.querySelector('#hq-back-link');
