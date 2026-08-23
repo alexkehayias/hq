@@ -1,110 +1,67 @@
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>HQ - Metrics</title>
-    <link href="/output.css" rel="stylesheet">
-    <script src="/theme-init.js"></script>
-  </head>
-  <body class="bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);">
-    <div class="px-4 sm:px-6 lg:px-8">
-      <!-- Back Link -->
-      <div class="max-w-4xl mx-auto my-6">
-        <a href="/" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors">
-          <svg class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-          </svg>
-          Back to Home
-        </a>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+  <link href="/output.css" rel="stylesheet">
+  <title>Metrics</title>
+  <script src="/theme-init.js"></script>
+</head>
+<body>
+  <hq-page-shell meta-title="Metrics" back-href="/" back-label="Home">
+    <hq-card max-width="4xl">
+      <div slot="header">
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Metrics</h1>
+        <p class="mt-2 text-gray-600 dark:text-gray-400">View usage statistics and trends</p>
       </div>
 
-      <!-- Metrics Card -->
-      <div class="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
-        <!-- Header -->
-        <div class="px-6 py-8 border-b border-gray-100 dark:border-gray-700">
-          <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Metrics</h1>
-          <p class="mt-2 text-gray-600 dark:text-gray-400">View usage statistics and trends</p>
-        </div>
-
-        <!-- Controls -->
-        <div class="px-6 py-4 bg-gray-50 dark:bg-gray-700 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label for="metricType" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Metric
-            </label>
-            <select id="metricType" class="block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
-              <option value="tokens" selected>Tokens</option>
-              <option value="sessions">Sessions</option>
-            </select>
-          </div>
-          <div>
-            <label for="timeRange" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Time Range
-            </label>
-            <select id="timeRange" class="block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
-              <option value="7">Last 7 days</option>
-              <option value="14">Last 14 days</option>
-              <option value="30" selected>Last 30 days</option>
-              <option value="60">Last 60 days</option>
-              <option value="90">Last 90 days</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Summary Metrics -->
-        <div class="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Summary</h2>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
-              <p id="totalTokensLabel" class="text-sm font-medium text-gray-500 dark:text-gray-400">Total Tokens</p>
-              <p id="totalTokens" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">--</p>
-            </div>
-            <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
-              <p id="avgTokensPerDayLabel" class="text-sm font-medium text-gray-500 dark:text-gray-400">Avg Tokens/Day</p>
-              <p id="avgTokensPerDay" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">--</p>
-            </div>
-            <div id="estCostCard" class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
-              <p id="estCostLabel" class="text-sm font-medium text-gray-500 dark:text-gray-400">Est. Cost</p>
-              <p id="estCost" class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">--</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Chart Container -->
-        <div class="px-6 py-8">
-          <div id="chart" class="w-full" style="height: 400px;"></div>
-        </div>
-
-        <!-- Loading State -->
-        <div id="loading" class="px-6 py-8 text-center">
-          <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <p class="mt-2 text-gray-600 dark:text-gray-400">Loading metrics...</p>
-        </div>
-
-        <!-- Empty State -->
-        <div id="empty" class="px-6 py-8 text-center hidden">
-          <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
-          </svg>
-          <p class="mt-2 text-gray-600 dark:text-gray-400">No metrics data available</p>
-        </div>
-
-        <!-- Error State -->
-        <div id="error" class="px-6 py-8 text-center hidden">
-          <svg class="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-          </svg>
-          <p class="mt-2 text-red-600 dark:text-red-400">Failed to load metrics</p>
-          <button id="retryBtn" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">
-            Retry
-          </button>
-        </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <hq-select id="metricType" label="Metric" value="tokens">
+          <option value="tokens" selected>Tokens</option>
+          <option value="sessions">Sessions</option>
+        </hq-select>
+        <hq-select id="timeRange" label="Time Range" value="30">
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+        </hq-select>
       </div>
-    </div>
 
-    <script src="/vendor/echarts.simple.min.js"></script>
-    <script src="/metrics/index.js"></script>
-  </body>
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-white mt-8 mb-4">Summary</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <hq-stat-card id="totalTokensCard" label="Total Tokens" value="--"></hq-stat-card>
+        <hq-stat-card id="avgTokensPerDayCard" label="Avg Tokens/Day" value="--"></hq-stat-card>
+        <hq-stat-card id="estCostCard" label="Est. Cost" value="--"></hq-stat-card>
+      </div>
+
+      <div class="mt-8">
+        <hq-state-view id="metrics-view" state="loading">
+          <div slot="empty">
+            <hq-empty-state icon="metrics" title="No metrics data available">
+              No usage data in the selected time range.
+            </hq-empty-state>
+          </div>
+          <div slot="error">
+            <hq-empty-state icon="alert" title="Failed to load metrics">
+              Something went wrong while fetching your metrics.
+              <hq-button id="retryBtn" slot="action" variant="secondary">Retry</hq-button>
+            </hq-empty-state>
+          </div>
+          <div slot="content">
+            <div id="chart" class="w-full" style="height: 400px;"></div>
+          </div>
+        </hq-state-view>
+      </div>
+
+    </hq-card>
+  </hq-page-shell>
+  <script src="/vendor/echarts.simple.min.js"></script>
+  <script type="module" src="index.js"></script>
+</body>
 </html>
