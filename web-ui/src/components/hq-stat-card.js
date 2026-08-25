@@ -26,10 +26,7 @@ class HqStatCard extends HTMLElement {
     for (const el of [...this.children]) {
       if (el.getAttribute('slot') !== 'action') loose.push(el);
     }
-    this.#originalBody =
-      loose.length > 0
-        ? loose.map((el) => el.outerHTML).join('')
-        : esc(this.getAttribute('value') || '');
+    this.#originalBody = loose.map((el) => el.outerHTML).join('');
 
     // Clear and build
     this.innerHTML = '';
