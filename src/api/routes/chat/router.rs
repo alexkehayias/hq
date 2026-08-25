@@ -108,12 +108,6 @@ async fn handle_agent_mode(
     resume: bool,
 ) -> Result<Response, crate::api::public::ApiError> {
     let db = state.read().expect("Unable to read share state").db.clone();
-    let _vapid_key_path = state
-        .read()
-        .expect("Unable to read shared state")
-        .config
-        .vapid_key_path
-        .clone();
 
     // Create UUID from session_id for Claude Code
     let uuid = Uuid::parse_str(&session_id).unwrap_or_else(|_| Uuid::new_v4());
