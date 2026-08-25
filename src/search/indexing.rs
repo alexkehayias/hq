@@ -22,6 +22,7 @@ use crate::ai::chat::db::{
     find_chat_session_by_id, get_non_background_sessions, session_has_background_tag,
 };
 use crate::core::fastembed_cache_dir;
+use crate::core::orgmode::{is_archive_file, ORG_ARCHIVE_SUFFIX};
 use crate::openai::{Message, Role};
 
 #[derive(Debug, Clone)]
@@ -74,13 +75,13 @@ fn parse_note(notes_dir_path: &str, file_name: &str, content: &str) -> Result<No
     let p = config.parse(content);
     let d = p.document();
 
-    let is_archive = file_name.ends_with(".org_archive");
+    let is_archive = is_archive_file(file_name);
 
     // Org archive files (`work.org_archive`) carry no document-level `:ID:`;
     // resolve the source file's ID (e.g. `work.org`) so archived content groups
     // with the note it was archived from.
-    let note_id = match d.properties().and_then(|props| props.get("ID")) {
-        Some(id) => id.to_string(),
+    let note_id = match document_id(&d) {
+        Some(id) => id,
         None => archive_source_id(notes_dir_path, file_name).with_context(|| {
             format!(
                 "Missing org-id for note '{file_name}'{}",
@@ -98,12 +99,8 @@ fn parse_note(notes_dir_path: &str, file_name: &str, content: &str) -> Result<No
         .title()
         .or_else(|| {
             is_archive.then(|| {
-                file_name
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(file_name)
-                    .trim_end_matches(".org_archive")
-                    .to_string()
+                let stem = file_name.rsplit('/').next().unwrap_or(file_name);
+                stem.strip_suffix(ORG_ARCHIVE_SUFFIX).unwrap_or(stem).to_string()
             })
         })
         .context("No title found")?;
@@ -290,7 +287,7 @@ fn parse_note(notes_dir_path: &str, file_name: &str, content: &str) -> Result<No
 /// (e.g. `work.org_archive` -> `work.org`). Returns `None` when the file isn't
 /// an archive or the source's ID can't be determined.
 fn archive_source_id(notes_dir_path: &str, file_name: &str) -> Option<String> {
-    let source_name = format!("{}.org", file_name.strip_suffix(".org_archive")?);
+    let source_name = format!("{}.org", file_name.strip_suffix(ORG_ARCHIVE_SUFFIX)?);
     let source_path = if file_name.starts_with('/') {
         source_name
     } else {
@@ -298,10 +295,12 @@ fn archive_source_id(notes_dir_path: &str, file_name: &str) -> Option<String> {
     };
     let content = std::fs::read_to_string(&source_path).ok()?;
     let config = crate::org::todo_keywords_config();
-    let parsed = config.parse(&content);
-    parsed
-        .document()
-        .properties()
+    document_id(&config.parse(&content).document())
+}
+
+/// The document-level `:ID:` property of a parsed Org document.
+fn document_id(d: &orgize::ast::Document) -> Option<String> {
+    d.properties()
         .and_then(|props| props.get("ID").map(|id| id.to_string()))
 }
 
@@ -343,7 +342,7 @@ fn index_note_full_text(
     file_name_value: &str,
     note: &Note,
 ) -> tantivy::Result<()> {
-    let is_archive = file_name_value.ends_with(".org_archive");
+    let is_archive = is_archive_file(file_name_value);
 
     let id = schema.get_field("id")?;
     let r#type = schema.get_field("type")?;
@@ -512,7 +511,7 @@ fn store_embeddings_in_db(
 /// should always be safe to query an index and then lookup the
 /// note(s) by ID.
 fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) -> Result<()> {
-    let is_archive = file_name.ends_with(".org_archive");
+    let is_archive = is_archive_file(file_name);
     let mut note_meta_stmt = db.prepare(
         "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )?;

@@ -23,7 +23,7 @@ pub(crate) fn parse_tag_list(s: &str) -> Vec<String> {
 
 /// Whether a file path points at an Org archive file (`*.org_archive`).
 fn is_archive_path(path: &std::path::Path) -> bool {
-    path.to_string_lossy().ends_with(".org_archive")
+    crate::core::orgmode::is_archive_file(&path.to_string_lossy())
 }
 
 /// Deterministic path a project file would use, so callers can lock it before

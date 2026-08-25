@@ -18,11 +18,11 @@ async fn walk_org_files(roots: Vec<PathBuf>) -> Vec<PathBuf> {
             if meta.is_dir() {
                 pending.push(p);
             } else {
-                let ext = p.extension().unwrap_or_default();
                 // `org_archive` files hold archived Org subtrees (Org mode's
                 // `org-archive-location` convention), so index them alongside
                 // plain `.org` notes.
-                if ext == "org" || ext == "org_archive" {
+                let name = p.to_string_lossy();
+                if name.ends_with(".org") || crate::core::orgmode::is_archive_file(&name) {
                     result.push(p);
                 }
             }
