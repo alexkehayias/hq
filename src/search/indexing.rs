@@ -69,8 +69,14 @@ struct Note {
     headings: Vec<Heading>,
 }
 
-/// Parse the content into a `Note`
-fn parse_note(notes_dir_path: &str, file_name: &str, content: &str) -> Result<Note> {
+/// Parse the content into a `Note`.
+///
+/// `file_name` is the note's path relative to the notes root. `source_id` is
+/// the document-level `:ID:` of the note an archive file was archived from
+/// (e.g. `work.org` for `work.org_archive`); it is used only when the content
+/// itself carries no `:ID:`. Resolution is the caller's responsibility so this
+/// stays free of file I/O.
+fn parse_note(file_name: &str, source_id: Option<&str>, content: &str) -> Result<Note> {
     let config = crate::org::todo_keywords_config();
     let p = config.parse(content);
     let d = p.document();
@@ -78,21 +84,18 @@ fn parse_note(notes_dir_path: &str, file_name: &str, content: &str) -> Result<No
     let is_archive = is_archive_file(file_name);
 
     // Org archive files (`work.org_archive`) carry no document-level `:ID:`;
-    // resolve the source file's ID (e.g. `work.org`) so archived content groups
-    // with the note it was archived from.
-    let note_id = match document_id(&d) {
-        Some(id) => id,
-        None => archive_source_id(notes_dir_path, file_name).with_context(|| {
-            format!(
-                "Missing org-id for note '{file_name}'{}",
-                if is_archive {
-                    " and unable to resolve the source file's ID"
-                } else {
-                    ""
-                }
-            )
-        })?,
-    };
+    // fall back to the source file's ID so archived content groups with the
+    // note it was archived from.
+    let note_id = document_id(&d).or_else(|| source_id.map(str::to_owned)).with_context(|| {
+        format!(
+            "Missing org-id for note '{file_name}'{}",
+            if is_archive {
+                " and unable to resolve the source file's ID"
+            } else {
+                ""
+            }
+        )
+    })?;
     // Archive files carry no `#+TITLE:`; fall back to the source filename stem
     // (e.g. `work` from `projects/work.org_archive`) so parsing succeeds.
     let note_title = p
@@ -646,7 +649,12 @@ pub async fn index_all(
                 .unwrap_or_default()
                 .to_owned(),
         );
-        let note = match parse_note(notes_dir_path, file_name.as_str(), &content) {
+        let source_id = if is_archive_file(file_name.as_str()) {
+            archive_source_id(notes_dir_path, file_name.as_str())
+        } else {
+            None
+        };
+        let note = match parse_note(file_name.as_str(), source_id.as_deref(), &content) {
             Ok(note) => Arc::new(note),
             Err(e) => {
                 tracing::warn!("Skipping note {:?}: {}", p, e);
@@ -736,7 +744,12 @@ pub async fn index_single_file(
     let content = fs::read_to_string(&file_path)
         .await
         .with_context(|| format!("Failed to read file: {:?}", file_path))?;
-    let note = parse_note(notes_path, &file_name, &content)?;
+    let source_id = if is_archive_file(&file_name) {
+        archive_source_id(notes_path, &file_name)
+    } else {
+        None
+    };
+    let note = parse_note(&file_name, source_id.as_deref(), &content)?;
 
     // Index metadata in SQLite (backs tasks list / projects list)
     let file_name_for_db = file_name.clone();
@@ -1111,7 +1124,7 @@ mod tests {
             let path = entry.unwrap().path();
             if path.extension().map_or(false, |e| e == "org") {
                 let content = fs::read_to_string(&path).unwrap();
-                let result = parse_note("", "", &content);
+                let result = parse_note("", None, &content);
                 assert!(
                     result.is_ok(),
                     "Failed to parse example note {:?}: {}",
@@ -1151,7 +1164,8 @@ mod tests {
 
         let file_name = "projects/work.org_archive";
         let archive = fs::read_to_string(projects_dir.join("work.org_archive")).unwrap();
-        let note = parse_note(notes_root.to_str().unwrap(), file_name, &archive).unwrap();
+        let source_id = archive_source_id(notes_root.to_str().unwrap(), file_name);
+        let note = parse_note(file_name, source_id.as_deref(), &archive).unwrap();
 
         // Same document-level ID as the source note.
         assert_eq!(note.id, "source-work");
