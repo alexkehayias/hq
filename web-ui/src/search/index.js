@@ -9,10 +9,67 @@ const searchView = document.getElementById('search-view');
 const emptyState = document.getElementById('empty-state');
 const noteModal = document.getElementById('note-modal');
 const retry = document.getElementById('retry');
+const recentSearches = document.getElementById('recent-searches');
+const recentList = recentSearches.querySelector('ul');
 
 // Auto hide results from journal entries
 const DEFAULT_PARAMS = '-title:journal';
 let includeSimilarity = false;
+
+// Recent searches persisted per-device (like the theme override)
+const RECENT_KEY = 'hq-recent-searches';
+const MAX_RECENT = 10;
+
+function getRecentSearches() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_KEY));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentSearch(query) {
+  const q = query.trim();
+  if (!q) return;
+  const recents = getRecentSearches().filter((r) => r !== q);
+  recents.unshift(q);
+  localStorage.setItem(
+    RECENT_KEY,
+    JSON.stringify(recents.slice(0, MAX_RECENT)),
+  );
+  renderRecentSearches();
+}
+
+function renderRecentSearches() {
+  recentList.innerHTML = getRecentSearches()
+    .map(
+      (q) =>
+        html`<li>
+          <button type="button" data-query="${q}" class="inline-flex items-center gap-1.5 rounded-full border border-gray-300 dark:border-gray-600 px-3 py-1 text-sm text-gray-700 dark:text-gray-300 transition-colors hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400">
+            <hq-icon name="search" size="sm"></hq-icon>
+            <span>${q}</span>
+          </button>
+        </li>`,
+    )
+    .map((r) => r.value)
+    .join('');
+}
+
+function updateEmptyState(noQuery) {
+  // When the box is empty and there are recent searches, they are the empty
+  // state: clear the title/icon so the empty state shows its content slot.
+  // Otherwise show the prompt.
+  const recentsAsEmpty = noQuery && getRecentSearches().length > 0;
+  emptyState.setAttribute(
+    'title',
+    recentsAsEmpty ? '' : noQuery ? 'Search your notes' : 'No results found.',
+  );
+  emptyState.setAttribute(
+    'icon',
+    recentsAsEmpty ? '' : noQuery ? 'book' : 'close',
+  );
+}
 
 async function search(query) {
   if (!query) {
@@ -60,10 +117,7 @@ async function search(query) {
 }
 
 function showEmpty(noQuery) {
-  emptyState.setAttribute(
-    'title',
-    noQuery ? 'Search your notes' : 'No results found. Please try again.',
-  );
+  updateEmptyState(noQuery);
   searchView.setAttribute('state', 'empty');
 }
 
@@ -71,6 +125,9 @@ function showEmpty(noQuery) {
 // note modal.
 resultList.addEventListener('result-select', (e) => {
   const result = e.detail.result;
+
+  // The query that produced this hit counts as a completed search
+  saveRecentSearch(searchInput.value);
 
   resultList.querySelectorAll('hq-search-result').forEach((el) => {
     el.removeAttribute('selected');
@@ -126,6 +183,7 @@ if (initQuery) {
     }
   }
 } else {
+  renderRecentSearches();
   showEmpty(true);
 }
 
@@ -141,6 +199,22 @@ searchInput.addEventListener('input', (e) => {
     window.history.replaceState(null, '', url);
     showEmpty(true);
   }
+});
+
+// Saving on Enter captures a committed search without recording every
+// keystroke of the as-you-type search.
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveRecentSearch(searchInput.value);
+});
+
+// Clicking a recent search reruns it
+recentSearches.addEventListener('click', (e) => {
+  const button = e.target.closest('[data-query]');
+  if (!button) return;
+  const query = button.dataset.query;
+  searchInput.value = query;
+  saveRecentSearch(query);
+  search(query);
 });
 
 retry.addEventListener('click', () => search(searchInput.value));
