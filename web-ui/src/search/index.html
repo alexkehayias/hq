@@ -26,11 +26,12 @@
 
       <hq-state-view id="search-view" state="empty">
         <div slot="empty">
-          <hq-empty-state id="empty-state" icon="book" title="Search your notes"></hq-empty-state>
-          <div id="recent-searches" class="py-8 hidden">
-            <p class="mb-2 text-center text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Recent searches</p>
-            <ul class="flex flex-wrap justify-center gap-2"></ul>
-          </div>
+          <hq-empty-state id="empty-state" icon="book" title="Search your notes">
+            <div id="recent-searches" slot="content">
+              <p class="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Recent searches</p>
+              <ul class="flex flex-wrap justify-center gap-2"></ul>
+            </div>
+          </hq-empty-state>
         </div>
         <div slot="error">
           <hq-empty-state icon="alert" title="Error searching">

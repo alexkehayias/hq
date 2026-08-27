@@ -38,6 +38,7 @@ function saveRecentSearch(query) {
     RECENT_KEY,
     JSON.stringify(recents.slice(0, MAX_RECENT)),
   );
+  renderRecentSearches();
 }
 
 function renderRecentSearches() {
@@ -56,12 +57,18 @@ function renderRecentSearches() {
 }
 
 function updateEmptyState(noQuery) {
-  const hasRecents = getRecentSearches().length > 0;
-  // When the box is empty and there are recent searches, the recent chips
-  // are the empty state and the "Search your notes" prompt is hidden.
-  const recentsAsEmpty = noQuery && hasRecents;
-  recentSearches.classList.toggle('hidden', !recentsAsEmpty);
-  emptyState.classList.toggle('hidden', recentsAsEmpty);
+  // When the box is empty and there are recent searches, they are the empty
+  // state: clear the title/icon so the empty state shows its content slot.
+  // Otherwise show the prompt.
+  const recentsAsEmpty = noQuery && getRecentSearches().length > 0;
+  emptyState.setAttribute(
+    'title',
+    recentsAsEmpty ? '' : noQuery ? 'Search your notes' : 'No results found.',
+  );
+  emptyState.setAttribute(
+    'icon',
+    recentsAsEmpty ? '' : noQuery ? 'book' : 'close',
+  );
 }
 
 async function search(query) {
@@ -110,11 +117,6 @@ async function search(query) {
 }
 
 function showEmpty(noQuery) {
-  emptyState.setAttribute(
-    'title',
-    noQuery ? 'Search your notes' : 'No results found.',
-  );
-  emptyState.setAttribute('icon', noQuery ? 'book' : 'close');
   updateEmptyState(noQuery);
   searchView.setAttribute('state', 'empty');
 }
