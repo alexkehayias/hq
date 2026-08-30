@@ -9,6 +9,19 @@
   color-scheme: light dark;
 }
 
+/* Prevent FOUC (Flash Of Unstyled Custom Elements): hq-* components only
+   render their markup once their JS definition loads. Hide them until they're
+   upgraded so pages don't flash bare, unstyled custom elements, then fade in.
+   :where() keeps specificity at zero so it never overrides component styles;
+   opacity (not display) avoids layout shift on upgrade. */
+:where(:not(:defined)) {
+  opacity: 0;
+}
+:where(:defined) {
+  opacity: 1;
+  transition: opacity 0.3s ease-in;
+}
+
 .markdown {
   > * + * {
     @apply mt-6;
