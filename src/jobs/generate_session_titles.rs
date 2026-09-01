@@ -145,6 +145,10 @@ fn create_session_prompt(transcript: &[Message]) -> String {
 
     // We'll just use a simple format without role distinction for now
     for message in transcript {
+        // Skip system messages (e.g. the model's system prompt) in the summary
+        if message.role() == &Role::System {
+            continue;
+        }
         if let Some(content) = &message.content {
             conversation.push_str(&format!("{}\n", content));
         }
