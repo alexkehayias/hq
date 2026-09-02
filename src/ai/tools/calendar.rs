@@ -70,14 +70,39 @@ impl ToolCall for CalendarTool {
                     .append_pair("calendar_id", &calendar_id);
             }
 
-            let resp = reqwest::Client::new()
+            let resp = match reqwest::Client::new()
                 .get(url.as_str())
                 .header("Content-Type", "application/json")
                 .send()
-                .await?
-                .error_for_status()?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(format!("Error fetching calendar events: {e}"))
+                }
+            };
 
-            let calendar_resp: Vec<CalendarResponse> = resp.json().await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                let detail = if body.trim().is_empty() {
+                    status.to_string()
+                } else {
+                    format!("{status}: {}", body.trim())
+                };
+                return Ok(format!(
+                    "Error fetching calendar events: the hq server returned an error ({detail})"
+                ));
+            }
+
+            let calendar_resp: Vec<CalendarResponse> = match resp.json().await {
+                Ok(events) => events,
+                Err(e) => {
+                    return Ok(format!(
+                        "Error fetching calendar events: failed to parse response as JSON: {e}"
+                    ))
+                }
+            };
 
             for event in calendar_resp {
                 let attendees_str = if let Some(attendees) = &event.attendees {
