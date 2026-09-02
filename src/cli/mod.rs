@@ -419,8 +419,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     .unwrap_or_else(|_| "thiswontworkforopenai".to_string());
                 let model = env::var("HQ_LOCAL_LLM_MODEL")
                     .unwrap_or_else(|_| "gpt-4.1-mini".to_string());
-                session::run_summarize(&vec_db_path, &api_hostname, &api_key, &model, &id)
-                    .await?;
+                let db = crate::core::db::async_db(&vec_db_path).await?;
+                session::run_summarize(db, &api_hostname, &api_key, &model, &id).await?;
             }
         },
         None => {}

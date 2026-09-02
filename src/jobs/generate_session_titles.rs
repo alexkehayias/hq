@@ -59,11 +59,11 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
                 // Generate title and summary from the transcript
                 let result = generate_and_update_session_info(
                     db_conn,
-                    &session_id,
-                    &transcript,
                     &config.openai_api_hostname,
                     &config.openai_api_key,
                     &config.openai_model,
+                    &session_id,
+                    &transcript,
                 )
                 .await;
 

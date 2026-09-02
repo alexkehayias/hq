@@ -12,11 +12,11 @@ use crate::openai::{Message, Role};
 /// value.
 pub async fn generate_and_update_session_info(
     db_conn: &Connection,
-    session_id: &str,
-    transcript: &[Message],
     api_hostname: &str,
     api_key: &str,
     model: &str,
+    session_id: &str,
+    transcript: &[Message],
 ) -> Result<Option<(String, String)>, anyhow::Error> {
     let prompt = create_session_prompt(transcript);
 

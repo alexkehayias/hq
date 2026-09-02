@@ -7,6 +7,7 @@ use crate::ai::chat::summarize::generate_and_update_session_info;
 use crate::core::db::async_db;
 use crate::openai::Message;
 use crate::search::delete_chat_session_index;
+use tokio_rusqlite::Connection;
 
 /// Delete a chat session, its messages, its tantivy search index entries,
 /// and its workspace directory.
@@ -95,16 +96,12 @@ pub async fn run_delete(
 /// the background `GenerateSessionTitles` job, which only processes sessions
 /// missing both). Bails if the session doesn't exist or has no messages.
 pub async fn run_summarize(
-    vec_db_path: &str,
+    db: Connection,
     api_hostname: &str,
     api_key: &str,
     model: &str,
     session_id: &str,
 ) -> Result<()> {
-    let db = async_db(vec_db_path)
-        .await
-        .context("Failed to connect to database")?;
-
     // Check if the session exists — same check as `run_delete`.
     let s_id_check = session_id.to_string();
     let exists: bool = db
@@ -134,8 +131,15 @@ pub async fn run_summarize(
         bail!("Chat session {session_id} has no messages to summarize");
     }
 
-    match generate_and_update_session_info(&db, session_id, &transcript, api_hostname, api_key, model)
-        .await?
+    match generate_and_update_session_info(
+        &db,
+        api_hostname,
+        api_key,
+        model,
+        session_id,
+        &transcript,
+    )
+    .await?
     {
         Some((title, summary)) => {
             println!("Summarized session {session_id}:\n  title: {title}\n  summary: {summary}");
@@ -312,8 +316,9 @@ mod tests {
     async fn test_run_summarize_nonexistent_session() {
         let storage = setup_storage_dir();
         let db_path = test_db(storage.path()).await;
+        let db = async_db(&db_path).await.unwrap();
 
-        let result = run_summarize(&db_path, "host", "key", "model", "nonexistent").await;
+        let result = run_summarize(db, "host", "key", "model", "nonexistent").await;
 
         assert!(
             result.is_err(),
@@ -337,7 +342,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = run_summarize(&db_path, "host", "key", "model", "empty-session").await;
+        let result = run_summarize(db, "host", "key", "model", "empty-session").await;
 
         assert!(
             result.is_err(),
