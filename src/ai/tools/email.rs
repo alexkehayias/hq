@@ -5,7 +5,6 @@ use anyhow::{Error, Result};
 use async_trait::async_trait;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use serde_json::json;
 
 #[derive(Serialize)]
@@ -60,20 +59,14 @@ impl ToolCall for EmailUnreadTool {
             ));
         }
 
-        let value: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
+        let email_threads: Vec<public::email::EmailThread> = match resp.json().await {
+            Ok(threads) => threads,
             Err(e) => {
                 return Ok(format!(
                     "Error fetching unread emails: failed to parse response as JSON: {e}"
                 ))
             }
         };
-
-        let email_threads: Vec<public::email::EmailThread> =
-            match serde_json::from_value(value) {
-                Ok(threads) => threads,
-                Err(e) => return Ok(format!("Error parsing email response: {e}")),
-            };
 
         let templates = prompt::templates();
         let content = templates.render(
@@ -176,20 +169,14 @@ impl ToolCall for EmailSearchTool {
             ));
         }
 
-        let value: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
+        let email_threads: Vec<public::email::EmailThread> = match resp.json().await {
+            Ok(threads) => threads,
             Err(e) => {
                 return Ok(format!(
                     "Error searching emails: failed to parse response as JSON: {e}"
                 ))
             }
         };
-
-        let email_threads: Vec<public::email::EmailThread> =
-            match serde_json::from_value(value) {
-                Ok(threads) => threads,
-                Err(e) => return Ok(format!("Error parsing email response: {e}")),
-            };
 
         let templates = prompt::templates();
         let content = templates.render(

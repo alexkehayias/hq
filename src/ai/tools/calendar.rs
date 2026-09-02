@@ -95,21 +95,14 @@ impl ToolCall for CalendarTool {
                 ));
             }
 
-            let value: serde_json::Value = match resp.json().await {
-                Ok(v) => v,
+            let calendar_resp: Vec<CalendarResponse> = match resp.json().await {
+                Ok(events) => events,
                 Err(e) => {
                     return Ok(format!(
                         "Error fetching calendar events: failed to parse response as JSON: {e}"
                     ))
                 }
             };
-            let calendar_resp: Vec<CalendarResponse> =
-                match serde_json::from_value(value) {
-                    Ok(events) => events,
-                    Err(e) => {
-                        return Ok(format!("Error parsing calendar events: {e}"))
-                    }
-                };
 
             for event in calendar_resp {
                 let attendees_str = if let Some(attendees) = &event.attendees {
