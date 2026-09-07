@@ -8,4 +8,5 @@ pub use middleware::{
     ToolSecurityMiddleware,
 };
 pub mod models;
+pub mod summarize;
 pub use core::{Chat, ChatBuilder};

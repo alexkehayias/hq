@@ -219,6 +219,10 @@ enum SessionCommand {
     Delete {
         id: String,
     },
+    /// Generate (or regenerate) a title and summary for a chat session
+    Summarize {
+        id: String,
+    },
 }
 
 #[derive(Parser)]
@@ -407,6 +411,16 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         Some(Command::Session { command }) => match command {
             SessionCommand::Delete { id } => {
                 session::run_delete(&vec_db_path, &index_path, &storage_path, &id).await?;
+            }
+            SessionCommand::Summarize { id } => {
+                let api_hostname = env::var("HQ_LOCAL_LLM_HOST")
+                    .unwrap_or_else(|_| "https://api.openai.com".to_string());
+                let api_key = env::var("OPENAI_API_KEY")
+                    .unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+                let model = env::var("HQ_LOCAL_LLM_MODEL")
+                    .unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+                let db = crate::core::db::async_db(&vec_db_path).await?;
+                session::run_summarize(db, &api_hostname, &api_key, &model, &id).await?;
             }
         },
         None => {}

@@ -2,9 +2,12 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use crate::ai::chat::db::delete_chat_session;
+use crate::ai::chat::db::{delete_chat_session, find_chat_session_by_id};
+use crate::ai::chat::summarize::generate_and_update_session_info;
 use crate::core::db::async_db;
+use crate::openai::Message;
 use crate::search::delete_chat_session_index;
+use tokio_rusqlite::Connection;
 
 /// Delete a chat session, its messages, its tantivy search index entries,
 /// and its workspace directory.
@@ -82,6 +85,71 @@ pub async fn run_delete(
         result.messages_deleted,
         if workspace_existed { "removed" } else { "not found" }
     );
+
+    Ok(())
+}
+
+/// Generate (or regenerate) a title and summary for a chat session by sending
+/// its transcript to the LLM, then persist the result to the `session` table.
+///
+/// Always regenerates, even if the session already has a title/summary (unlike
+/// the background `GenerateSessionTitles` job, which only processes sessions
+/// missing both). Bails if the session doesn't exist or has no messages.
+pub async fn run_summarize(
+    db: Connection,
+    api_hostname: &str,
+    api_key: &str,
+    model: &str,
+    session_id: &str,
+) -> Result<()> {
+    // Check if the session exists — same check as `run_delete`.
+    let s_id_check = session_id.to_string();
+    let exists: bool = db
+        .call(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM session WHERE id = ?",
+                rusqlite::params![s_id_check],
+                |row| row.get(0),
+            )?;
+            Ok(count > 0)
+        })
+        .await
+        .context("Failed to check session existence")?;
+
+    if !exists {
+        bail!("Chat session {session_id} not found");
+    }
+
+    let transcript: Vec<Message> = find_chat_session_by_id(&db, session_id)
+        .await
+        .context("Failed to load chat session transcript")?
+        .into_iter()
+        .map(|(_, msg)| msg)
+        .collect();
+
+    if transcript.is_empty() {
+        bail!("Chat session {session_id} has no messages to summarize");
+    }
+
+    match generate_and_update_session_info(
+        &db,
+        api_hostname,
+        api_key,
+        model,
+        session_id,
+        &transcript,
+    )
+    .await?
+    {
+        Some((title, summary)) => {
+            println!("Summarized session {session_id}:\n  title: {title}\n  summary: {summary}");
+        }
+        None => {
+            println!(
+                "Session {session_id}: could not parse LLM response; session left unchanged"
+            );
+        }
+    }
 
     Ok(())
 }
@@ -242,5 +310,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_summarize_nonexistent_session() {
+        let storage = setup_storage_dir();
+        let db_path = test_db(storage.path()).await;
+        let db = async_db(&db_path).await.unwrap();
+
+        let result = run_summarize(db, "host", "key", "model", "nonexistent").await;
+
+        assert!(
+            result.is_err(),
+            "expected error for nonexistent session, got {result:?}"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "error should mention 'not found', got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_summarize_empty_session() {
+        let storage = setup_storage_dir();
+        let db_path = test_db(storage.path()).await;
+
+        // Session exists but has no messages
+        let db = async_db(&db_path).await.unwrap();
+        get_or_create_session(&db, "empty-session", &[], SessionMode::Chat)
+            .await
+            .unwrap();
+
+        let result = run_summarize(db, "host", "key", "model", "empty-session").await;
+
+        assert!(
+            result.is_err(),
+            "expected error for session with no messages, got {result:?}"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no messages"),
+            "error should mention 'no messages', got: {err}"
+        );
     }
 }
