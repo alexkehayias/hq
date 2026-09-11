@@ -1,6 +1,6 @@
 use crate::ai::skills::validation::validate_skill_name;
 use crate::ai::skills::{Skill, SkillRegistry};
-use crate::ai::tools::registry::{Tool, ToolContext};
+use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::ai::tools::skills::copy_dir;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result, anyhow};
@@ -165,7 +165,7 @@ impl ToolCall for SaveSkillTool {
 impl Tool for SaveSkillTool {
     const NAME: &'static str = "save_skill";
 
-    fn from_context(ctx: &ToolContext) -> Result<Self> {
+    fn from_context(ctx: &ToolConfig) -> Result<Self> {
         let handle = ctx.skill_registry_handle("save_skill")?;
         let skills_dir = ctx.skills_dir("save_skill")?;
         Ok(Self::new(&skills_dir, &ctx.storage_path, &ctx.session_id, handle))

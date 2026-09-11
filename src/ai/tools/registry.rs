@@ -16,7 +16,7 @@ use super::{
 
 /// Shared dependencies needed to construct tools by name.
 #[derive(Clone)]
-pub struct ToolContext {
+pub struct ToolConfig {
     pub db: Connection,
     pub api_base_url: String,
     pub storage_path: String,
@@ -25,7 +25,7 @@ pub struct ToolContext {
     pub skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
 }
 
-impl ToolContext {
+impl ToolConfig {
     /// The shared skill-registry handle, or an error if none is configured.
     pub fn skill_registry_handle(&self, tool_name: &str) -> Result<Arc<RwLock<SkillRegistry>>> {
         self.skill_registry.clone().ok_or_else(|| {
@@ -59,20 +59,20 @@ pub trait Tool: ToolCall + Sized + Send + Sync + 'static {
     /// The tool's name. Also the key used by [`ToolRegistry`].
     const NAME: &'static str;
 
-    fn from_context(ctx: &ToolContext) -> Result<Self>;
+    fn from_context(ctx: &ToolConfig) -> Result<Self>;
 }
 
-type Ctor = Box<dyn Fn(&ToolContext) -> Result<BoxedToolCall> + Send + Sync>;
+type Ctor = Box<dyn Fn(&ToolConfig) -> Result<BoxedToolCall> + Send + Sync>;
 
-/// Maps a tool name (its `function_name`) to a constructor. Owns a [`ToolContext`].
+/// Maps a tool name (its `function_name`) to a constructor. Owns a [`ToolConfig`].
 pub struct ToolRegistry {
-    context: ToolContext,
+    context: ToolConfig,
     constructors: HashMap<String, Ctor>,
 }
 
 impl ToolRegistry {
     /// A registry pre-populated with every built-in tool, using `context`.
-    pub fn builtin(context: ToolContext) -> Self {
+    pub fn builtin(context: ToolConfig) -> Self {
         let mut registry = Self {
             context,
             constructors: HashMap::new(),
@@ -99,14 +99,11 @@ impl ToolRegistry {
         registry
     }
 
-    /// Register a tool type, keyed off its static [`Tool::NAME`]. The name comes
-    /// from the constant, so no instance is constructed to discover it. Tools
-    /// whose `from_context` errors for this context (e.g. skill tools with no
-    /// skill registry) are skipped.
+    /// Register a tool type, keyed off its static [`Tool::NAME`]. No instance is
+    /// constructed here; the name comes from the constant, and the tool is built
+    /// only when resolved. Tools that can't be built for a given context (e.g.
+    /// skill tools with no skill registry) error at resolution time.
     fn register<T: Tool>(&mut self) {
-        if T::from_context(&self.context).is_err() {
-            return;
-        }
         let name = T::NAME.to_string();
         self.constructors.insert(
             name,
@@ -143,7 +140,7 @@ mod tests {
     use super::*;
     use crate::core::db::{async_db, initialize_db};
 
-    async fn test_context() -> ToolContext {
+    async fn test_context() -> ToolConfig {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
@@ -152,7 +149,7 @@ mod tests {
         })
         .await
         .unwrap();
-        ToolContext {
+        ToolConfig {
             db,
             api_base_url: "http://localhost:2222".to_string(),
             storage_path: dir.path().to_string_lossy().to_string(),
@@ -190,16 +187,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skill_tools_unavailable_without_registry() {
-        // Skill tools are skipped at registration when the context has no
-        // skill registry, so requesting one reports it as unknown.
+    async fn skill_tools_error_without_registry() {
+        // Skill tools are always registered, but resolving one errors with a
+        // clear message when the context has no skill registry.
         let registry = ToolRegistry::builtin(test_context().await);
         let err = registry
             .from_str("list_skills")
             .err()
             .unwrap()
             .to_string();
-        assert!(err.contains("unknown tool 'list_skills'"));
-        assert!(!registry.available_names().contains(&"list_skills".to_string()));
+        assert!(err.contains("requires a skill registry"));
+        assert!(registry.available_names().contains(&"list_skills".to_string()));
     }
 }

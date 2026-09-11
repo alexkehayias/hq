@@ -3,7 +3,7 @@ use crate::api::public;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use super::registry::{Tool, ToolContext};
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -85,7 +85,7 @@ impl ToolCall for EmailUnreadTool {
 impl Tool for EmailUnreadTool {
     const NAME: &'static str = "get_unread_emails";
 
-    fn from_context(ctx: &ToolContext) -> Result<Self> {
+    fn from_context(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
 }
@@ -203,7 +203,7 @@ impl ToolCall for EmailSearchTool {
 impl Tool for EmailSearchTool {
     const NAME: &'static str = "search_emails";
 
-    fn from_context(ctx: &ToolContext) -> Result<Self> {
+    fn from_context(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
 }

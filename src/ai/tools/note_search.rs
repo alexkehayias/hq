@@ -2,7 +2,7 @@ use crate::api::public::notes::SearchResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use super::registry::{Tool, ToolContext};
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -65,7 +65,7 @@ impl ToolCall for NoteSearchTool {
 impl Tool for NoteSearchTool {
     const NAME: &'static str = "search_notes";
 
-    fn from_context(ctx: &ToolContext) -> Result<Self> {
+    fn from_context(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
 }

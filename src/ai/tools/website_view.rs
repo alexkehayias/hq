@@ -5,7 +5,7 @@ use crate::core::http::html_to_markdown;
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
-use super::registry::{Tool, ToolContext};
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
@@ -171,7 +171,7 @@ impl ToolCall for WebsiteViewTool {
 impl Tool for WebsiteViewTool {
     const NAME: &'static str = "view_website";
 
-    fn from_context(ctx: &ToolContext) -> Result<Self> {
+    fn from_context(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.storage_path, &ctx.session_id))
     }
 }

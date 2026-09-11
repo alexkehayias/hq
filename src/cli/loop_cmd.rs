@@ -36,7 +36,7 @@ use uuid::Uuid;
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
-use crate::ai::tools::{ToolContext, ToolRegistry};
+use crate::ai::tools::{ToolConfig, ToolRegistry};
 use crate::cli::channel::{event_stream_from_reader, sigterm, socket_path};
 use crate::openai::{Message, Role};
 use tokio_rusqlite::Connection;
@@ -51,8 +51,9 @@ use tokio_rusqlite::Connection;
 /// debounce window as the publisher, so a multi-line burst is delivered to the
 /// chat as one event rather than one per line.
 ///
-/// All config (storage path, LLM endpoint/key/model) is passed in by the
-/// caller (`mod.rs` run_dispatch); this module does not parse env vars.
+/// All config (LLM endpoint/key/model, channel list, storage path, db) is passed
+/// in by the caller (`mod.rs` run_dispatch); this module does not parse env
+/// vars. The [`ToolConfig`] is constructed here from those arguments.
 pub async fn run(
     db: Connection,
     storage_path: &str,
@@ -61,8 +62,8 @@ pub async fn run(
     model: &str,
     vapid_key_path: &str,
     channels: &[String],
-    debounce: Duration,
     tools: &[String],
+    debounce: Duration,
     system_prompt: Option<&str>,
 ) -> Result<()> {
     if channels.is_empty() {
@@ -107,7 +108,7 @@ pub async fn run(
     // Build the tool registry once. The registry owns the context (including the
     // fixed session_id), so tools rebuilt per event stay rooted in the same
     // workspace. Defaults to bash+notify, preserving the original behavior.
-    let context = ToolContext {
+    let context = ToolConfig {
         db: db.clone(),
         api_base_url: "http://localhost:2222".to_string(),
         storage_path: storage_path.to_string(),

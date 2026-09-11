@@ -328,8 +328,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 &model,
                 &vapid_key_path,
                 &channel,
-                Duration::from_millis(debounce_ms),
                 &tools,
+                Duration::from_millis(debounce_ms),
                 prompt.as_deref(),
             )
             .await?;
