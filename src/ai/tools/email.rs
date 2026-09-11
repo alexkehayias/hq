@@ -78,11 +78,13 @@ impl ToolCall for EmailUnreadTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for EmailUnreadTool {
+    const NAME: &'static str = "get_unread_emails";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
@@ -91,7 +93,7 @@ impl Tool for EmailUnreadTool {
 impl EmailUnreadTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("get_unread_emails"),
+            name: Self::NAME.to_string(),
             description: String::from("Fetch unread emails for a specific email address."),
             parameters: Parameters {
                 r#type: String::from("object"),
@@ -194,11 +196,13 @@ impl ToolCall for EmailSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for EmailSearchTool {
+    const NAME: &'static str = "search_emails";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
@@ -207,7 +211,7 @@ impl Tool for EmailSearchTool {
 impl EmailSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("search_emails"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Search emails for a specific email address using Gmail search syntax. \
                  The query supports operators like from:, to:, subject:, has:attachment, \

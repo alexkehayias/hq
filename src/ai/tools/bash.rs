@@ -59,11 +59,13 @@ impl ToolCall for BashTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for BashTool {
+    const NAME: &'static str = "bash";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.storage_path, &ctx.session_id))
     }
@@ -92,7 +94,7 @@ impl BashTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("bash"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Run a shell command and get the output. Commands run in a clean environment \
                  without access to environment variables. Use absolute paths for files.",

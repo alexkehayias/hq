@@ -58,11 +58,13 @@ impl ToolCall for NoteSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for NoteSearchTool {
+    const NAME: &'static str = "search_notes";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
@@ -71,7 +73,7 @@ impl Tool for NoteSearchTool {
 impl NoteSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("search_notes"),
+            name: Self::NAME.to_string(),
             description: String::from("Find notes the user has written about."),
             parameters: Parameters {
                 r#type: String::from("object"),

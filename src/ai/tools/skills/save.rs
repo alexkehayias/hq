@@ -158,11 +158,13 @@ impl ToolCall for SaveSkillTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for SaveSkillTool {
+    const NAME: &'static str = "save_skill";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         let handle = ctx.skill_registry_handle("save_skill")?;
         let skills_dir = ctx.skills_dir("save_skill")?;
@@ -194,7 +196,7 @@ impl SaveSkillTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("save_skill"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Save a skill from your workspace back to the global skills directory. \
                  The SKILL.md file is validated before saving. After saving, the skill \

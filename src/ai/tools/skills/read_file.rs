@@ -90,11 +90,13 @@ impl ToolCall for ReadSkillFileTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for ReadSkillFileTool {
+    const NAME: &'static str = "read_skill_file";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(ctx.skill_registry_clone("read_skill_file")?))
     }
@@ -123,7 +125,7 @@ impl ReadSkillFileTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("read_skill_file"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Read a file from within a skill's directory. Skills can have \
                  optional subdirectories: 'scripts/' for executable code, \

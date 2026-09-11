@@ -53,11 +53,13 @@ impl ToolCall for WebSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for WebSearchTool {
+    const NAME: &'static str = "web_search";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
@@ -66,7 +68,7 @@ impl Tool for WebSearchTool {
 impl WebSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("web_search"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Search the web for a term and return up to `limit` results.",
             ),

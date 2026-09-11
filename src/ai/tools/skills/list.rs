@@ -27,11 +27,13 @@ impl ToolCall for ListSkillsTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for ListSkillsTool {
+    const NAME: &'static str = "list_skills";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(ctx.skill_registry_clone("list_skills")?))
     }
@@ -46,7 +48,7 @@ impl ListSkillsTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("list_skills"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "List all available skills that can be used to help the user. \
                  Each skill has a name and description explaining when to use it.",

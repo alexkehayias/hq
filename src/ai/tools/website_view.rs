@@ -164,11 +164,13 @@ impl ToolCall for WebsiteViewTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for WebsiteViewTool {
+    const NAME: &'static str = "view_website";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.storage_path, &ctx.session_id))
     }
@@ -180,7 +182,7 @@ impl WebsiteViewTool {
             PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
 
         let function = Function {
-            name: String::from("view_website"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Fetch and convert a website's content to markdown for viewing.",
             ),

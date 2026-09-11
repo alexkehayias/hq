@@ -52,9 +52,13 @@ impl ToolContext {
     }
 }
 
-/// Construction trait. `function_name()` is inherited from [`ToolCall`], which stays
-/// the single source of a tool's name.
+/// Construction trait. Each tool exposes its name as the associated constant
+/// [`Tool::NAME`], the single source of truth for both the registry key and
+/// [`ToolCall::function_name`].
 pub trait Tool: ToolCall + Sized + Send + Sync + 'static {
+    /// The tool's name. Also the key used by [`ToolRegistry`].
+    const NAME: &'static str;
+
     fn from_context(ctx: &ToolContext) -> Result<Self>;
 }
 
@@ -95,14 +99,15 @@ impl ToolRegistry {
         registry
     }
 
-    /// Register a tool type. Discovers its name by constructing one throwaway instance
-    /// and reading `function_name()`. Tools whose `from_context` errors for this context
-    /// (e.g. skill tools with no skill registry) are skipped.
+    /// Register a tool type, keyed off its static [`Tool::NAME`]. The name comes
+    /// from the constant, so no instance is constructed to discover it. Tools
+    /// whose `from_context` errors for this context (e.g. skill tools with no
+    /// skill registry) are skipped.
     fn register<T: Tool>(&mut self) {
-        let Ok(tool) = T::from_context(&self.context) else {
+        if T::from_context(&self.context).is_err() {
             return;
-        };
-        let name = tool.function_name();
+        }
+        let name = T::NAME.to_string();
         self.constructors.insert(
             name,
             Box::new(|ctx| Ok(Box::new(T::from_context(ctx)?) as BoxedToolCall)),

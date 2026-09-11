@@ -75,11 +75,13 @@ impl ToolCall for WorkOnSkillTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for WorkOnSkillTool {
+    const NAME: &'static str = "work_on_skill";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         let skills_dir = ctx.skills_dir("work_on_skill")?;
         Ok(Self::new(&skills_dir, &ctx.storage_path, &ctx.session_id))
@@ -105,7 +107,7 @@ impl WorkOnSkillTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("work_on_skill"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Prepare a skill for editing in your workspace. If the skill already exists, it is copied into your workspace. \
                  If it doesn't exist yet, an empty directory is created so you can build a new skill from scratch. \

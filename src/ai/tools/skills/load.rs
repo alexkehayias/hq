@@ -66,11 +66,13 @@ impl ToolCall for LoadSkillTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for LoadSkillTool {
+    const NAME: &'static str = "load_skill";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(ctx.skill_registry_clone("load_skill")?))
     }
@@ -93,7 +95,7 @@ impl LoadSkillTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("load_skill"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Load the full content of a skill by name. This returns \
                  the skill's description, body (instructions), license, \

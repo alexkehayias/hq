@@ -35,11 +35,13 @@ impl ToolCall for SearchSkillsTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for SearchSkillsTool {
+    const NAME: &'static str = "search_skills";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(ctx.skill_registry_clone("search_skills")?))
     }
@@ -62,7 +64,7 @@ impl SearchSkillsTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("search_skills"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Search for skills by keyword in their name or description. \
                  Returns skills sorted by relevance: exact name match first, \

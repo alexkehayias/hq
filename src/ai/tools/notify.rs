@@ -96,11 +96,13 @@ impl ToolCall for NotifyTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for NotifyTool {
+    const NAME: &'static str = "notify";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(ctx.db.clone(), &ctx.vapid_key_path))
     }
@@ -109,7 +111,7 @@ impl Tool for NotifyTool {
 impl NotifyTool {
     pub fn new(db: Connection, vapid_key_path: &str) -> Self {
         let function = Function {
-            name: String::from("notify"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Send a push notification to the user's devices. Use this to deliver important information that the user should see outside of the chat, such as completed tasks, alerts, summaries, or time-sensitive updates. The notification will appear on all devices where the web app is open and notifications are enabled.",
             ),

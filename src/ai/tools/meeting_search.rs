@@ -53,11 +53,13 @@ impl ToolCall for MeetingSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for MeetingSearchTool {
+    const NAME: &'static str = "search_meetings";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
@@ -66,7 +68,7 @@ impl Tool for MeetingSearchTool {
 impl MeetingSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("search_meetings"),
+            name: Self::NAME.to_string(),
             description: String::from("Find meeting notes the user has written about."),
             parameters: Parameters {
                 r#type: String::from("object"),

@@ -39,7 +39,7 @@ pub struct MemoryTool {
 impl MemoryTool {
     pub fn new(storage_path: &str) -> Self {
         let function = Function {
-            name: String::from("memory"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Read from or write to persistent memory that persists across sessions. Use this when you learn something important about the user, their preferences, or context that should be remembered for future conversations. IMPORTANT: Keep memory concise and under 2000 words.",
             ),
@@ -131,11 +131,13 @@ impl ToolCall for MemoryTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
     }
 }
 
 impl Tool for MemoryTool {
+    const NAME: &'static str = "memory";
+
     fn from_context(ctx: &ToolContext) -> Result<Self> {
         Ok(Self::new(&ctx.storage_path))
     }
