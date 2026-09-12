@@ -42,8 +42,8 @@ impl ToolCall for SearchSkillsTool {
 impl Tool for SearchSkillsTool {
     const NAME: &'static str = "search_skills";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(ctx.skill_registry_clone("search_skills")?))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.skill_registry_clone("search_skills")?))
     }
 }
 

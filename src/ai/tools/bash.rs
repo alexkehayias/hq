@@ -66,8 +66,8 @@ impl ToolCall for BashTool {
 impl Tool for BashTool {
     const NAME: &'static str = "bash";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&ctx.storage_path, &ctx.session_id))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.storage_path, &conf.session_id))
     }
 }
 

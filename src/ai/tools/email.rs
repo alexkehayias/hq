@@ -85,8 +85,8 @@ impl ToolCall for EmailUnreadTool {
 impl Tool for EmailUnreadTool {
     const NAME: &'static str = "get_unread_emails";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&ctx.api_base_url))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
@@ -203,8 +203,8 @@ impl ToolCall for EmailSearchTool {
 impl Tool for EmailSearchTool {
     const NAME: &'static str = "search_emails";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&ctx.api_base_url))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 

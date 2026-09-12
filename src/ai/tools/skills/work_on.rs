@@ -82,9 +82,9 @@ impl ToolCall for WorkOnSkillTool {
 impl Tool for WorkOnSkillTool {
     const NAME: &'static str = "work_on_skill";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        let skills_dir = ctx.skills_dir("work_on_skill")?;
-        Ok(Self::new(&skills_dir, &ctx.storage_path, &ctx.session_id))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        let skills_dir = conf.skills_dir("work_on_skill")?;
+        Ok(Self::new(&skills_dir, &conf.storage_path, &conf.session_id))
     }
 }
 

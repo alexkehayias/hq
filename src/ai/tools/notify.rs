@@ -103,8 +103,8 @@ impl ToolCall for NotifyTool {
 impl Tool for NotifyTool {
     const NAME: &'static str = "notify";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(ctx.db.clone(), &ctx.vapid_key_path))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.db.clone(), &conf.vapid_key_path))
     }
 }
 

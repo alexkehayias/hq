@@ -34,8 +34,8 @@ impl ToolCall for ListSkillsTool {
 impl Tool for ListSkillsTool {
     const NAME: &'static str = "list_skills";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(ctx.skill_registry_clone("list_skills")?))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.skill_registry_clone("list_skills")?))
     }
 }
 

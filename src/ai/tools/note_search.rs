@@ -65,8 +65,8 @@ impl ToolCall for NoteSearchTool {
 impl Tool for NoteSearchTool {
     const NAME: &'static str = "search_notes";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&ctx.api_base_url))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 

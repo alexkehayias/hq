@@ -60,8 +60,8 @@ impl ToolCall for MeetingSearchTool {
 impl Tool for MeetingSearchTool {
     const NAME: &'static str = "search_meetings";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&ctx.api_base_url))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 

@@ -138,8 +138,8 @@ impl ToolCall for MemoryTool {
 impl Tool for MemoryTool {
     const NAME: &'static str = "memory";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&ctx.storage_path))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.storage_path))
     }
 }
 

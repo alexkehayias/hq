@@ -59,7 +59,7 @@ pub trait Tool: ToolCall + Sized + Send + Sync + 'static {
     /// The tool's name. Also the key used by [`ToolRegistry`].
     const NAME: &'static str;
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self>;
+    fn from_config(conf: &ToolConfig) -> Result<Self>;
 }
 
 type Ctor = Box<dyn Fn(&ToolConfig) -> Result<BoxedToolCall> + Send + Sync>;
@@ -107,7 +107,7 @@ impl ToolRegistry {
         let name = T::NAME.to_string();
         self.constructors.insert(
             name,
-            Box::new(|ctx| Ok(Box::new(T::from_config(ctx)?) as BoxedToolCall)),
+            Box::new(|conf| Ok(Box::new(T::from_config(conf)?) as BoxedToolCall)),
         );
     }
 

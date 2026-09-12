@@ -165,10 +165,10 @@ impl ToolCall for SaveSkillTool {
 impl Tool for SaveSkillTool {
     const NAME: &'static str = "save_skill";
 
-    fn from_config(ctx: &ToolConfig) -> Result<Self> {
-        let handle = ctx.skill_registry_handle("save_skill")?;
-        let skills_dir = ctx.skills_dir("save_skill")?;
-        Ok(Self::new(&skills_dir, &ctx.storage_path, &ctx.session_id, handle))
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        let handle = conf.skill_registry_handle("save_skill")?;
+        let skills_dir = conf.skills_dir("save_skill")?;
+        Ok(Self::new(&skills_dir, &conf.storage_path, &conf.session_id, handle))
     }
 }
 
