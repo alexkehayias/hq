@@ -171,7 +171,7 @@ impl ToolCall for WebsiteViewTool {
 impl Tool for WebsiteViewTool {
     const NAME: &'static str = "view_website";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.storage_path, &ctx.session_id))
     }
 }

@@ -62,7 +62,7 @@ impl ToolCall for TasksDueTodayTool {
 impl Tool for TasksDueTodayTool {
     const NAME: &'static str = "tasks_due_today";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
 }
@@ -152,7 +152,7 @@ impl ToolCall for TasksScheduledTodayTool {
 impl Tool for TasksScheduledTodayTool {
     const NAME: &'static str = "tasks_scheduled_today";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
 }

@@ -73,7 +73,7 @@ impl ToolCall for LoadSkillTool {
 impl Tool for LoadSkillTool {
     const NAME: &'static str = "load_skill";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(ctx.skill_registry_clone("load_skill")?))
     }
 }

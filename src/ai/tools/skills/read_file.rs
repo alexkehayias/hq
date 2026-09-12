@@ -97,7 +97,7 @@ impl ToolCall for ReadSkillFileTool {
 impl Tool for ReadSkillFileTool {
     const NAME: &'static str = "read_skill_file";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(ctx.skill_registry_clone("read_skill_file")?))
     }
 }

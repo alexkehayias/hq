@@ -61,7 +61,7 @@ impl ToolCall for DateTimeTool {
 impl Tool for DateTimeTool {
     const NAME: &'static str = "datetime";
 
-    fn from_context(_ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(_ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new())
     }
 }

@@ -144,7 +144,7 @@ impl ToolCall for CalendarTool {
 impl Tool for CalendarTool {
     const NAME: &'static str = "get_calendar_events";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(ctx.db.clone(), &ctx.api_base_url))
     }
 }

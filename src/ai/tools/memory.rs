@@ -138,7 +138,7 @@ impl ToolCall for MemoryTool {
 impl Tool for MemoryTool {
     const NAME: &'static str = "memory";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.storage_path))
     }
 }

@@ -60,7 +60,7 @@ impl ToolCall for WebSearchTool {
 impl Tool for WebSearchTool {
     const NAME: &'static str = "web_search";
 
-    fn from_context(ctx: &ToolConfig) -> Result<Self> {
+    fn from_config(ctx: &ToolConfig) -> Result<Self> {
         Ok(Self::new(&ctx.api_base_url))
     }
 }
