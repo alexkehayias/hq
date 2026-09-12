@@ -11,9 +11,10 @@
 //!   Unicode tag block (`U+E0000..U+E007F`). These let an attacker make the
 //!   model read something a human never sees. Any occurrence is a hard reject.
 //!
-//! - **Can only interleave** — zero-width spaces, joiners, BOM, variation
-//!   selectors, and Hangul fillers. These are invisible but cannot map to
-//!   hidden letters, so they can't *hide* an instruction. Their only use in
+//! - **Can only interleave** — zero-width spaces and joiners, combining
+//!   grapheme joiner, Mongolian vowel separator, BOM, invisible math operators,
+//!   variation selectors, and Hangul fillers. These are invisible but cannot
+//!   map to hidden letters, so they can't *hide* an instruction. Their only use in
 //!   an attack is to be slipped between letters of a word to defeat
 //!   substring filters while keeping the text readable to the model. So they
 //!   are stripped when they sit at structural boundaries (next to whitespace,
@@ -23,14 +24,18 @@
 ///
 /// - C0 controls, DEL, C1 controls (`char::is_control`), plus soft hyphen
 ///   `U+00AD`
-/// - Bidirectional overrides `U+202A..U+202E`, `U+2066..U+2069`
+/// - Bidirectional formatting: LRM `U+200E`, RLM `U+200F`,
+///   `U+202A..U+202E`, `U+2066..U+2069`
 /// - Unicode tag block `U+E0000..U+E007F`
 fn is_hard_reject(c: char) -> Option<RejectReason> {
     let code = c as u32;
     if c.is_control() || code == 0xAD {
         return Some(RejectReason::ControlChar);
     }
-    if (0x202A..=0x202E).contains(&code) || (0x2066..=0x2069).contains(&code) {
+    if matches!(code, 0x200E | 0x200F)
+        || (0x202A..=0x202E).contains(&code)
+        || (0x2066..=0x2069).contains(&code)
+    {
         return Some(RejectReason::BidiFormatting);
     }
     if (0xE0000..=0xE007F).contains(&code) {
@@ -40,14 +45,20 @@ fn is_hard_reject(c: char) -> Option<RejectReason> {
 }
 
 /// The set of characters that can only interleave and are safe to strip when
-/// they appear at structural boundaries: zero-width chars, joiners, BOM,
-/// variation selectors, and Hangul fillers.
+/// they appear at structural boundaries: zero-width chars and joiners,
+/// combining grapheme joiner, Mongolian vowel separator, BOM, invisible math
+/// operators, variation selectors, and Hangul fillers.
 fn is_strippable(c: char) -> bool {
     let code = c as u32;
-    matches!(code, 0x200B | 0x200C | 0x200D | 0x2060 | 0xFEFF)
-        || (0xFE00..=0xFE0F).contains(&code)
-        || (0xE0100..=0xE01EF).contains(&code)
-        || matches!(code, 0x3164 | 0xFFA0)
+    // Zero-width and joiners: ZWSP, ZWNJ, ZWJ, word joiner, BOM, Mongolian
+    // vowel separator (U+180E), combining grapheme joiner (U+034F).
+    matches!(
+        code,
+        0x180E | 0x200B | 0x200C | 0x200D | 0x034F | 0x2060 | 0xFEFF
+    ) || (0x2061..=0x2064).contains(&code) // invisible math operators
+        || (0xFE00..=0xFE0F).contains(&code) // variation selectors
+        || (0xE0100..=0xE01EF).contains(&code) // variation selectors supplement
+        || matches!(code, 0x115F | 0x1160 | 0x3164 | 0xFFA0) // hangul fillers
 }
 
 /// Reject when stripped characters make up more than ~1/3 of the input *and*
@@ -88,6 +99,13 @@ pub enum InvisibleSanitization {
 
 /// Scan `input` and classify its invisible characters.
 pub fn sanitize_invisible_chars(input: &str) -> InvisibleSanitization {
+    // Fast path: printable ASCII only (0x20..=0x7E) can't contain any control
+    // or invisible character. `is_ascii()` alone is NOT sufficient — ASCII
+    // control chars (0x00-0x1F, 0x7F) are flagged by the classifier.
+    if input.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        return InvisibleSanitization::Clean;
+    }
+
     let mut out = String::with_capacity(input.len());
     let mut prev: Option<char> = None;
     let mut stripped = 0usize;
@@ -191,6 +209,63 @@ mod tests {
             sanitize_invisible_chars("café — naïve 🎉"),
             InvisibleSanitization::Clean
         );
+    }
+
+    #[test]
+    fn ascii_input_takes_fast_path() {
+        assert_eq!(
+            sanitize_invisible_chars("plain ascii output 123"),
+            InvisibleSanitization::Clean
+        );
+    }
+
+    #[test]
+    fn bidi_marks_lrm_and_rlm_are_rejected() {
+        // LRM (U+200E) and RLM (U+200F) are bidi formatting that can reorder
+        // text — hard reject, regardless of position.
+        assert_reject("a\u{200E}b", RejectReason::BidiFormatting);
+        assert_reject("a\u{200F}b", RejectReason::BidiFormatting);
+    }
+
+    #[test]
+    fn mongolian_vowel_separator_is_stripped() {
+        assert_eq!(assert_cleaned("a\u{180E} b"), "a b");
+    }
+
+    #[test]
+    fn combining_grapheme_joiner_is_stripped() {
+        assert_eq!(assert_cleaned("a\u{034F} b"), "a b");
+    }
+
+    #[test]
+    fn invisible_math_operators_are_stripped() {
+        // Function Application, Invisible Times, Separator, Plus.
+        for ch in ['\u{2061}', '\u{2062}', '\u{2063}', '\u{2064}'] {
+            assert_eq!(assert_cleaned(&format!("a{ch} b")), "a b");
+        }
+    }
+
+    #[test]
+    fn hangul_fillers_are_stripped() {
+        // Choseong, Jungseong, Hangul, and halfwidth Hangul fillers.
+        for ch in ['\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}'] {
+            assert_eq!(assert_cleaned(&format!("a{ch} b")), "a b");
+        }
+    }
+
+    #[test]
+    fn mid_word_invisible_math_operator_is_rejected() {
+        assert_reject("a\u{2061}b", RejectReason::MidWordInterleaving);
+    }
+
+    #[test]
+    fn mid_word_mongolian_vowel_separator_is_rejected() {
+        assert_reject("a\u{180E}b", RejectReason::MidWordInterleaving);
+    }
+
+    #[test]
+    fn mid_word_hangul_choseong_filler_is_rejected() {
+        assert_reject("a\u{115F}b", RejectReason::MidWordInterleaving);
     }
 
     #[test]
