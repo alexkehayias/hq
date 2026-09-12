@@ -68,14 +68,15 @@ pub struct IterateTool {
 #[async_trait]
 impl ToolCall for IterateTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        let fn_args: IterateArgs = parse_tool_args(args)?;
+        let mut fn_args: IterateArgs = parse_tool_args(args)?;
 
         let chunk_size = fn_args.chunk_size.max(1);
         let chunk_timeout = Duration::from_secs(fn_args.timeout_secs.max(1));
+        // Move items into chunks without cloning; items is owned and unused after.
         let chunks: Vec<Vec<String>> = fn_args
             .items
-            .chunks(chunk_size)
-            .map(|c| c.to_vec())
+            .chunks_mut(chunk_size)
+            .map(|c| c.iter_mut().map(std::mem::take).collect())
             .collect();
 
         if chunks.is_empty() {
@@ -175,11 +176,13 @@ impl IterateTool {
 
         match tokio::time::timeout(timeout, chat.next_msg(user)).await {
             Ok(Ok(msgs)) => {
-                let text = msgs
-                    .iter()
-                    .filter_map(|m| m.content.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let mut text = String::new();
+                for m in msgs.iter().filter_map(|m| m.content.as_ref()) {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(m);
+                }
                 ChunkOutcome::Ok(index, text)
             }
             Ok(Err(e)) => ChunkOutcome::Errored(index, e.to_string()),
@@ -200,12 +203,21 @@ fn combine_outcomes(outcomes: Vec<ChunkOutcome>) -> String {
                 (index, "timed out", "Subagent timed out.".to_string())
             }
         };
-        let section = format!("\n\n=== Chunk {} ({}) ===\n{}", index, status, text);
-        if out.len() + section.len() > MAX_OUTPUT_CHARS {
+        let header = format!("\n\n=== Chunk {} ({}) ===\n", index, status);
+        let remaining = MAX_OUTPUT_CHARS.saturating_sub(out.len() + header.len());
+        if remaining == 0 {
             out.push_str("\n\n[Results truncated: exceeded output limit.]");
             break;
         }
-        out.push_str(&section);
+        out.push_str(&header);
+        // Keep a prefix of an oversized section so a single huge result
+        // still contributes content instead of being dropped entirely.
+        let body: String = text.chars().take(remaining).collect();
+        out.push_str(&body);
+        if body.len() < text.len() {
+            out.push_str("\n\n[Results truncated: exceeded output limit.]");
+            break;
+        }
     }
     out
 }
@@ -259,9 +271,13 @@ mod tests {
 
     #[test]
     fn combine_truncates() {
-        let mut big = String::new();
-        big.push_str(&"x".repeat(MAX_OUTPUT_CHARS));
+        let big = "x".repeat(MAX_OUTPUT_CHARS);
         let out = combine_outcomes(vec![ChunkOutcome::Ok(0, big)]);
         assert!(out.contains("Results truncated"));
+        // The oversized section is kept as a prefix rather than dropped.
+        assert!(out.starts_with("\n\n=== Chunk 0 (ok) ==="));
+        assert!(out.contains("x".repeat(100).as_str()));
+        // Hard cap: output stays within the limit plus the marker.
+        assert!(out.len() <= MAX_OUTPUT_CHARS + 64);
     }
 }
