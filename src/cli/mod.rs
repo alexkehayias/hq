@@ -319,10 +319,13 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
             let vapid_key_path = env::var("HQ_VAPID_KEY_PATH").unwrap_or_else(|_| String::new());
+            let api_base_url = env::var("HQ_NOTE_SEARCH_API_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:2222".to_string());
             let db = crate::core::db::async_db(&vec_db_path).await?;
             loop_cmd::run(
                 db,
                 &storage_path,
+                &api_base_url,
                 &api_hostname,
                 &api_key,
                 &model,

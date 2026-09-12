@@ -57,6 +57,7 @@ use tokio_rusqlite::Connection;
 pub async fn run(
     db: Connection,
     storage_path: &str,
+    api_base_url: &str,
     api_hostname: &str,
     api_key: &str,
     model: &str,
@@ -110,7 +111,7 @@ pub async fn run(
     // workspace. Defaults to bash+notify, preserving the original behavior.
     let context = ToolConfig {
         db: db.clone(),
-        api_base_url: "http://localhost:2222".to_string(),
+        api_base_url: api_base_url.to_string(),
         storage_path: storage_path.to_string(),
         vapid_key_path: vapid_key_path.to_string(),
         session_id: session_id.clone(),
