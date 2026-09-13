@@ -74,7 +74,7 @@ enum Command {
     Rebuild {},
     /// Query the search index
     Query {
-        #[arg(long)]
+        /// Search term (AQL syntax)
         term: String,
         #[arg(long, default_value = "false")]
         vector: bool,
@@ -120,17 +120,19 @@ enum Command {
     },
     /// Perform oauth and store credentials
     Auth {
-        #[arg(long, value_enum)]
+        /// Service to authenticate
+        #[arg(value_enum)]
         service: ServiceKind,
     },
     /// Run a job
     Job {
-        #[arg(long, value_enum)]
+        /// Job to run
+        #[arg(value_enum)]
         id: JobId,
     },
     /// Run an eval
     Eval {
-        #[arg(long)]
+        /// Path to the eval file
         file: String,
         /// Override the model from config
         #[arg(long)]
@@ -167,7 +169,7 @@ enum Command {
 enum TasksCommand {
     /// Create a new task
     Create {
-        #[arg(long)]
+        /// Task title
         title: String,
         #[arg(long)]
         body: Option<String>,
