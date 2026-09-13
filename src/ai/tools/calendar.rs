@@ -2,7 +2,7 @@ use crate::api::public::calendar::CalendarResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use tokio_rusqlite::Connection;
 
@@ -137,14 +137,22 @@ impl ToolCall for CalendarTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for CalendarTool {
+    const NAME: &'static str = "get_calendar_events";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.db.clone(), &conf.api_base_url))
     }
 }
 
 impl CalendarTool {
     pub fn new(db: Connection, api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("get_calendar_events"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Fetch upcoming calendar events for all authorized accounts.",
             ),

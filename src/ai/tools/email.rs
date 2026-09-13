@@ -3,7 +3,7 @@ use crate::api::public;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -78,14 +78,22 @@ impl ToolCall for EmailUnreadTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for EmailUnreadTool {
+    const NAME: &'static str = "get_unread_emails";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
 impl EmailUnreadTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("get_unread_emails"),
+            name: Self::NAME.to_string(),
             description: String::from("Fetch unread emails for a specific email address."),
             parameters: Parameters {
                 r#type: String::from("object"),
@@ -188,14 +196,22 @@ impl ToolCall for EmailSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for EmailSearchTool {
+    const NAME: &'static str = "search_emails";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
 impl EmailSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("search_emails"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Search emails for a specific email address using Gmail search syntax. \
                  The query supports operators like from:, to:, subject:, has:attachment, \

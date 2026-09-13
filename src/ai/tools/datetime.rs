@@ -1,5 +1,6 @@
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
+use super::registry::{Tool, ToolConfig};
 use async_trait::async_trait;
 use chrono::{Days, Months, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -53,14 +54,22 @@ impl ToolCall for DateTimeTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for DateTimeTool {
+    const NAME: &'static str = "datetime";
+
+    fn from_config(_conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new())
     }
 }
 
 impl DateTimeTool {
     pub fn new() -> Self {
         let function = Function {
-            name: String::from("datetime"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Get the current date and time, perform calendar math (add days/months to a date), or calculate the duration until a target date/time."
             ),

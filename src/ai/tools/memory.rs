@@ -1,5 +1,6 @@
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result, anyhow};
+use super::registry::{Tool, ToolConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
@@ -38,7 +39,7 @@ pub struct MemoryTool {
 impl MemoryTool {
     pub fn new(storage_path: &str) -> Self {
         let function = Function {
-            name: String::from("memory"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Read from or write to persistent memory that persists across sessions. Use this when you learn something important about the user, their preferences, or context that should be remembered for future conversations. IMPORTANT: Keep memory concise and under 2000 words.",
             ),
@@ -130,7 +131,15 @@ impl ToolCall for MemoryTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for MemoryTool {
+    const NAME: &'static str = "memory";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.storage_path))
     }
 }
 
