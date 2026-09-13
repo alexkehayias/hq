@@ -1,4 +1,5 @@
 use crate::ai::skills::SkillRegistry;
+use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::openai::{Function, Parameters, ToolCall, ToolType};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
@@ -26,7 +27,15 @@ impl ToolCall for ListSkillsTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for ListSkillsTool {
+    const NAME: &'static str = "list_skills";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.skill_registry_clone("list_skills")?))
     }
 }
 
@@ -39,7 +48,7 @@ impl ListSkillsTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("list_skills"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "List all available skills that can be used to help the user. \
                  Each skill has a name and description explaining when to use it.",

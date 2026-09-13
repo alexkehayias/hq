@@ -1,5 +1,6 @@
 use crate::ai::skills::{validation::validate_skill_directory, validation::validate_skill_name};
 use crate::ai::tools::bash::SANDBOX_ROOT;
+use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::ai::tools::skills::copy_dir;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result};
@@ -74,7 +75,16 @@ impl ToolCall for WorkOnSkillTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for WorkOnSkillTool {
+    const NAME: &'static str = "work_on_skill";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        let skills_dir = conf.skills_dir("work_on_skill")?;
+        Ok(Self::new(&skills_dir, &conf.storage_path, &conf.session_id))
     }
 }
 
@@ -97,7 +107,7 @@ impl WorkOnSkillTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("work_on_skill"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Prepare a skill for editing in your workspace. If the skill already exists, it is copied into your workspace. \
                  If it doesn't exist yet, an empty directory is created so you can build a new skill from scratch. \

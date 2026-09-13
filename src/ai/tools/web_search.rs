@@ -1,7 +1,7 @@
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -53,14 +53,22 @@ impl ToolCall for WebSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for WebSearchTool {
+    const NAME: &'static str = "web_search";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
 impl WebSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("web_search"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Search the web for a term and return up to `limit` results.",
             ),

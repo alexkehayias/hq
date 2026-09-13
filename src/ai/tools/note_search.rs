@@ -2,7 +2,7 @@ use crate::api::public::notes::SearchResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -58,14 +58,22 @@ impl ToolCall for NoteSearchTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for NoteSearchTool {
+    const NAME: &'static str = "search_notes";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
 impl NoteSearchTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("search_notes"),
+            name: Self::NAME.to_string(),
             description: String::from("Find notes the user has written about."),
             parameters: Parameters {
                 r#type: String::from("object"),

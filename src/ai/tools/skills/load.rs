@@ -1,4 +1,5 @@
 use crate::ai::skills::{Skill, SkillRegistry};
+use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
@@ -65,7 +66,15 @@ impl ToolCall for LoadSkillTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for LoadSkillTool {
+    const NAME: &'static str = "load_skill";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.skill_registry_clone("load_skill")?))
     }
 }
 
@@ -86,7 +95,7 @@ impl LoadSkillTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("load_skill"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Load the full content of a skill by name. This returns \
                  the skill's description, body (instructions), license, \

@@ -3,7 +3,7 @@ use crate::openai::{Function, Parameters, ToolCall, ToolType};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -55,14 +55,22 @@ impl ToolCall for TasksDueTodayTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for TasksDueTodayTool {
+    const NAME: &'static str = "tasks_due_today";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
 impl TasksDueTodayTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("tasks_due_today"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Get a list of tasks that are due today, excluding done and canceled tasks.",
             ),
@@ -137,14 +145,22 @@ impl ToolCall for TasksScheduledTodayTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for TasksScheduledTodayTool {
+    const NAME: &'static str = "tasks_scheduled_today";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_base_url))
     }
 }
 
 impl TasksScheduledTodayTool {
     pub fn new(api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("tasks_scheduled_today"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Get a list of tasks that are scheduled for today, excluding done and canceled tasks.",
             ),
