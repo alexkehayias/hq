@@ -116,6 +116,9 @@ pub async fn run(
         vapid_key_path: vapid_key_path.to_string(),
         session_id: session_id.clone(),
         skill_registry: None,
+        api_hostname: api_hostname.to_string(),
+        api_key: api_key.to_string(),
+        model: model.to_string(),
     };
     let registry = ToolRegistry::builtin(context);
     let tool_names: Vec<String> = if tools.is_empty() {

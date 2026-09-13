@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use super::{Tool, ToolConfig};
 use crate::ai::chat::ChatBuilder;
 use crate::openai::{
     Function, Message, Parameters, Property, Role, ToolCall, ToolType, parse_tool_args,
@@ -93,14 +94,22 @@ impl ToolCall for IterateTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for IterateTool {
+    const NAME: &'static str = "iterate";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.api_hostname, &conf.api_key, &conf.model))
     }
 }
 
 impl IterateTool {
     pub fn new(api_hostname: &str, api_key: &str, model: &str) -> Self {
         let function = Function {
-            name: String::from("iterate"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Split a list of items into chunks and process each chunk with an \
                  independent subagent, then combine the results into a single report.",
