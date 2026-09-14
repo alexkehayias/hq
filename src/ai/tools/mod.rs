@@ -19,6 +19,9 @@ pub use email::{EmailSearchTool, EmailUnreadTool};
 pub mod website_view;
 pub use website_view::WebsiteViewTool;
 
+pub mod iterate;
+pub use iterate::IterateTool;
+
 pub mod web_search;
 pub use web_search::WebSearchTool;
 
@@ -30,6 +33,9 @@ pub use memory::MemoryTool;
 
 pub mod notify;
 pub use notify::NotifyTool;
+
+pub mod registry;
+pub use registry::{Tool, ToolConfig, ToolRegistry};
 
 pub mod skills;
 pub use skills::{

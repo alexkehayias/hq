@@ -19,7 +19,7 @@ cargo run -- --init
 Search notes:
 
 ```
-cargo run -- query --term "testing" --vector
+cargo run -- query "testing" --vector
 ```
 
 Index or re-index:

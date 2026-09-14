@@ -1,4 +1,5 @@
 use crate::ai::skills::{SkillRegistry, SkillSummary};
+use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
@@ -34,7 +35,15 @@ impl ToolCall for SearchSkillsTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for SearchSkillsTool {
+    const NAME: &'static str = "search_skills";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.skill_registry_clone("search_skills")?))
     }
 }
 
@@ -55,7 +64,7 @@ impl SearchSkillsTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("search_skills"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Search for skills by keyword in their name or description. \
                  Returns skills sorted by relevance: exact name match first, \

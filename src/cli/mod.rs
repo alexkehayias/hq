@@ -74,7 +74,7 @@ enum Command {
     Rebuild {},
     /// Query the search index
     Query {
-        #[arg(long)]
+        /// Search term (AQL syntax)
         term: String,
         #[arg(long, default_value = "false")]
         vector: bool,
@@ -100,6 +100,9 @@ enum Command {
         /// Coalesce lines arriving within this window (ms) into a single event
         #[arg(long, default_value_t = 250)]
         debounce_ms: u64,
+        /// Tool names to give the agent (repeat for multiple; defaults to bash+notify)
+        #[arg(long, num_args = 1..)]
+        tools: Vec<String>,
     },
     /// Set up a development worktree with herdr and Claude Code
     Develop {
@@ -117,17 +120,19 @@ enum Command {
     },
     /// Perform oauth and store credentials
     Auth {
-        #[arg(long, value_enum)]
+        /// Service to authenticate
+        #[arg(value_enum)]
         service: ServiceKind,
     },
     /// Run a job
     Job {
-        #[arg(long, value_enum)]
+        /// Job to run
+        #[arg(value_enum)]
         id: JobId,
     },
     /// Run an eval
     Eval {
-        #[arg(long)]
+        /// Path to the eval file
         file: String,
         /// Override the model from config
         #[arg(long)]
@@ -164,7 +169,7 @@ enum Command {
 enum TasksCommand {
     /// Create a new task
     Create {
-        #[arg(long)]
+        /// Task title
         title: String,
         #[arg(long)]
         body: Option<String>,
@@ -210,6 +215,13 @@ enum TasksCommand {
         #[arg(long)]
         project: String,
     },
+    /// Show full details of a task, including its body (markdown by default)
+    Show {
+        id: String,
+        /// Output the raw, unparsed org-mode headline as stored in the file
+        #[arg(long, default_value = "false")]
+        raw: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -219,6 +231,12 @@ enum SessionCommand {
     Delete {
         id: String,
     },
+    /// Generate (or regenerate) a title and summary for a chat session
+    Summarize {
+        id: String,
+    },
+    /// List chat sessions with their IDs and titles
+    List {},
 }
 
 #[derive(Parser)]
@@ -285,7 +303,21 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             query::run(term, vector, &index_path, &vec_db_path).await?;
         }
         Some(Command::Chat {}) => {
-            chat::run(&vec_db_path).await?;
+            let api_hostname =
+                env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let api_key =
+                env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let model =
+                env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            let note_search_api_url = env::var("HQ_NOTE_SEARCH_API_URL").ok();
+            chat::run(
+                &vec_db_path,
+                note_search_api_url.as_deref(),
+                &api_hostname,
+                &api_key,
+                &model,
+            )
+            .await?;
         }
         Some(Command::Channel { id, debounce_ms }) => {
             channel::run(&storage_path, &id, Duration::from_millis(debounce_ms)).await?;
@@ -294,6 +326,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             channel,
             prompt,
             debounce_ms,
+            tools,
         }) => {
             let api_hostname =
                 env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
@@ -302,15 +335,19 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
             let vapid_key_path = env::var("HQ_VAPID_KEY_PATH").unwrap_or_else(|_| String::new());
+            let api_base_url = env::var("HQ_NOTE_SEARCH_API_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:2222".to_string());
             let db = crate::core::db::async_db(&vec_db_path).await?;
             loop_cmd::run(
                 db,
-                &storage_path,
+                &api_base_url,
                 &api_hostname,
                 &api_key,
                 &model,
+                &storage_path,
                 &vapid_key_path,
                 &channel,
+                &tools,
                 Duration::from_millis(debounce_ms),
                 prompt.as_deref(),
             )
@@ -402,11 +439,29 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             TasksCommand::Refile { id, project } => {
                 tasks::run_refile(&task_db, &notes_path, &index_path, &id, &project).await?;
             }
+            TasksCommand::Show { id, raw } => {
+                let result = tasks::run_show(&task_db, &notes_path, &id, raw).await?;
+                print!("{result}");
+            }
         }
         }
         Some(Command::Session { command }) => match command {
             SessionCommand::Delete { id } => {
                 session::run_delete(&vec_db_path, &index_path, &storage_path, &id).await?;
+            }
+            SessionCommand::Summarize { id } => {
+                let api_hostname = env::var("HQ_LOCAL_LLM_HOST")
+                    .unwrap_or_else(|_| "https://api.openai.com".to_string());
+                let api_key = env::var("OPENAI_API_KEY")
+                    .unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+                let model = env::var("HQ_LOCAL_LLM_MODEL")
+                    .unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+                let db = crate::core::db::async_db(&vec_db_path).await?;
+                session::run_summarize(db, &api_hostname, &api_key, &model, &id).await?;
+            }
+            SessionCommand::List {} => {
+                let db = crate::core::db::async_db(&vec_db_path).await?;
+                session::run_list(db).await?;
             }
         },
         None => {}

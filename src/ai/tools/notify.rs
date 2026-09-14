@@ -4,6 +4,7 @@ use crate::notify::{
 };
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
+use super::registry::{Tool, ToolConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio_rusqlite::Connection;
@@ -95,14 +96,22 @@ impl ToolCall for NotifyTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for NotifyTool {
+    const NAME: &'static str = "notify";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.db.clone(), &conf.vapid_key_path))
     }
 }
 
 impl NotifyTool {
     pub fn new(db: Connection, vapid_key_path: &str) -> Self {
         let function = Function {
-            name: String::from("notify"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Send a push notification to the user's devices. Use this to deliver important information that the user should see outside of the chat, such as completed tasks, alerts, summaries, or time-sensitive updates. The notification will appear on all devices where the web app is open and notifications are enabled.",
             ),

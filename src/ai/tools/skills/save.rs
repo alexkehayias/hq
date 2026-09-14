@@ -1,5 +1,6 @@
 use crate::ai::skills::validation::validate_skill_name;
 use crate::ai::skills::{Skill, SkillRegistry};
+use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::ai::tools::skills::copy_dir;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType};
 use anyhow::{Error, Result, anyhow};
@@ -157,7 +158,17 @@ impl ToolCall for SaveSkillTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for SaveSkillTool {
+    const NAME: &'static str = "save_skill";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        let handle = conf.skill_registry_handle("save_skill")?;
+        let skills_dir = conf.skills_dir("save_skill")?;
+        Ok(Self::new(&skills_dir, &conf.storage_path, &conf.session_id, handle))
     }
 }
 
@@ -185,7 +196,7 @@ impl SaveSkillTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("save_skill"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Save a skill from your workspace back to the global skills directory. \
                  The SKILL.md file is validated before saving. After saving, the skill \

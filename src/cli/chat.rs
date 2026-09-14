@@ -1,51 +1,55 @@
 use anyhow::Result;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use std::env;
 
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{
-    CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, MemoryTool, NoteSearchTool,
-    WebSearchTool,
+    CalendarTool, DateTimeTool, EmailUnreadTool, IterateTool, MeetingSearchTool, MemoryTool,
+    NoteSearchTool, WebSearchTool,
 };
 use crate::core::db::async_db;
 use crate::openai::{BoxedToolCall, Message, Role};
 
-pub async fn run(vec_db_path: &str) -> Result<()> {
+pub async fn run(
+    vec_db_path: &str,
+    note_search_api_url: Option<&str>,
+    api_hostname: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<()> {
     let db = async_db(vec_db_path)
         .await
         .expect("Failed to connect to db");
     let mut rl = DefaultEditor::new().expect("Editor failed");
 
     // Create tools
-    let note_search_api_url = env::var("HQ_NOTE_SEARCH_API_URL");
-    let note_search_tool = if let Ok(url) = &note_search_api_url {
+    let note_search_tool = if let Some(url) = note_search_api_url {
         NoteSearchTool::new(url)
     } else {
         NoteSearchTool::default()
     };
 
-    let meeting_search_tool = if let Ok(url) = &note_search_api_url {
+    let meeting_search_tool = if let Some(url) = note_search_api_url {
         MeetingSearchTool::new(url)
     } else {
         MeetingSearchTool::default()
     };
 
-    let email_unread_tool = if let Ok(url) = &note_search_api_url {
+    let email_unread_tool = if let Some(url) = note_search_api_url {
         EmailUnreadTool::new(url)
     } else {
         EmailUnreadTool::default()
     };
 
-    let web_search_tool = if let Ok(url) = &note_search_api_url {
+    let web_search_tool = if let Some(url) = note_search_api_url {
         WebSearchTool::new(url)
     } else {
         WebSearchTool::default()
     };
 
-    let calendar_tool = if let Ok(url) = &note_search_api_url {
+    let calendar_tool = if let Some(url) = note_search_api_url {
         CalendarTool::new(db.clone(), url)
     } else {
         // This shouldn't happen - we always have a db now
@@ -54,6 +58,7 @@ pub async fn run(vec_db_path: &str) -> Result<()> {
 
     let memory_tool = MemoryTool::default();
     let datetime_tool = DateTimeTool::default();
+    let iterate_tool = IterateTool::new(api_hostname, api_key, model);
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
@@ -63,17 +68,10 @@ pub async fn run(vec_db_path: &str) -> Result<()> {
         Box::new(calendar_tool),
         Box::new(memory_tool),
         Box::new(datetime_tool),
+        Box::new(iterate_tool),
     ];
 
-    // Get OpenAI API configuration from environment variables (similar to AppConfig)
-    let openai_api_hostname =
-        env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
-    let openai_api_key =
-        env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
-    let openai_model =
-        env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
-
-    let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
+    let mut chat = ChatBuilder::new(api_hostname, api_key, model)
         .transcript(vec![Message::new(
             Role::System,
             "You are a helpful assistant.",

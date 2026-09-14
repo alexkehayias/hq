@@ -2,7 +2,7 @@ use crate::api::public::calendar::CalendarResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use tokio_rusqlite::Connection;
 
@@ -70,14 +70,39 @@ impl ToolCall for CalendarTool {
                     .append_pair("calendar_id", &calendar_id);
             }
 
-            let resp = reqwest::Client::new()
+            let resp = match reqwest::Client::new()
                 .get(url.as_str())
                 .header("Content-Type", "application/json")
                 .send()
-                .await?
-                .error_for_status()?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(format!("Error fetching calendar events: {e}"))
+                }
+            };
 
-            let calendar_resp: Vec<CalendarResponse> = resp.json().await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                let detail = if body.trim().is_empty() {
+                    status.to_string()
+                } else {
+                    format!("{status}: {}", body.trim())
+                };
+                return Ok(format!(
+                    "Error fetching calendar events: the hq server returned an error ({detail})"
+                ));
+            }
+
+            let calendar_resp: Vec<CalendarResponse> = match resp.json().await {
+                Ok(events) => events,
+                Err(e) => {
+                    return Ok(format!(
+                        "Error fetching calendar events: failed to parse response as JSON: {e}"
+                    ))
+                }
+            };
 
             for event in calendar_resp {
                 let attendees_str = if let Some(attendees) = &event.attendees {
@@ -112,14 +137,22 @@ impl ToolCall for CalendarTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for CalendarTool {
+    const NAME: &'static str = "get_calendar_events";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(conf.db.clone(), &conf.api_base_url))
     }
 }
 
 impl CalendarTool {
     pub fn new(db: Connection, api_base_url: &str) -> Self {
         let function = Function {
-            name: String::from("get_calendar_events"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Fetch upcoming calendar events for all authorized accounts.",
             ),

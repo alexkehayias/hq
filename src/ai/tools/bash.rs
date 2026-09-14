@@ -1,5 +1,6 @@
 use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
+use super::registry::{Tool, ToolConfig};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
@@ -58,7 +59,15 @@ impl ToolCall for BashTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for BashTool {
+    const NAME: &'static str = "bash";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.storage_path, &conf.session_id))
     }
 }
 
@@ -85,7 +94,7 @@ impl BashTool {
             additional_properties: false,
         };
         let function = Function {
-            name: String::from("bash"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Run a shell command and get the output. Commands run in a clean environment \
                  without access to environment variables. Use absolute paths for files.",

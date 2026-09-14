@@ -5,7 +5,7 @@ use crate::core::http::html_to_markdown;
 use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
-use reqwest;
+use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
@@ -164,7 +164,15 @@ impl ToolCall for WebsiteViewTool {
     }
 
     fn function_name(&self) -> String {
-        self.function.name.clone()
+        Self::NAME.to_string()
+    }
+}
+
+impl Tool for WebsiteViewTool {
+    const NAME: &'static str = "view_website";
+
+    fn from_config(conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new(&conf.storage_path, &conf.session_id))
     }
 }
 
@@ -174,7 +182,7 @@ impl WebsiteViewTool {
             PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
 
         let function = Function {
-            name: String::from("view_website"),
+            name: Self::NAME.to_string(),
             description: String::from(
                 "Fetch and convert a website's content to markdown for viewing.",
             ),

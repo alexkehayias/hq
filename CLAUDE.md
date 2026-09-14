@@ -40,9 +40,9 @@ cargo run -- index --all
 cargo run -- rebuild
 
 # Query notes (default: full-text search)
-cargo run -- query --term "search term"
+cargo run -- query "search term"
 # With vector similarity
-cargo run -- query --term "search term" --vector
+cargo run -- query "search term" --vector
 
 # Chat session in terminal
 cargo run -- chat

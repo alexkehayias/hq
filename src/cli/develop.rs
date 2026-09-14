@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::env;
-use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -83,10 +82,6 @@ pub async fn run(
     // common dev commands (cargo, git, gh, hq, bin scripts) in this worktree.
     write_claude_settings().await?;
 
-    // Step 4: Pick port and write custom zsh config
-    let port = pick_port(base_port);
-    println!("  Picked port {port}");
-
     // Get Tailscale IPv4 address for HQ_HOST, falling back to localhost
     let host = Command::new("tailscale")
         .args(["ip", "-4"])
@@ -101,6 +96,10 @@ pub async fn run(
         })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "localhost".to_string());
+
+    // Step 4: Pick port and write custom zsh config
+    let port = pick_port(&host, base_port);
+    println!("  Picked port {port}");
 
     let zsh_config_dir = ".hq-data";
     fs::create_dir_all(zsh_config_dir).await?;
@@ -362,13 +361,16 @@ async fn write_claude_settings() -> Result<()> {
     Ok(())
 }
 
-fn pick_port(base: u16) -> u16 {
+fn pick_port(host: &str, base: u16) -> u16 {
     for port in base..=u16::MAX {
-        if TcpStream::connect(("127.0.0.1", port)).is_err() {
+        // Probe by binding on the same interface the server will use. A connect() against
+        // 127.0.0.1 misses servers bound only to the tailnet IP, returning an already-taken
+        // port (AddrInUse later). Binding fails with AddrInUse iff the port is taken here.
+        if std::net::TcpListener::bind((host, port)).is_ok() {
             return port;
         }
     }
-    panic!("No available TCP ports found starting from {base}");
+    panic!("No available TCP ports found starting from {base} on {host}");
 }
 
 #[cfg(test)]
@@ -378,14 +380,14 @@ mod tests {
     #[test]
     fn test_pick_port_returns_valid_port() {
         // Use a very high base port that's almost certainly free
-        let port = pick_port(u16::MAX - 10);
+        let port = pick_port("127.0.0.1", u16::MAX - 10);
         assert!(port >= u16::MAX - 10, "port should be >= base");
         assert!(port <= u16::MAX, "port should be <= 65535");
     }
 
     #[test]
     fn test_pick_port_default_base() {
-        let port = pick_port(2222);
+        let port = pick_port("127.0.0.1", 2222);
         assert!(port >= 2222, "port should be >= default base");
     }
 }
