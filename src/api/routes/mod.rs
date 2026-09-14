@@ -18,6 +18,19 @@ use axum::Router;
 
 type SharedState = Arc<RwLock<AppState>>;
 
+/// Spawn a background notes sync + reindex. Shared by the `/notes/index`
+/// endpoint and the GitHub push webhook, both of which return before the sync
+/// completes.
+pub(crate) fn spawn_notes_sync(state: &SharedState) {
+    let (config, db) = {
+        let shared_state = state.read().expect("Unable to read shared state");
+        (shared_state.config.clone(), shared_state.db.clone())
+    };
+    tokio::spawn(async move {
+        crate::jobs::sync_and_reindex_notes(&db, &config).await;
+    });
+}
+
 /// Create the combined API router
 pub fn router() -> Router<SharedState> {
     Router::new()

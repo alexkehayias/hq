@@ -56,26 +56,13 @@ async fn note_search(
     Ok(axum::Json(resp))
 }
 
-// Index notes endpoint
-//
-// Commits local changes, pulls origin, and pushes (via `sync_repo`), then
-// reindexes only the files that changed as a result of the rebase. This replaces
-// the old destructive `git reset --hard origin/main` behavior that clobbered
-// local changes.
-//
-// The GitSync periodic job also does this every 5 min, so this endpoint is mainly
-// for manual triggering (e.g., after the user knows a remote change happened and
-// wants to refresh the index immediately).
+// Index notes endpoint. The GitSync periodic job does the same sync every 5
+// min; this endpoint is for manual triggering (e.g. after the user knows a
+// remote change happened and wants to refresh the index immediately).
 async fn index_notes(
     State(state): State<SharedState>,
 ) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
-    let (config, db) = {
-        let shared_state = state.read().expect("Unable to read share state");
-        (shared_state.config.clone(), shared_state.db.clone())
-    };
-    tokio::spawn(async move {
-        crate::jobs::sync_and_reindex_notes(&db, &config).await;
-    });
+    crate::api::routes::spawn_notes_sync(&state);
     Ok(axum::Json(json!({ "success": true })))
 }
 

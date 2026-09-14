@@ -14,10 +14,8 @@ async fn blurt_webhook(Json(notification): Json<BlurtNotification>) -> StatusCod
     StatusCode::OK
 }
 
-/// Handle GitHub push webhooks. When a push lands on the notes repo's main
-/// branch, sync the notes repo and reindex the files that changed — the same
-/// path the manual `/notes/index` endpoint takes. The webhook proxy in front of
-/// this server authenticates GitHub's signature, so we don't verify it here.
+/// Handle GitHub push webhooks for the notes repo. The webhook proxy in front
+/// of this server authenticates GitHub's signature, so we don't verify it here.
 async fn github_push(
     State(state): State<SharedState>,
     Json(event): Json<GithubPushEvent>,
@@ -27,22 +25,8 @@ async fn github_push(
         return StatusCode::OK;
     }
 
-    tracing::info!(
-        "github_push: main updated on {}, reindexing changed notes",
-        event
-            .repository
-            .as_ref()
-            .map(|r| r.full_name.as_str())
-            .unwrap_or("unknown")
-    );
-
-    let (config, db) = {
-        let shared_state = state.read().expect("Unable to read shared state");
-        (shared_state.config.clone(), shared_state.db.clone())
-    };
-    tokio::spawn(async move {
-        crate::jobs::sync_and_reindex_notes(&db, &config).await;
-    });
+    tracing::info!("github_push: main updated, reindexing changed notes");
+    crate::api::routes::spawn_notes_sync(&state);
 
     StatusCode::OK
 }
