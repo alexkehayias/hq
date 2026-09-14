@@ -29,9 +29,9 @@ use crate::ai::chat::{
     find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
 };
 use crate::ai::tools::{
-    BashTool, CalendarTool, DateTimeTool, EmailSearchTool, EmailUnreadTool, MeetingSearchTool,
-    MemoryTool, NoteSearchTool, NotifyTool, TasksDueTodayTool, TasksScheduledTodayTool,
-    WebSearchTool, WebsiteViewTool, run_in_sandbox,
+    BashTool, CalendarTool, DateTimeTool, EmailSearchTool, EmailUnreadTool, IterateTool,
+    MeetingSearchTool, MemoryTool, NoteSearchTool, NotifyTool, TasksDueTodayTool,
+    TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use crate::api::state::AppState;
@@ -225,6 +225,7 @@ async fn chat_handler(
         datetime_tool,
         bash_tool,
         notify_tool,
+        iterate_tool,
         skill_registry,
         openai_api_hostname,
         openai_api_key,
@@ -258,6 +259,7 @@ async fn chat_handler(
             DateTimeTool::new(),
             BashTool::new(storage_path, &session_id),
             NotifyTool::new(db.clone(), vapid_key_path),
+            IterateTool::new(openai_api_hostname, openai_api_key, openai_model),
             shared_state.skill_registry.clone(),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
@@ -283,6 +285,7 @@ async fn chat_handler(
         Box::new(datetime_tool),
         Box::new(bash_tool),
         Box::new(notify_tool),
+        Box::new(iterate_tool),
     ];
 
     let tools = all_tools;

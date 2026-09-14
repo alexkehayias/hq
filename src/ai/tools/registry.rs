@@ -8,10 +8,10 @@ use crate::ai::skills::SkillRegistry;
 use crate::openai::{BoxedToolCall, ToolCall};
 
 use super::{
-    BashTool, CalendarTool, DateTimeTool, EmailSearchTool, EmailUnreadTool, ListSkillsTool,
-    LoadSkillTool, MeetingSearchTool, MemoryTool, NoteSearchTool, NotifyTool, ReadSkillFileTool,
-    SaveSkillTool, SearchSkillsTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool,
-    WebsiteViewTool, WorkOnSkillTool,
+    BashTool, CalendarTool, DateTimeTool, EmailSearchTool, EmailUnreadTool, IterateTool,
+    ListSkillsTool, LoadSkillTool, MeetingSearchTool, MemoryTool, NoteSearchTool, NotifyTool,
+    ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, TasksDueTodayTool, TasksScheduledTodayTool,
+    WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
 };
 
 /// Shared dependencies needed to construct tools by name.
@@ -23,6 +23,9 @@ pub struct ToolConfig {
     pub vapid_key_path: String,
     pub session_id: String,
     pub skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
+    pub api_hostname: String,
+    pub api_key: String,
+    pub model: String,
 }
 
 impl ToolConfig {
@@ -90,6 +93,7 @@ impl ToolRegistry {
         registry.register::<EmailSearchTool>();
         registry.register::<TasksDueTodayTool>();
         registry.register::<TasksScheduledTodayTool>();
+        registry.register::<IterateTool>();
         registry.register::<ListSkillsTool>();
         registry.register::<SearchSkillsTool>();
         registry.register::<LoadSkillTool>();
@@ -156,6 +160,9 @@ mod tests {
             vapid_key_path: String::new(),
             session_id: "test-session".to_string(),
             skill_registry: None,
+            api_hostname: "https://api.openai.com".to_string(),
+            api_key: "test-key".to_string(),
+            model: "gpt-4".to_string(),
         }
     }
 
@@ -166,6 +173,10 @@ mod tests {
         assert_eq!(
             registry.from_str("datetime").unwrap().function_name(),
             "datetime"
+        );
+        assert_eq!(
+            registry.from_str("iterate").unwrap().function_name(),
+            "iterate"
         );
     }
 

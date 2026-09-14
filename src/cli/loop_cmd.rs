@@ -56,11 +56,11 @@ use tokio_rusqlite::Connection;
 /// vars. The [`ToolConfig`] is constructed here from those arguments.
 pub async fn run(
     db: Connection,
-    storage_path: &str,
     api_base_url: &str,
     api_hostname: &str,
     api_key: &str,
     model: &str,
+    storage_path: &str,
     vapid_key_path: &str,
     channels: &[String],
     tools: &[String],
@@ -116,6 +116,9 @@ pub async fn run(
         vapid_key_path: vapid_key_path.to_string(),
         session_id: session_id.clone(),
         skill_registry: None,
+        api_hostname: api_hostname.to_string(),
+        api_key: api_key.to_string(),
+        model: model.to_string(),
     };
     let registry = ToolRegistry::builtin(context);
     let tool_names: Vec<String> = if tools.is_empty() {
