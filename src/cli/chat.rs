@@ -58,6 +58,7 @@ pub async fn run(
 
     let memory_tool = MemoryTool::default();
     let datetime_tool = DateTimeTool::default();
+    let iterate_tool = IterateTool::new(api_hostname, api_key, model);
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
@@ -67,7 +68,7 @@ pub async fn run(
         Box::new(calendar_tool),
         Box::new(memory_tool),
         Box::new(datetime_tool),
-        Box::new(IterateTool::new(api_hostname, api_key, model)),
+        Box::new(iterate_tool),
     ];
 
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)

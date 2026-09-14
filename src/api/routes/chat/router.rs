@@ -225,6 +225,7 @@ async fn chat_handler(
         datetime_tool,
         bash_tool,
         notify_tool,
+        iterate_tool,
         skill_registry,
         openai_api_hostname,
         openai_api_key,
@@ -258,6 +259,7 @@ async fn chat_handler(
             DateTimeTool::new(),
             BashTool::new(storage_path, &session_id),
             NotifyTool::new(db.clone(), vapid_key_path),
+            IterateTool::new(openai_api_hostname, openai_api_key, openai_model),
             shared_state.skill_registry.clone(),
             openai_api_hostname.clone(),
             openai_api_key.clone(),
@@ -283,11 +285,7 @@ async fn chat_handler(
         Box::new(datetime_tool),
         Box::new(bash_tool),
         Box::new(notify_tool),
-        Box::new(IterateTool::new(
-            &openai_api_hostname,
-            &openai_api_key,
-            &openai_model,
-        )),
+        Box::new(iterate_tool),
     ];
 
     let tools = all_tools;
