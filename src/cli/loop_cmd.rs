@@ -56,11 +56,11 @@ use tokio_rusqlite::Connection;
 /// vars. The [`ToolConfig`] is constructed here from those arguments.
 pub async fn run(
     db: Connection,
-    storage_path: &str,
     api_base_url: &str,
     api_hostname: &str,
     api_key: &str,
     model: &str,
+    storage_path: &str,
     vapid_key_path: &str,
     channels: &[String],
     tools: &[String],

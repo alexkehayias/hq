@@ -338,11 +338,11 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let db = crate::core::db::async_db(&vec_db_path).await?;
             loop_cmd::run(
                 db,
-                &storage_path,
                 &api_base_url,
                 &api_hostname,
                 &api_key,
                 &model,
+                &storage_path,
                 &vapid_key_path,
                 &channel,
                 &tools,
