@@ -41,4 +41,6 @@ pub fn router() -> Router<SharedState> {
         .nest("/skills", skills::router())
         // Webhook routes
         .nest("/webhook", webhook::router())
+        // GitHub webhook routes
+        .nest("/webhooks", webhook::github_router())
 }
