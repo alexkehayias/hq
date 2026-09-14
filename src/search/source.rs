@@ -1,7 +1,7 @@
 /// Utilities for getting source documents for indexing
 use std::path::PathBuf;
 
-/// Recursively walk `roots` (absolute paths) for `.org` files.
+/// Recursively walk `roots` (absolute paths) for `.org` and `.org_archive` files.
 async fn walk_org_files(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut result = Vec::new();
     let mut pending = roots;
@@ -32,8 +32,8 @@ async fn walk_org_files(roots: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 /// Recursively walk the `notes/` and `projects/` subdirectories of `path`
-/// (the notes repo root) for `.org` files. The repo root itself is excluded,
-/// but both source subdirectories are indexed.
+/// (the notes repo root) for `.org` and `.org_archive` files. The repo root
+/// itself is excluded, but both source subdirectories are indexed.
 pub async fn notes(path: &str) -> Vec<PathBuf> {
     walk_org_files(vec![
         PathBuf::from(format!("{path}/notes")),

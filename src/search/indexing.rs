@@ -289,14 +289,14 @@ fn parse_note(file_name: &str, source_id: Option<&str>, content: &str) -> Result
 /// document-level `:ID:` of the source file the entries were archived from
 /// (e.g. `work.org_archive` -> `work.org`). Returns `None` when the file isn't
 /// an archive or the source's ID can't be determined.
-fn archive_source_id(notes_dir_path: &str, file_name: &str) -> Option<String> {
+async fn archive_source_id(notes_dir_path: &str, file_name: &str) -> Option<String> {
     let source_name = format!("{}.org", file_name.strip_suffix(ORG_ARCHIVE_SUFFIX)?);
     let source_path = if file_name.starts_with('/') {
         source_name
     } else {
         format!("{notes_dir_path}/{source_name}")
     };
-    let content = std::fs::read_to_string(&source_path).ok()?;
+    let content = fs::read_to_string(&source_path).await.ok()?;
     let config = crate::org::todo_keywords_config();
     document_id(&config.parse(&content).document())
 }
@@ -649,8 +649,9 @@ pub async fn index_all(
                 .unwrap_or_default()
                 .to_owned(),
         );
-        let source_id = if is_archive_file(file_name.as_str()) {
-            archive_source_id(notes_dir_path, file_name.as_str())
+        let is_archive = is_archive_file(file_name.as_str());
+        let source_id = if is_archive {
+            archive_source_id(notes_dir_path, file_name.as_str()).await
         } else {
             None
         };
@@ -678,8 +679,10 @@ pub async fn index_all(
         .expect("DB work failed");
 
         // If vector indexing is enabled, generate embeddings asynchronously
-        // and then store them in the database
-        if index_vector {
+        // and then store them in the database. Archives share the source
+        // note's ID but have no note-level row, so skip them: storing their
+        // body embedding under that ID would clobber the source's embedding.
+        if index_vector && !is_archive {
             // Spawn a blocking task for the CPU-intensive embedding generation
             let embeddings = tokio::task::spawn_blocking(move || {
                 generate_embeddings(&mut embeddings_model.lock().unwrap(), &splitter, &note_body)
@@ -745,7 +748,7 @@ pub async fn index_single_file(
         .await
         .with_context(|| format!("Failed to read file: {:?}", file_path))?;
     let source_id = if is_archive_file(&file_name) {
-        archive_source_id(notes_path, &file_name)
+        archive_source_id(notes_path, &file_name).await
     } else {
         None
     };
@@ -1142,8 +1145,8 @@ mod tests {
     /// `:ID:` (so archived content groups with its source note) and tags every
     /// indexed entry with `archive`. The archive itself carries no document-level
     /// `:ID:`, matching Org mode's archive files.
-    #[test]
-    fn test_parse_archive_resolves_source_id_and_tags() {
+    #[tokio::test]
+    async fn test_parse_archive_resolves_source_id_and_tags() {
         let dir = TempDir::new().unwrap();
         let notes_root = dir.path();
 
@@ -1164,7 +1167,7 @@ mod tests {
 
         let file_name = "projects/work.org_archive";
         let archive = fs::read_to_string(projects_dir.join("work.org_archive")).unwrap();
-        let source_id = archive_source_id(notes_root.to_str().unwrap(), file_name);
+        let source_id = archive_source_id(notes_root.to_str().unwrap(), file_name).await;
         let note = parse_note(file_name, source_id.as_deref(), &archive).unwrap();
 
         // Same document-level ID as the source note.
