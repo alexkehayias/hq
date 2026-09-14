@@ -301,7 +301,21 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             query::run(term, vector, &index_path, &vec_db_path).await?;
         }
         Some(Command::Chat {}) => {
-            chat::run(&vec_db_path).await?;
+            let api_hostname =
+                env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let api_key =
+                env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let model =
+                env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            let note_search_api_url = env::var("HQ_NOTE_SEARCH_API_URL").ok();
+            chat::run(
+                &vec_db_path,
+                note_search_api_url.as_deref(),
+                &api_hostname,
+                &api_key,
+                &model,
+            )
+            .await?;
         }
         Some(Command::Channel { id, debounce_ms }) => {
             channel::run(&storage_path, &id, Duration::from_millis(debounce_ms)).await?;
