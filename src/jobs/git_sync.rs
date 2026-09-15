@@ -29,43 +29,57 @@ impl PeriodicJob for GitSync {
     }
 
     async fn run_job(&self, config: &AppConfig, db_conn: &Connection) {
-        // Only sync if notes_path is its own git repo. When running from a dir
-        // whose parent is a git repo (e.g. dev in the repo root with no notes
-        // clone), git commands would otherwise walk up and operate on that
-        // parent repo — the hq repo itself — committing and pushing it.
-        if !git::is_git_repo(&config.notes_path) {
-            tracing::info!(
-                "GitSync: notes path is not a git repo ({}), skipping sync",
-                config.notes_path
-            );
-            return;
-        }
+        sync_and_reindex_notes(db_conn, config).await;
+    }
+}
 
-        // Commit local changes, pull origin, and push; get back files changed
-        // by the rebase. sync_repo stages and commits before rebasing, so it
-        // (unlike maybe_pull_rebase) tolerates an otherwise-dirty working tree.
-        match git::sync_repo(&config.deploy_key_path, &config.notes_path).await {
-            Ok(changed) if !changed.is_empty() => {
-                // 2. Reindex only files that changed as a result of the rebase
-                let paths: Vec<PathBuf> = changed
-                    .iter()
-                    .map(|f| PathBuf::from(format!("{}/{}", &config.notes_path, f)))
-                    .collect();
-                if let Err(e) = index_all(
-                    db_conn,
-                    &config.index_path,
-                    &config.notes_path,
-                    true, // full text
-                    true, // vector
-                    Some(paths),
-                )
-                .await
-                {
-                    tracing::error!("GitSync: reindexing changed files failed: {e}");
-                }
+/// Serializes sync+reindex across the periodic `GitSync` job, the `/notes/index`
+/// endpoint, and the GitHub webhook. Concurrent runs race on the notes working
+/// tree (git rebase/push) and on Tantivy's index writer, which panics when the
+/// directory lock is already held.
+static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Commit local note changes, pull origin, and push (via `sync_repo`), then
+/// reindex only the files that changed as a result of the rebase. Shared by the
+/// periodic `GitSync` job, the manual `/notes/index` endpoint, and the GitHub
+/// push webhook.
+pub async fn sync_and_reindex_notes(db: &Connection, config: &AppConfig) {
+    let _guard = SYNC_LOCK.lock().await;
+
+    // Only sync if notes_path is its own git repo. When running from a dir
+    // whose parent is a git repo (e.g. dev in the repo root with no notes
+    // clone), git commands would otherwise walk up and operate on that
+    // parent repo — the hq repo itself — committing and pushing it.
+    if !git::is_git_repo(&config.notes_path) {
+        tracing::info!(
+            "sync_and_reindex_notes: notes path is not a git repo ({}), skipping sync",
+            config.notes_path
+        );
+        return;
+    }
+
+    // sync_repo stages and commits before rebasing, so it (unlike
+    // maybe_pull_rebase) tolerates an otherwise-dirty working tree.
+    match git::sync_repo(&config.deploy_key_path, &config.notes_path).await {
+        Ok(changed) if !changed.is_empty() => {
+            let paths: Vec<PathBuf> = changed
+                .iter()
+                .map(|f| PathBuf::from(&config.notes_path).join(f))
+                .collect();
+            if let Err(e) = index_all(
+                db,
+                &config.index_path,
+                &config.notes_path,
+                true, // full text
+                true, // vector
+                Some(paths),
+            )
+            .await
+            {
+                tracing::error!("sync_and_reindex_notes: reindexing changed files failed: {e}");
             }
-            Ok(_) => {} // no changes to reindex
-            Err(e) => tracing::error!("GitSync: sync_repo failed: {e}"),
         }
+        Ok(_) => {}
+        Err(e) => tracing::error!("sync_and_reindex_notes: sync_repo failed: {e}"),
     }
 }

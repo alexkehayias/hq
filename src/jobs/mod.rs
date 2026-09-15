@@ -12,7 +12,7 @@ pub use research_meeting_attendees::ResearchMeetingAttendees;
 pub mod generate_session_titles;
 pub use generate_session_titles::GenerateSessionTitles;
 pub mod git_sync;
-pub use git_sync::GitSync;
+pub use git_sync::{GitSync, sync_and_reindex_notes};
 
 #[async_trait]
 pub trait PeriodicJob: Send + Sync + 'static {
