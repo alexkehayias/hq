@@ -11,3 +11,11 @@ pub struct BlurtNotification {
     pub date: i64,
     pub bundle_id: Option<String>,
 }
+
+/// Forwarded iOS notification
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Notification {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub message: String,
+}
