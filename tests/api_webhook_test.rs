@@ -22,7 +22,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -53,7 +53,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -82,7 +82,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -111,7 +111,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -140,7 +140,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -169,7 +169,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -198,7 +198,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -229,7 +229,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from("{invalid json}"))
@@ -251,7 +251,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/blurt")
+                    .uri("/api/webhook/blurt")
                     .method("GET")
                     .body(Body::empty())
                     .unwrap(),
@@ -272,7 +272,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/github")
+                    .uri("/api/webhook/github")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -299,7 +299,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/github")
+                    .uri("/api/webhook/github")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -326,7 +326,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/github")
+                    .uri("/api/webhook/github")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -350,7 +350,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhooks/github")
+                    .uri("/api/webhook/github")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from("{invalid json}"))
