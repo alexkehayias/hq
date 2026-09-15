@@ -31,12 +31,9 @@ async fn github_push(
     StatusCode::OK
 }
 
-/// Create the webhook router (Blurt desktop notifications)
+/// Create the webhook router
 pub fn router() -> Router<SharedState> {
-    Router::new().route("/blurt", axum::routing::post(blurt_webhook))
-}
-
-/// Create the GitHub webhook router
-pub fn github_router() -> Router<SharedState> {
-    Router::new().route("/github", axum::routing::post(github_push))
+    Router::new()
+        .route("/blurt", axum::routing::post(blurt_webhook))
+        .route("/github", axum::routing::post(github_push))
 }

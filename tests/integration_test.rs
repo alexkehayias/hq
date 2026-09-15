@@ -382,7 +382,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/webhook/blurt")
+                    .uri("/api/webhooks/blurt")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
