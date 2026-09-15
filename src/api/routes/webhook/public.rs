@@ -20,3 +20,11 @@ pub struct GithubPushEvent {
     #[serde(rename = "ref")]
     pub git_ref: String,
 }
+
+/// Forwarded iOS notification
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Notification {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub message: String,
+}

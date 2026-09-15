@@ -242,6 +242,154 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// Tests iOS notification webhook accepts valid notification
+    #[tokio::test]
+    #[serial]
+    async fn it_accepts_valid_ios_notification() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/notification")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Test Notification",
+                            "subtitle": "Subtitle",
+                            "message": "This is a test notification message",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests iOS notification webhook accepts notification without subtitle
+    #[tokio::test]
+    #[serial]
+    async fn it_accepts_ios_notification_without_subtitle() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/notification")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Test Notification",
+                            "message": "This is a test notification message",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests iOS notification webhook returns 422 for missing title
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_422_for_missing_ios_title() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/notification")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "message": "This is a test notification message",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Tests iOS notification webhook returns 422 for missing message
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_422_for_missing_ios_message() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/notification")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Test Notification",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Tests iOS notification webhook returns 400 for invalid JSON
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_400_for_invalid_ios_json() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/notification")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{invalid json}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Tests iOS notification webhook returns 405 for GET request
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_405_for_ios_get_request() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/notification")
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
     /// Tests blunt webhook returns 405 for GET request
     #[tokio::test]
     #[serial]
