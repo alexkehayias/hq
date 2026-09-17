@@ -10,4 +10,5 @@ pub mod jobs;
 pub mod notify;
 pub mod openai;
 pub mod org;
+pub mod reindex;
 pub mod search;

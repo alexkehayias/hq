@@ -27,7 +27,7 @@ pub(crate) fn spawn_notes_sync(state: &SharedState) {
         (shared_state.config.clone(), shared_state.db.clone())
     };
     tokio::spawn(async move {
-        crate::jobs::sync_and_reindex_notes(&db, &config).await;
+        crate::reindex::sync_and_reindex_notes(&db, &config).await;
     });
 }
 

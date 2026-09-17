@@ -1,8 +1,8 @@
 use crate::core::git::{changed_files_between, head_sha, maybe_pull_rebase};
-use crate::search::{index_all, index_all_chat_sessions};
+use crate::reindex::reindex_changed_notes;
+use crate::search::index_all_chat_sessions;
 use anyhow::{Result, anyhow};
 use std::env;
-use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub async fn run(
@@ -42,32 +42,27 @@ pub async fn run(
 
     // Compute files that changed as a result of the pull/rebase (origin's new
     // contributions + our own rebased commits). Only these get reindexed — no full
-    // reindex. If nothing changed, paths is empty and index_all does nothing.
+    // reindex. If nothing changed, the changed list is empty and nothing is indexed.
     let changed = changed_files_between(notes_path, &pre_head, "HEAD")
         .await
         .unwrap_or_default();
-    let paths: Vec<PathBuf> = changed
-        .iter()
-        .map(|f| PathBuf::from(format!("{}/{f}", notes_path)))
-        .collect();
-    let filter_paths = Some(paths);
 
     let db = crate::core::db::async_db(vec_db_path)
         .await
         .expect("Failed to connect to async db");
 
     if full_text {
-        index_all(&db, index_path, notes_path, true, false, filter_paths.clone())
+        reindex_changed_notes(&db, index_path, notes_path, &changed, true, false)
             .await
             .expect("Indexing failed");
     }
     if vector {
-        index_all(&db, index_path, notes_path, false, true, filter_paths.clone())
+        reindex_changed_notes(&db, index_path, notes_path, &changed, false, true)
             .await
             .expect("Indexing failed");
     }
     if all {
-        index_all(&db, index_path, notes_path, true, true, filter_paths.clone())
+        reindex_changed_notes(&db, index_path, notes_path, &changed, true, true)
             .await
             .expect("Indexing failed");
     }
