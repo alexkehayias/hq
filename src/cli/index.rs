@@ -1,6 +1,5 @@
 use crate::core::git::{changed_files_between, head_sha, maybe_pull_rebase};
-use crate::reindex::reindex_changed_notes;
-use crate::search::index_all_chat_sessions;
+use crate::search::{index_all_chat_sessions, reindex_changed_notes};
 use anyhow::{Result, anyhow};
 use std::env;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

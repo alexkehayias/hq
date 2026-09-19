@@ -27,6 +27,6 @@ impl PeriodicJob for GitSync {
     }
 
     async fn run_job(&self, config: &AppConfig, db_conn: &Connection) {
-        crate::reindex::sync_and_reindex_notes(db_conn, config).await;
+        crate::search::sync_and_reindex_notes(db_conn, config).await;
     }
 }

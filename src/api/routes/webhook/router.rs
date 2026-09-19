@@ -32,7 +32,7 @@ async fn github_push(
         (shared_state.config.clone(), shared_state.db.clone())
     };
     tokio::spawn(async move {
-        crate::reindex::sync_and_reindex_notes(&db, &config).await;
+        crate::search::sync_and_reindex_notes(&db, &config).await;
     });
 
     StatusCode::OK
