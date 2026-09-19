@@ -7,11 +7,9 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, patch, post},
+    routing::{get, patch},
 };
 use axum_extra::extract::Query;
-use serde_json::{Value, json};
-
 use super::public;
 use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
@@ -19,7 +17,6 @@ use crate::core::orgmode as core_org;
 use crate::search::aql;
 use crate::search::index_all;
 use crate::search::search_notes;
-use crate::search::sync_and_reindex_notes;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -55,22 +52,6 @@ async fn note_search(
     };
 
     Ok(axum::Json(resp))
-}
-
-// Index notes endpoint. The GitSync periodic job does the same sync every 5
-// min; this endpoint is for manual triggering (e.g. after the user knows a
-// remote change happened and wants to refresh the index immediately).
-async fn index_notes(
-    State(state): State<SharedState>,
-) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
-    let (config, db) = {
-        let shared_state = state.read().expect("Unable to read shared state");
-        (shared_state.config.clone(), shared_state.db.clone())
-    };
-    tokio::spawn(async move {
-        sync_and_reindex_notes(&db, &config).await;
-    });
-    Ok(axum::Json(json!({ "success": true })))
 }
 
 // View note endpoint
@@ -132,7 +113,6 @@ async fn update_note(
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/search", get(note_search))
-        .route("/index", post(index_notes))
         .route("/{id}/view", get(view_note))
         .route("/{id}", patch(update_note))
 }

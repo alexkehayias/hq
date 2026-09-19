@@ -149,32 +149,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// Tests indexing notes via POST
-    #[tokio::test]
-    #[serial]
-    async fn it_indexes_notes() {
-        let app = test_app().await;
-
-        // Note: This will fail because there's no git deploy key, but it should
-        // still return 200 OK since indexing is spawned as a background task
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/notes/index")
-                    .method("POST")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // Should return OK since indexing is async
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = body_to_string(response.into_body()).await;
-        assert!(body.contains("\"success\":true"));
-    }
-
     /// Tests viewing a note by ID that exists
     #[tokio::test]
     #[serial]
