@@ -4,6 +4,7 @@ use tokio_rusqlite::Connection;
 
 use super::PeriodicJob;
 use crate::core::AppConfig;
+use crate::search::sync_and_reindex_notes;
 
 /// Periodic job that syncs the notes repo to git.
 ///
@@ -27,6 +28,6 @@ impl PeriodicJob for GitSync {
     }
 
     async fn run_job(&self, config: &AppConfig, db_conn: &Connection) {
-        crate::search::sync_and_reindex_notes(db_conn, config).await;
+        sync_and_reindex_notes(db_conn, config).await;
     }
 }

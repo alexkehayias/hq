@@ -19,6 +19,7 @@ use crate::core::orgmode as core_org;
 use crate::search::aql;
 use crate::search::index_all;
 use crate::search::search_notes;
+use crate::search::sync_and_reindex_notes;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -67,7 +68,7 @@ async fn index_notes(
         (shared_state.config.clone(), shared_state.db.clone())
     };
     tokio::spawn(async move {
-        crate::search::sync_and_reindex_notes(&db, &config).await;
+        sync_and_reindex_notes(&db, &config).await;
     });
     Ok(axum::Json(json!({ "success": true })))
 }

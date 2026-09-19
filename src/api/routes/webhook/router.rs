@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use super::public::{BlurtNotification, GithubPushEvent, Notification};
 use crate::api::state::AppState;
+use crate::search::sync_and_reindex_notes;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -32,7 +33,7 @@ async fn github_push(
         (shared_state.config.clone(), shared_state.db.clone())
     };
     tokio::spawn(async move {
-        crate::search::sync_and_reindex_notes(&db, &config).await;
+        sync_and_reindex_notes(&db, &config).await;
     });
 
     StatusCode::OK
