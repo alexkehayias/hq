@@ -1030,8 +1030,8 @@ pub async fn delete_chat_session_index(
     Ok(())
 }
 
-/// Serializes sync+reindex across the periodic `GitSync` job, the `/notes/index`
-/// endpoint, and the GitHub webhook. Concurrent runs race on the notes working
+/// Serializes sync+reindex across the periodic `GitSync` job and the GitHub
+/// webhook. Concurrent runs race on the notes working
 /// tree (git rebase/push) and on Tantivy's index writer, which panics when the
 /// directory lock is already held.
 static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
