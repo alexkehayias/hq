@@ -7,11 +7,9 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, patch, post},
+    routing::{get, patch},
 };
 use axum_extra::extract::Query;
-use serde_json::{Value, json};
-
 use super::public;
 use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
@@ -54,61 +52,6 @@ async fn note_search(
     };
 
     Ok(axum::Json(resp))
-}
-
-// Index notes endpoint
-//
-// Commits local changes, pulls origin, and pushes (via `sync_repo`), then
-// reindexes only the files that changed as a result of the rebase. `sync_repo`
-// stages and commits before rebasing, so it tolerates an otherwise-dirty working
-// tree (a bare `maybe_pull_rebase` would fail with "cannot rebase: You have
-// unstaged changes" when origin touches a locally-edited file). This replaces the
-// old destructive `git reset --hard origin/main` behavior that clobbered local
-// changes.
-//
-// The GitSync periodic job also does this every 5 min, so this endpoint is mainly
-// for manual triggering (e.g., after the user knows a remote change happened and
-// wants to refresh the index immediately).
-async fn index_notes(
-    State(state): State<SharedState>,
-) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
-    let (a_db, index_path, notes_path, deploy_key_path) = {
-        let shared_state = state.read().expect("Unable to read share state");
-        (
-            shared_state.db.clone(),
-            shared_state.config.index_path.clone(),
-            shared_state.config.notes_path.clone(),
-            shared_state.config.deploy_key_path.clone(),
-        )
-    };
-    tokio::spawn(async move {
-        // Commit local changes, pull origin, and push; get back files changed
-        // by the rebase. sync_repo's returned list spans origin's contributions
-        // + our own commit, so everything the rebase touched gets reindexed.
-        match crate::core::git::sync_repo(&deploy_key_path, &notes_path).await {
-            Ok(changed) if !changed.is_empty() => {
-                let paths: Vec<std::path::PathBuf> = changed
-                    .iter()
-                    .map(|f| std::path::PathBuf::from(format!("{}/{}", &notes_path, f)))
-                    .collect();
-                if let Err(e) = index_all(
-                    &a_db,
-                    &index_path,
-                    &notes_path,
-                    true,
-                    true,
-                    Some(paths),
-                )
-                .await
-                {
-                    tracing::error!("index_notes: reindex failed: {e}");
-                }
-            }
-            Ok(_) => tracing::debug!("index_notes: no files changed after rebase"),
-            Err(e) => tracing::error!("index_notes: sync_repo failed: {e}"),
-        }
-    });
-    Ok(axum::Json(json!({ "success": true })))
 }
 
 // View note endpoint
@@ -170,7 +113,6 @@ async fn update_note(
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/search", get(note_search))
-        .route("/index", post(index_notes))
         .route("/{id}/view", get(view_note))
         .route("/{id}", patch(update_note))
 }
