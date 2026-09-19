@@ -410,4 +410,103 @@ mod tests {
         // Method not allowed for GET on POST endpoint
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
+
+    /// Tests GitHub push webhook accepts a push to main
+    #[tokio::test]
+    #[serial]
+    async fn it_accepts_github_push_to_main() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/github")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "ref": "refs/heads/main",
+                            "repository": { "full_name": "alex/notes" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests GitHub push webhook accepts (and ignores) a non-main branch push
+    #[tokio::test]
+    #[serial]
+    async fn it_accepts_github_push_to_non_main_branch() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/github")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "ref": "refs/heads/feature",
+                            "repository": { "full_name": "alex/notes" },
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests GitHub push webhook returns 422 when the ref field is missing
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_422_for_github_push_missing_ref() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/github")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "repository": { "full_name": "alex/notes" } })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Tests GitHub push webhook returns 400 for invalid JSON
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_400_for_invalid_github_push_json() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/github")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{invalid json}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

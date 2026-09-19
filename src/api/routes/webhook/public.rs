@@ -12,6 +12,15 @@ pub struct BlurtNotification {
     pub bundle_id: Option<String>,
 }
 
+/// Minimal subset of GitHub's `push` webhook payload. Serde ignores the
+/// remaining fields, so this stays stable across GitHub's payload changes.
+#[derive(Debug, Deserialize)]
+pub struct GithubPushEvent {
+    /// Full git ref that was pushed, e.g. `refs/heads/main`.
+    #[serde(rename = "ref")]
+    pub git_ref: String,
+}
+
 /// Forwarded iOS notification
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Notification {

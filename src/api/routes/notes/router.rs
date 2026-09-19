@@ -19,6 +19,7 @@ use crate::core::orgmode as core_org;
 use crate::search::aql;
 use crate::search::index_all;
 use crate::search::search_notes;
+use crate::search::sync_and_reindex_notes;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -56,57 +57,18 @@ async fn note_search(
     Ok(axum::Json(resp))
 }
 
-// Index notes endpoint
-//
-// Commits local changes, pulls origin, and pushes (via `sync_repo`), then
-// reindexes only the files that changed as a result of the rebase. `sync_repo`
-// stages and commits before rebasing, so it tolerates an otherwise-dirty working
-// tree (a bare `maybe_pull_rebase` would fail with "cannot rebase: You have
-// unstaged changes" when origin touches a locally-edited file). This replaces the
-// old destructive `git reset --hard origin/main` behavior that clobbered local
-// changes.
-//
-// The GitSync periodic job also does this every 5 min, so this endpoint is mainly
-// for manual triggering (e.g., after the user knows a remote change happened and
-// wants to refresh the index immediately).
+// Index notes endpoint. The GitSync periodic job does the same sync every 5
+// min; this endpoint is for manual triggering (e.g. after the user knows a
+// remote change happened and wants to refresh the index immediately).
 async fn index_notes(
     State(state): State<SharedState>,
 ) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
-    let (a_db, index_path, notes_path, deploy_key_path) = {
-        let shared_state = state.read().expect("Unable to read share state");
-        (
-            shared_state.db.clone(),
-            shared_state.config.index_path.clone(),
-            shared_state.config.notes_path.clone(),
-            shared_state.config.deploy_key_path.clone(),
-        )
+    let (config, db) = {
+        let shared_state = state.read().expect("Unable to read shared state");
+        (shared_state.config.clone(), shared_state.db.clone())
     };
     tokio::spawn(async move {
-        // Commit local changes, pull origin, and push; get back files changed
-        // by the rebase. sync_repo's returned list spans origin's contributions
-        // + our own commit, so everything the rebase touched gets reindexed.
-        match crate::core::git::sync_repo(&deploy_key_path, &notes_path).await {
-            Ok(changed) if !changed.is_empty() => {
-                let paths: Vec<std::path::PathBuf> = changed
-                    .iter()
-                    .map(|f| std::path::PathBuf::from(format!("{}/{}", &notes_path, f)))
-                    .collect();
-                if let Err(e) = index_all(
-                    &a_db,
-                    &index_path,
-                    &notes_path,
-                    true,
-                    true,
-                    Some(paths),
-                )
-                .await
-                {
-                    tracing::error!("index_notes: reindex failed: {e}");
-                }
-            }
-            Ok(_) => tracing::debug!("index_notes: no files changed after rebase"),
-            Err(e) => tracing::error!("index_notes: sync_repo failed: {e}"),
-        }
+        sync_and_reindex_notes(&db, &config).await;
     });
     Ok(axum::Json(json!({ "success": true })))
 }

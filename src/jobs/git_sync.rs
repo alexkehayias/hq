@@ -1,11 +1,10 @@
 use async_trait::async_trait;
-use std::path::PathBuf;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
 
 use super::PeriodicJob;
-use crate::core::{AppConfig, git};
-use crate::search::index_all;
+use crate::core::AppConfig;
+use crate::search::sync_and_reindex_notes;
 
 /// Periodic job that syncs the notes repo to git.
 ///
@@ -29,43 +28,6 @@ impl PeriodicJob for GitSync {
     }
 
     async fn run_job(&self, config: &AppConfig, db_conn: &Connection) {
-        // Only sync if notes_path is its own git repo. When running from a dir
-        // whose parent is a git repo (e.g. dev in the repo root with no notes
-        // clone), git commands would otherwise walk up and operate on that
-        // parent repo — the hq repo itself — committing and pushing it.
-        if !git::is_git_repo(&config.notes_path) {
-            tracing::info!(
-                "GitSync: notes path is not a git repo ({}), skipping sync",
-                config.notes_path
-            );
-            return;
-        }
-
-        // Commit local changes, pull origin, and push; get back files changed
-        // by the rebase. sync_repo stages and commits before rebasing, so it
-        // (unlike maybe_pull_rebase) tolerates an otherwise-dirty working tree.
-        match git::sync_repo(&config.deploy_key_path, &config.notes_path).await {
-            Ok(changed) if !changed.is_empty() => {
-                // 2. Reindex only files that changed as a result of the rebase
-                let paths: Vec<PathBuf> = changed
-                    .iter()
-                    .map(|f| PathBuf::from(format!("{}/{}", &config.notes_path, f)))
-                    .collect();
-                if let Err(e) = index_all(
-                    db_conn,
-                    &config.index_path,
-                    &config.notes_path,
-                    true, // full text
-                    true, // vector
-                    Some(paths),
-                )
-                .await
-                {
-                    tracing::error!("GitSync: reindexing changed files failed: {e}");
-                }
-            }
-            Ok(_) => {} // no changes to reindex
-            Err(e) => tracing::error!("GitSync: sync_repo failed: {e}"),
-        }
+        sync_and_reindex_notes(db_conn, config).await;
     }
 }
