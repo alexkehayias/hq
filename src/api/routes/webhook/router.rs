@@ -26,7 +26,14 @@ async fn github_push(
     }
 
     tracing::info!("github_push: main updated, reindexing changed notes");
-    crate::api::routes::spawn_notes_sync(&state);
+
+    let (config, db) = {
+        let shared_state = state.read().expect("Unable to read shared state");
+        (shared_state.config.clone(), shared_state.db.clone())
+    };
+    tokio::spawn(async move {
+        crate::reindex::sync_and_reindex_notes(&db, &config).await;
+    });
 
     StatusCode::OK
 }

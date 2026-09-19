@@ -62,7 +62,13 @@ async fn note_search(
 async fn index_notes(
     State(state): State<SharedState>,
 ) -> Result<axum::Json<Value>, crate::api::public::ApiError> {
-    crate::api::routes::spawn_notes_sync(&state);
+    let (config, db) = {
+        let shared_state = state.read().expect("Unable to read shared state");
+        (shared_state.config.clone(), shared_state.db.clone())
+    };
+    tokio::spawn(async move {
+        crate::reindex::sync_and_reindex_notes(&db, &config).await;
+    });
     Ok(axum::Json(json!({ "success": true })))
 }
 
