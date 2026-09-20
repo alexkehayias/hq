@@ -47,6 +47,14 @@ cargo install --locked watchexec-cli
 ./bin/watch.sh
 ```
 
+## Git hooks
+
+A pre-commit hook runs `cargo fmt --all -- --check` and `cargo clippy --all-targets --locked -- -D warnings`, aborting the commit if either fails. Enable it once per clone:
+
+```
+./bin/setup-hooks.sh
+```
+
 ## Docker
 
 Build the image:

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: enforce Rust formatting and lints.
+# Enable with bin/setup-hooks.sh (sets core.hooksPath to .githooks).
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! cargo fmt --all -- --check; then
+    echo "pre-commit: formatting check failed. Run 'cargo fmt --all' to fix." >&2
+    exit 1
+fi
+
+if ! cargo clippy --all-targets --locked -- -D warnings; then
+    echo "pre-commit: clippy found warnings. Fix them before committing." >&2
+    exit 1
+fi
