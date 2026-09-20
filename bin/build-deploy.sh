@@ -4,6 +4,19 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo "WARNING: deploying from branch '$CURRENT_BRANCH', not 'main'." >&2
+    read -r -p "Continue anyway? [y/N] " reply
+    case "$reply" in
+        [yY] | [yY][eE][sS]) ;;
+        *)
+            echo "Aborted." >&2
+            exit 1
+            ;;
+    esac
+fi
+
 TAG="${1:-$(git rev-parse --short HEAD)}"
 HQ_DOKKU_REMOTE="${HQ_DOKKU_REMOTE:?HQ_DOKKU_REMOTE must be set (e.g. dokku@your-server.com)}"
 HQ_DOKKU_APP="${HQ_DOKKU_APP:?HQ_DOKKU_APP must be set}"
