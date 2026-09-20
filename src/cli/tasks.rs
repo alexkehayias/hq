@@ -96,20 +96,14 @@ async fn create_project_file(
     })
     .await?;
 
-    Ok(PathBuf::from(full_path))
+    Ok(full_path)
 }
 
 fn slugify(s: &str) -> Result<String> {
     let slug: String = s
         .to_lowercase()
         .chars()
-        .filter_map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == ' ' {
-                Some(c)
-            } else {
-                None
-            }
-        })
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == ' ')
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<&str>>()
@@ -200,6 +194,7 @@ pub async fn run_create(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_update(
     db: &Connection,
     notes_path: &str,
@@ -212,40 +207,25 @@ pub async fn run_update(
     add_tags: &[String],
     remove_tags: &[String],
 ) -> Result<()> {
+    let update = orgmode::TaskUpdate {
+        title,
+        body,
+        status,
+        add_tags,
+        remove_tags,
+    };
     if let Some(project_ref) = project {
         let path = projects::db::find_project_file(db, notes_path, project_ref)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
         let filename = path
             .strip_prefix(notes_path)
-            .unwrap_or_else(|_| path.as_path())
+            .unwrap_or(path.as_path())
             .to_str()
             .unwrap();
-        orgmode::update_task(
-            db,
-            notes_path,
-            id,
-            Some(filename),
-            title,
-            body,
-            status,
-            add_tags,
-            remove_tags,
-        )
-        .await?;
+        orgmode::update_task(db, notes_path, id, Some(filename), update).await?;
     } else {
-        orgmode::update_task(
-            db,
-            notes_path,
-            id,
-            None,
-            title,
-            body,
-            status,
-            add_tags,
-            remove_tags,
-        )
-        .await?;
+        orgmode::update_task(db, notes_path, id, None, update).await?;
     }
     println!("Task {id} updated");
 
@@ -404,7 +384,7 @@ pub async fn run_list(
                 .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
             let filename = path
                 .strip_prefix(notes_path)
-                .unwrap_or_else(|_| path.as_path())
+                .unwrap_or(path.as_path())
                 .to_str()
                 .unwrap_or(project_ref)
                 .to_string();
@@ -426,10 +406,7 @@ pub async fn run_list(
         return Ok(());
     }
 
-    println!(
-        "{:<40} {:<10} {:<24} {}",
-        "ID", "Status", "Project", "Title"
-    );
+    println!("{:<40} {:<10} {:<24} Title", "ID", "Status", "Project");
     println!("{}", "-".repeat(100));
     for (id, task_status, project_display, title) in &tasks {
         println!("{id:<40} {task_status:<10} {project_display:<24} {title}");
@@ -961,7 +938,7 @@ mod tests {
 
         // Re-parse and check the headline
         let config = parsing_config();
-        let org = config.parse(&fs::read_to_string(&path).unwrap());
+        let org = config.parse(fs::read_to_string(&path).unwrap());
         let headlines: Vec<_> = org.document().headlines().collect();
         assert_eq!(headlines.len(), 1);
         assert_eq!(headlines[0].todo_keyword().unwrap().to_string(), "DONE");
@@ -994,7 +971,7 @@ mod tests {
     /// Helper: create a TODO task and return (path, id) so tests can drive
     /// subsequent updates without re-deriving the ID.
     async fn create_todo_task(db: &Connection, notes: &str, index: &str) -> (PathBuf, String) {
-        run_create(db, notes, &index, "Test task", None, None, "TODO")
+        run_create(db, notes, index, "Test task", None, None, "TODO")
             .await
             .unwrap();
         let path = fs::read_dir(projects_dir(notes))
@@ -1952,7 +1929,7 @@ Investigate the redirect
 
         let filename = path
             .strip_prefix(&notes)
-            .unwrap_or_else(|_| path.as_path())
+            .unwrap_or(path.as_path())
             .to_str()
             .unwrap()
             .to_string();
@@ -1974,7 +1951,7 @@ Investigate the redirect
         .unwrap();
 
         let config = parsing_config();
-        let org = config.parse(&fs::read_to_string(&path).unwrap());
+        let org = config.parse(fs::read_to_string(&path).unwrap());
         let headlines: Vec<_> = org.document().headlines().collect();
         assert_eq!(headlines.len(), 1);
         assert_eq!(headlines[0].todo_keyword().unwrap().to_string(), "DONE");
@@ -2040,7 +2017,7 @@ Investigate the redirect
         .unwrap();
 
         let config = parsing_config();
-        let org = config.parse(&fs::read_to_string(&path).unwrap());
+        let org = config.parse(fs::read_to_string(&path).unwrap());
         let headlines: Vec<_> = org.document().headlines().collect();
         assert_eq!(headlines.len(), 1);
         assert_eq!(headlines[0].todo_keyword().unwrap().to_string(), "DONE");
@@ -2613,7 +2590,7 @@ Need to check the middleware changes.
                     .unwrap();
             });
         }
-        while let Some(_) = set.join_next().await {}
+        while set.join_next().await.is_some() {}
 
         // Every task must appear in the project file exactly once.
         let project_path = fs::read_dir(projects_dir(&notes))
@@ -2839,7 +2816,7 @@ Need to check the middleware changes.
     /// subsequent updates without re-deriving the ID. Mirrors `create_todo_task` above
     /// but kept separate so existing tests don't depend on a helper defined further down.
     async fn create_task_for_tags(db: &Connection, notes: &str, index: &str) -> (PathBuf, String) {
-        run_create(db, notes, &index, "Tag test task", None, None, "TODO")
+        run_create(db, notes, index, "Tag test task", None, None, "TODO")
             .await
             .unwrap();
         let path = fs::read_dir(projects_dir(notes))

@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
 use crate::eval::db::{get_run, get_run_results, insert_result, insert_run, update_run_status};
-use crate::eval::models::{EvalCase, EvalExpected, EvalRun};
+use crate::eval::models::{EvalCase, EvalExpected, EvalResult, EvalRun};
 use crate::openai::{Message, Role};
 
 pub async fn load_cases_from_jsonl(path: &Path) -> Result<Vec<EvalCase>> {
@@ -93,13 +93,15 @@ pub async fn run_eval(
                 }
                 insert_result(
                     db,
-                    &result_id,
-                    &run_id,
-                    &case_id,
-                    &case.prompt,
-                    Some(&output),
-                    passed,
-                    None,
+                    EvalResult {
+                        id: result_id,
+                        run_id: run_id.clone(),
+                        case_id,
+                        input: case.prompt.clone(),
+                        output: Some(output),
+                        passed,
+                        error: None,
+                    },
                 )
                 .await?;
             }
@@ -107,13 +109,15 @@ pub async fn run_eval(
                 tracing::error!("Eval case ERROR: {} — {}", case_id, e);
                 insert_result(
                     db,
-                    &result_id,
-                    &run_id,
-                    &case_id,
-                    &case.prompt,
-                    None,
-                    false,
-                    Some(&e.to_string()),
+                    EvalResult {
+                        id: result_id,
+                        run_id: run_id.clone(),
+                        case_id,
+                        input: case.prompt.clone(),
+                        output: None,
+                        passed: false,
+                        error: Some(e.to_string()),
+                    },
                 )
                 .await?;
             }

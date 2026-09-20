@@ -47,16 +47,16 @@ impl Builtin for HqBuiltin {
         }
 
         // Check the subcommand against the allowlist before running anything.
-        if let Some(cmd) = ctx.args.iter().find(|a| !a.starts_with('-')) {
-            if !ALLOWED_SUBCOMMANDS.contains(&cmd.as_str()) {
-                return Ok(ExecResult::err(
-                    format!(
-                        "subcommand '{cmd}' is not allowed. Allowed subcommands: {}",
-                        ALLOWED_SUBCOMMANDS.join(", "),
-                    ),
-                    1,
-                ));
-            }
+        if let Some(cmd) = ctx.args.iter().find(|a| !a.starts_with('-'))
+            && !ALLOWED_SUBCOMMANDS.contains(&cmd.as_str())
+        {
+            return Ok(ExecResult::err(
+                format!(
+                    "subcommand '{cmd}' is not allowed. Allowed subcommands: {}",
+                    ALLOWED_SUBCOMMANDS.join(", "),
+                ),
+                1,
+            ));
         }
 
         // Build args: program name + user-supplied subcommand and flags

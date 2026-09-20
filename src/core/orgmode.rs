@@ -166,12 +166,12 @@ fn extract_logbook(headline: &orgize::ast::Headline) -> Vec<String> {
     // filter by Drawer, then check the drawer name.
     if let Some(section) = headline.section() {
         for child in section.syntax().children() {
-            if let Some(drawer) = Drawer::cast(child) {
-                if drawer.name().eq_ignore_ascii_case("LOGBOOK") {
-                    let content = drawer.content_raw();
-                    for caps in RE_STATE_CHANGE.captures_iter(&content) {
-                        entries.push(caps.get(0).unwrap().as_str().to_string());
-                    }
+            if let Some(drawer) = Drawer::cast(child)
+                && drawer.name().eq_ignore_ascii_case("LOGBOOK")
+            {
+                let content = drawer.content_raw();
+                for caps in RE_STATE_CHANGE.captures_iter(&content) {
+                    entries.push(caps.get(0).unwrap().as_str().to_string());
                 }
             }
         }
@@ -216,6 +216,7 @@ pub fn build_headline(id: &str, title: &str, body: &str, status: &str, level: us
 /// This is used by `update_task` / `update_task_in_file` to rebuild a
 /// headline in place. New headlines (created via `run_create`) use
 /// `build_headline` instead, since they have no prior state to preserve.
+#[allow(clippy::too_many_arguments)]
 fn build_updated_headline(
     id: &str,
     title: &str,
@@ -379,38 +380,37 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
     let config = org::todo_keywords_config();
     let org = config.parse(&content);
     for headline in org.document().headlines() {
-        if let Some(props) = headline.properties() {
-            if props.get("ID").is_some_and(|v| v == id) {
-                let range = headline.syntax().text_range();
-                let usize_range =
-                    u32::from(range.start()) as usize..u32::from(range.end()) as usize;
-                let current_status = headline
-                    .todo_keyword()
-                    .map(|k| k.to_string())
-                    .unwrap_or_else(|| "TODO".to_string());
-                let current_title = headline.title_raw().trim().to_string();
-                let current_level = headline.level();
-                let current_body = body_from_headline(&headline);
-                let current_closed = extract_closed(&headline);
-                let current_logbook = extract_logbook(&headline);
-                let current_tags = headline
-                    .tags()
-                    .map(|t| t.to_string())
-                    .collect::<Vec<String>>();
+        if let Some(props) = headline.properties()
+            && props.get("ID").is_some_and(|v| v == id)
+        {
+            let range = headline.syntax().text_range();
+            let usize_range = u32::from(range.start()) as usize..u32::from(range.end()) as usize;
+            let current_status = headline
+                .todo_keyword()
+                .map(|k| k.to_string())
+                .unwrap_or_else(|| "TODO".to_string());
+            let current_title = headline.title_raw().trim().to_string();
+            let current_level = headline.level();
+            let current_body = body_from_headline(&headline);
+            let current_closed = extract_closed(&headline);
+            let current_logbook = extract_logbook(&headline);
+            let current_tags = headline
+                .tags()
+                .map(|t| t.to_string())
+                .collect::<Vec<String>>();
 
-                return Ok(TaskLocation {
-                    path: path.clone(),
-                    range: usize_range,
-                    content,
-                    current_title,
-                    current_body,
-                    current_status,
-                    current_level,
-                    current_closed,
-                    current_logbook,
-                    current_tags,
-                });
-            }
+            return Ok(TaskLocation {
+                path: path.clone(),
+                range: usize_range,
+                content,
+                current_title,
+                current_body,
+                current_status,
+                current_level,
+                current_closed,
+                current_logbook,
+                current_tags,
+            });
         }
     }
 
@@ -491,10 +491,8 @@ impl Traverser for BodyExtractor {
                     self.output.push('\n');
                 }
             }
-            Event::Text(text) => {
-                if !self.in_headline_title {
-                    self.output.push_str(&text);
-                }
+            Event::Text(text) if !self.in_headline_title => {
+                self.output.push_str(&text);
             }
             _ => {}
         }
@@ -507,6 +505,17 @@ pub fn body_from_headline(headline: &orgize::ast::Headline) -> String {
     let mut ctx = TraversalContext::default();
     extractor.element(SyntaxElement::Node(headline.syntax().clone()), &mut ctx);
     extractor.finish()
+}
+
+/// Fields that may be changed on an existing task. `None` fields (and empty
+/// tag lists) are left as-is.
+#[derive(Default)]
+pub struct TaskUpdate<'a> {
+    pub title: Option<&'a str>,
+    pub body: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub add_tags: &'a [String],
+    pub remove_tags: &'a [String],
 }
 
 /// Update a task's fields in a specific file.
@@ -525,30 +534,25 @@ pub fn body_from_headline(headline: &orgize::ast::Headline) -> String {
 pub async fn update_task_in_file(
     file_path: &PathBuf,
     id: &str,
-    title: Option<&str>,
-    body: Option<&str>,
-    status: Option<&str>,
-    add_tags: &[String],
-    remove_tags: &[String],
+    update: TaskUpdate<'_>,
 ) -> Result<()> {
     with_file_lock(file_path, || async {
         let location = find_task_in_file(file_path, id).await?;
-        apply_update(&location, id, title, body, status, add_tags, remove_tags).await
+        apply_update(&location, id, update).await
     })
     .await
 }
 
 /// Rebuild the headline for a located task and write the file back atomically.
 /// Callers must hold the file lock for `location.path`.
-async fn apply_update(
-    location: &TaskLocation,
-    id: &str,
-    title: Option<&str>,
-    body: Option<&str>,
-    status: Option<&str>,
-    add_tags: &[String],
-    remove_tags: &[String],
-) -> Result<()> {
+async fn apply_update(location: &TaskLocation, id: &str, update: TaskUpdate<'_>) -> Result<()> {
+    let TaskUpdate {
+        title,
+        body,
+        status,
+        add_tags,
+        remove_tags,
+    } = update;
     let new_title = title.unwrap_or(&location.current_title);
     let new_body = body.unwrap_or(&location.current_body);
     let status = status.map(|s| s.to_uppercase());
@@ -595,11 +599,7 @@ pub async fn update_task(
     notes_path: &str,
     id: &str,
     file_name: Option<&str>,
-    title: Option<&str>,
-    body: Option<&str>,
-    status: Option<&str>,
-    add_tags: &[String],
-    remove_tags: &[String],
+    update: TaskUpdate<'_>,
 ) -> Result<()> {
     let location = if let Some(fname) = file_name {
         let path = std::path::Path::new(notes_path).join(fname);
@@ -613,7 +613,7 @@ pub async fn update_task(
     with_file_lock(&path, || async {
         // Re-read under the lock so a concurrent writer can't be overwritten.
         let location = find_task_in_file(&path, id).await?;
-        apply_update(&location, id, title, body, status, add_tags, remove_tags).await
+        apply_update(&location, id, update).await
     })
     .await
 }

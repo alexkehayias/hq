@@ -1073,6 +1073,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::default_constructed_unit_structs)]
     async fn test_invisible_char_filter_default_default() {
         // The default impl should construct a working filter.
         let mw = InvisibleCharFilter::default();

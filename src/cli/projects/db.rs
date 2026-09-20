@@ -16,13 +16,7 @@ pub struct ProjectRow {
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .filter_map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == ' ' {
-                Some(c)
-            } else {
-                None
-            }
-        })
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == ' ')
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<&str>>()

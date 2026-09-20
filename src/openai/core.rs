@@ -1003,7 +1003,7 @@ data: [DONE]
 
         // The channel should have received the raw JSON chunks
         let mut chunk_count = 0;
-        while let Ok(_) = rx.try_recv() {
+        while rx.try_recv().is_ok() {
             chunk_count += 1;
         }
         assert!(chunk_count >= 3);
