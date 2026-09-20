@@ -250,9 +250,7 @@ mod tests {
                     .uri("/api/metrics")
                     .method("POST")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({}).to_string(),
-                    ))
+                    .body(Body::from(serde_json::json!({}).to_string()))
                     .unwrap(),
             )
             .await

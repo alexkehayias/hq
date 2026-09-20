@@ -1,8 +1,8 @@
+use super::registry::{Tool, ToolConfig};
 use crate::api::public::calendar::CalendarResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use tokio_rusqlite::Connection;
 
@@ -77,9 +77,7 @@ impl ToolCall for CalendarTool {
                 .await
             {
                 Ok(r) => r,
-                Err(e) => {
-                    return Ok(format!("Error fetching calendar events: {e}"))
-                }
+                Err(e) => return Ok(format!("Error fetching calendar events: {e}")),
             };
 
             let status = resp.status();
@@ -100,7 +98,7 @@ impl ToolCall for CalendarTool {
                 Err(e) => {
                     return Ok(format!(
                         "Error fetching calendar events: failed to parse response as JSON: {e}"
-                    ))
+                    ));
                 }
             };
 

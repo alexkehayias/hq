@@ -410,7 +410,11 @@ pub(super) fn format_columns(entries: &[String], terminal_width: usize) -> Strin
     output
 }
 
-pub(super) fn format_long_entry(name: &str, metadata: &crate::bash::fs::Metadata, human: bool) -> String {
+pub(super) fn format_long_entry(
+    name: &str,
+    metadata: &crate::bash::fs::Metadata,
+    human: bool,
+) -> String {
     let file_type = match metadata.file_type {
         FileType::Directory => 'd',
         FileType::Symlink => 'l',

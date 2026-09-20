@@ -2512,7 +2512,10 @@ impl Interpreter {
             if result.control_flow != ControlFlow::None {
                 if let ControlFlow::Exit(code) = result.control_flow {
                     if fire_exit_hook {
-                        match self.hooks.fire_on_exit(crate::bash::hooks::ExitEvent { code }) {
+                        match self
+                            .hooks
+                            .fire_on_exit(crate::bash::hooks::ExitEvent { code })
+                        {
                             Some(event) => {
                                 exit_code = event.code;
                                 self.last_exit_code = exit_code;
@@ -9483,7 +9486,9 @@ mod tests {
     fn test_allexport_rejected_global_update_does_not_mutate_env() {
         let fs: Arc<dyn FileSystem> = Arc::new(InMemoryFs::new());
         let mut interp = Interpreter::new(Arc::clone(&fs));
-        interp.set_memory_limits(crate::bash::limits::MemoryLimits::new().max_total_variable_bytes(20));
+        interp.set_memory_limits(
+            crate::bash::limits::MemoryLimits::new().max_total_variable_bytes(20),
+        );
 
         interp.set_variable("FILL".to_string(), "123456789012".to_string());
         interp.flags.insert(BashFlags::ALLEXPORT);
@@ -9501,7 +9506,9 @@ mod tests {
     fn test_allexport_rejected_local_update_does_not_mutate_env() {
         let fs: Arc<dyn FileSystem> = Arc::new(InMemoryFs::new());
         let mut interp = Interpreter::new(Arc::clone(&fs));
-        interp.set_memory_limits(crate::bash::limits::MemoryLimits::new().max_total_variable_bytes(20));
+        interp.set_memory_limits(
+            crate::bash::limits::MemoryLimits::new().max_total_variable_bytes(20),
+        );
         interp.call_stack.push(CallFrame {
             name: "f".to_string(),
             locals: HashMap::from([("A".to_string(), "1".to_string())]),
@@ -9536,7 +9543,9 @@ mod tests {
         let err = interp.execute(&ast).await.unwrap_err();
         assert!(matches!(
             err,
-            crate::bash::error::Error::ResourceLimit(crate::bash::limits::LimitExceeded::MaxLoopIterations(2))
+            crate::bash::error::Error::ResourceLimit(
+                crate::bash::limits::LimitExceeded::MaxLoopIterations(2)
+            )
         ));
     }
 
@@ -9551,7 +9560,9 @@ mod tests {
         let err = interp.execute(&ast).await.unwrap_err();
         assert!(matches!(
             err,
-            crate::bash::error::Error::ResourceLimit(crate::bash::limits::LimitExceeded::MaxSubshellDepth(2))
+            crate::bash::error::Error::ResourceLimit(
+                crate::bash::limits::LimitExceeded::MaxSubshellDepth(2)
+            )
         ));
     }
 
@@ -9566,7 +9577,9 @@ mod tests {
         let err = interp.execute(&ast).await.unwrap_err();
         assert!(matches!(
             err,
-            crate::bash::error::Error::ResourceLimit(crate::bash::limits::LimitExceeded::MaxCommands(2))
+            crate::bash::error::Error::ResourceLimit(
+                crate::bash::limits::LimitExceeded::MaxCommands(2)
+            )
         ));
     }
 
@@ -11341,7 +11354,6 @@ echo "count=$COUNT"
         assert_eq!(lines, vec!["/testdir/a.txt", "/testdir/b.txt"]);
     }
 
-
     // /dev/urandom integration tests
 
     #[tokio::test]
@@ -12117,7 +12129,8 @@ cat /tmp/test_fd_exec_public.txt"#,
     #[test]
     fn test_restore_validation_rejects_oversized_dir_stack() {
         let mut state = Interpreter::new(Arc::new(InMemoryFs::new())).shell_state();
-        state.dir_stack = vec!["/tmp".to_string(); crate::bash::builtins::limits::DIRSTACK_MAX_SIZE + 1];
+        state.dir_stack =
+            vec!["/tmp".to_string(); crate::bash::builtins::limits::DIRSTACK_MAX_SIZE + 1];
 
         let interp = Interpreter::new(Arc::new(InMemoryFs::new()));
         assert!(

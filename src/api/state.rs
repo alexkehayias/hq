@@ -23,11 +23,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(
-        db: Connection,
-        config: AppConfig,
-        skill_registry: SkillRegistry,
-    ) -> Self {
+    pub fn new(db: Connection, config: AppConfig, skill_registry: SkillRegistry) -> Self {
         Self {
             latest_selection: None,
             db,

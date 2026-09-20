@@ -615,7 +615,8 @@ mod tests {
     #[tokio::test]
     async fn no_leak_malformed_input() {
         let r =
-            crate::bash::builtins::debug_leak_check::run(r#"printf 'a,"unterm\n' | csv to-json"#).await;
+            crate::bash::builtins::debug_leak_check::run(r#"printf 'a,"unterm\n' | csv to-json"#)
+                .await;
         crate::bash::builtins::debug_leak_check::assert_no_leak(
             &r,
             "csv_malformed_input",

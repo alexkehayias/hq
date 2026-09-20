@@ -8,22 +8,20 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
-use tokio::fs;
 use serde_json::json;
+use tokio::fs;
 
 use super::public::{
     SkillDetailResponse, SkillFileContentResponse, SkillFileEntry, SkillFileListResponse,
     SkillFileWriteRequest, SkillListResponse, SkillSummaryResponse,
 };
-use crate::api::state::AppState;
 use crate::api::public::ApiError;
+use crate::api::state::AppState;
 
 type SharedState = Arc<RwLock<AppState>>;
 
 /// List all available skills.
-async fn list_skills(
-    State(state): State<SharedState>,
-) -> Result<impl IntoResponse, ApiError> {
+async fn list_skills(State(state): State<SharedState>) -> Result<impl IntoResponse, ApiError> {
     let registry = state.read().expect("Unable to read shared state");
 
     let skills = registry
@@ -48,12 +46,22 @@ async fn get_skill_detail(
 ) -> Result<impl IntoResponse, ApiError> {
     let registry = {
         let state = state.read().expect("Unable to read shared state");
-        state.skill_registry.read().expect("Unable to read skill registry").clone()
+        state
+            .skill_registry
+            .read()
+            .expect("Unable to read skill registry")
+            .clone()
     };
 
     let skill = match registry.load_skill(&name).await {
         Ok(s) => s,
-        Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
+        Err(_) => {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("Skill '{}' not found", name)})),
+            )
+                .into_response());
+        }
     };
 
     Ok(Json(SkillDetailResponse {
@@ -76,13 +84,21 @@ async fn list_skill_files(
     let skill_path = {
         let registry = {
             let state = state.read().expect("Unable to read shared state");
-            state.skill_registry.read().expect("Unable to read skill registry").clone()
+            state
+                .skill_registry
+                .read()
+                .expect("Unable to read skill registry")
+                .clone()
         };
 
         let skill = match registry.load_skill(&name).await {
             Ok(s) => s,
             Err(_) => {
-                return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response())
+                return Ok((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": format!("Skill '{}' not found", name)})),
+                )
+                    .into_response());
             }
         };
 
@@ -120,21 +136,36 @@ async fn read_skill_file(
     let skill = {
         let registry = {
             let state = state.read().expect("Unable to read shared state");
-            state.skill_registry.read().expect("Unable to read skill registry").clone()
+            state
+                .skill_registry
+                .read()
+                .expect("Unable to read skill registry")
+                .clone()
         };
 
         match registry.load_skill(&name).await {
             Ok(s) => s,
-            Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
+            Err(_) => {
+                return Ok((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": format!("Skill '{}' not found", name)})),
+                )
+                    .into_response());
+            }
         }
     };
 
-    let content = match skill.read_file(&file_path).await {
-        Some(c) => c,
-        None => {
-            return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("File '{}' not found in skill '{}'", file_path, name)}))).into_response())
-        }
-    };
+    let content =
+        match skill.read_file(&file_path).await {
+            Some(c) => c,
+            None => return Ok((
+                StatusCode::NOT_FOUND,
+                Json(
+                    json!({"error": format!("File '{}' not found in skill '{}'", file_path, name)}),
+                ),
+            )
+                .into_response()),
+        };
 
     Ok(Json(SkillFileContentResponse {
         path: file_path,
@@ -164,12 +195,22 @@ async fn write_skill_file(
     let skill_path = {
         let registry = {
             let state = state.read().expect("Unable to read shared state");
-            state.skill_registry.read().expect("Unable to read skill registry").clone()
+            state
+                .skill_registry
+                .read()
+                .expect("Unable to read skill registry")
+                .clone()
         };
 
         match registry.load_skill(&name).await {
             Ok(s) => s.path,
-            Err(_) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("Skill '{}' not found", name)}))).into_response()),
+            Err(_) => {
+                return Ok((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": format!("Skill '{}' not found", name)})),
+                )
+                    .into_response());
+            }
         }
     };
 
@@ -200,7 +241,7 @@ async fn write_skill_file(
                 None => {
                     return Err(ApiError::from(anyhow::anyhow!(
                         "Failed to resolve file path: invalid path"
-                    )))
+                    )));
                 }
             }
         }

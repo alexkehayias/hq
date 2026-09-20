@@ -604,11 +604,7 @@ Investigate redirect issue
 
     #[test]
     fn test_headline_empty_body_not_included() {
-        let h = Headline::builder()
-            .level(1)
-            .title("Task")
-            .body("")
-            .build();
+        let h = Headline::builder().level(1).title("Task").body("").build();
         assert_eq!(h.to_string(), "* Task\n");
     }
 
@@ -619,8 +615,16 @@ Investigate redirect issue
     fn parsing_config() -> ParseConfig {
         ParseConfig {
             todo_keywords: (
-                vec!["TODO".to_string(), "NEXT".to_string(), "WAITING".to_string()],
-                vec!["DONE".to_string(), "CANCELED".to_string(), "SOMEDAY".to_string()],
+                vec![
+                    "TODO".to_string(),
+                    "NEXT".to_string(),
+                    "WAITING".to_string(),
+                ],
+                vec![
+                    "DONE".to_string(),
+                    "CANCELED".to_string(),
+                    "SOMEDAY".to_string(),
+                ],
             ),
             ..Default::default()
         }

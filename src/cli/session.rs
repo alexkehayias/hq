@@ -83,7 +83,11 @@ pub async fn run_delete(
         "Deleted chat session {} ({} messages removed, search index updated, workspace dir {})",
         session_id,
         result.messages_deleted,
-        if workspace_existed { "removed" } else { "not found" }
+        if workspace_existed {
+            "removed"
+        } else {
+            "not found"
+        }
     );
 
     Ok(())
@@ -145,9 +149,7 @@ pub async fn run_summarize(
             println!("Summarized session {session_id}:\n  title: {title}\n  summary: {summary}");
         }
         None => {
-            println!(
-                "Session {session_id}: could not parse LLM response; session left unchanged"
-            );
+            println!("Session {session_id}: could not parse LLM response; session left unchanged");
         }
     }
 
@@ -158,12 +160,9 @@ pub async fn run_summarize(
 pub async fn run_list(db: Connection) -> Result<()> {
     let sessions: Vec<(String, Option<String>)> = db
         .call(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, title FROM session ORDER BY created_at DESC",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?;
+            let mut stmt =
+                conn.prepare("SELECT id, title FROM session ORDER BY created_at DESC")?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await
@@ -231,7 +230,9 @@ mod tests {
             .await
             .unwrap();
         let msg = Message::new(Role::User, "Hello");
-        insert_chat_message(&db, "test-session-1", &msg).await.unwrap();
+        insert_chat_message(&db, "test-session-1", &msg)
+            .await
+            .unwrap();
 
         // Create a workspace directory with a sentinel file
         let workspace_path = storage.path().join("workspace").join("test-session-1");

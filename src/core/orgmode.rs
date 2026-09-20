@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use anyhow::{Context, Result};
 use chrono::Local;
 use once_cell::sync::Lazy;
+use orgize::SyntaxElement;
 use orgize::ast::Drawer;
 use orgize::export::{Container, Event, TraversalContext, Traverser};
 use orgize::rowan::ast::AstNode;
-use orgize::SyntaxElement;
 use regex::Regex;
 use tokio::fs;
 use tokio_rusqlite::Connection;
@@ -63,8 +63,7 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// read-modify-write mutations to the same note file so concurrent operations
 /// (e.g. several refiles from the same file, or a refile racing an update)
 /// don't lose each other's changes.
-static FILE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
+static FILE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
 
 /// Run `f` while holding exclusive locks for each path in `paths`. Locks are
 /// acquired in sorted order so concurrent multi-file operations can't deadlock.
@@ -122,7 +121,10 @@ fn now_timestamp() -> String {
 /// again before the timestamp, matches emacs' default formatting so logs
 /// produced by hq round-trip cleanly with logs added by emacs.
 fn format_state_change(from: &str, to: &str) -> String {
-    format!("- State \"{to}\"       from \"{from}\"       {}", now_timestamp())
+    format!(
+        "- State \"{to}\"       from \"{from}\"       {}",
+        now_timestamp()
+    )
 }
 
 /// Regex for individual state-change lines inside a LOGBOOK drawer. Captures
@@ -380,7 +382,8 @@ pub async fn find_task_in_file(path: &PathBuf, id: &str) -> Result<TaskLocation>
         if let Some(props) = headline.properties() {
             if props.get("ID").is_some_and(|v| v == id) {
                 let range = headline.syntax().text_range();
-                let usize_range = u32::from(range.start()) as usize..u32::from(range.end()) as usize;
+                let usize_range =
+                    u32::from(range.start()) as usize..u32::from(range.end()) as usize;
                 let current_status = headline
                     .todo_keyword()
                     .map(|k| k.to_string())
@@ -428,9 +431,8 @@ pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<Ta
     let id_owned = id.to_string();
     let db_file: Option<String> = db
         .call(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT file_name FROM note_meta WHERE id = ?1 AND type = 'task'",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT file_name FROM note_meta WHERE id = ?1 AND type = 'task'")?;
             let mut rows = stmt.query_map([id_owned.as_str()], |row| row.get::<_, String>(0))?;
             Ok(rows.next().transpose()?)
         })
@@ -552,8 +554,7 @@ async fn apply_update(
     let status = status.map(|s| s.to_uppercase());
     let new_status = status.as_deref().unwrap_or(&location.current_status);
 
-    let (new_closed, new_logbook) =
-        compute_state_transition(location, new_status);
+    let (new_closed, new_logbook) = compute_state_transition(location, new_status);
     let new_tags = compute_new_tags(&location.current_tags, add_tags, remove_tags)?;
 
     let new_headline = build_updated_headline(
@@ -602,9 +603,9 @@ pub async fn update_task(
 ) -> Result<()> {
     let location = if let Some(fname) = file_name {
         let path = std::path::Path::new(notes_path).join(fname);
-        find_task_in_file(&path, id).await.with_context(|| {
-            format!("Task {id} not found in scoped file {fname}")
-        })?
+        find_task_in_file(&path, id)
+            .await
+            .with_context(|| format!("Task {id} not found in scoped file {fname}"))?
     } else {
         find_task(db, notes_path, id).await?
     };
@@ -661,7 +662,10 @@ mod tests {
              :ID:       abc\n\
              :END:",
         );
-        assert_eq!(extract_closed(&h), Some("[2026-05-23 Sat 10:59]".to_string()));
+        assert_eq!(
+            extract_closed(&h),
+            Some("[2026-05-23 Sat 10:59]".to_string())
+        );
     }
 
     #[test]
@@ -813,7 +817,10 @@ mod tests {
     fn test_extract_tags_empty() {
         let h = first_headline("* TODO Buy groceries\n:PROPERTIES:\n:END:");
         let tags: Vec<String> = h.tags().map(|t| t.to_string()).collect();
-        assert!(tags.is_empty(), "headline without tags should yield empty Vec, got: {tags:?}");
+        assert!(
+            tags.is_empty(),
+            "headline without tags should yield empty Vec, got: {tags:?}"
+        );
     }
 
     #[test]
@@ -829,7 +836,11 @@ mod tests {
         let current = vec!["urgent".to_string()];
         let add = vec!["urgent".to_string()];
         let result = compute_new_tags(&current, &add, &[]).unwrap();
-        assert_eq!(result, vec!["urgent"], "duplicate add should not appear twice");
+        assert_eq!(
+            result,
+            vec!["urgent"],
+            "duplicate add should not appear twice"
+        );
     }
 
     #[test]
@@ -837,7 +848,11 @@ mod tests {
         let current: Vec<String> = vec![];
         let add = vec!["urgent".to_string(), "urgent".to_string()];
         let result = compute_new_tags(&current, &add, &[]).unwrap();
-        assert_eq!(result, vec!["urgent"], "duplicates within add should be deduped");
+        assert_eq!(
+            result,
+            vec!["urgent"],
+            "duplicates within add should be deduped"
+        );
     }
 
     #[test]
@@ -851,7 +866,11 @@ mod tests {
     fn test_compute_new_tags_remove_nonexistent_silent() {
         let current = vec!["a".to_string()];
         let result = compute_new_tags(&current, &[], &["nonexistent".to_string()]).unwrap();
-        assert_eq!(result, vec!["a"], "removing a tag not present should be a silent no-op");
+        assert_eq!(
+            result,
+            vec!["a"],
+            "removing a tag not present should be a silent no-op"
+        );
     }
 
     #[test]
@@ -868,7 +887,10 @@ mod tests {
         let current = vec!["a".to_string(), "b".to_string()];
         let remove = vec!["a".to_string(), "b".to_string()];
         let result = compute_new_tags(&current, &[], &remove).unwrap();
-        assert!(result.is_empty(), "removing all tags should yield empty Vec, got: {result:?}");
+        assert!(
+            result.is_empty(),
+            "removing all tags should yield empty Vec, got: {result:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -912,7 +934,10 @@ mod tests {
     #[test]
     fn test_validate_tag_rejects_empty() {
         let err = validate_tag("").unwrap_err();
-        assert!(err.to_string().contains("empty"), "error should mention empty, got: {err}");
+        assert!(
+            err.to_string().contains("empty"),
+            "error should mention empty, got: {err}"
+        );
     }
 
     #[test]
@@ -925,10 +950,16 @@ mod tests {
     fn test_compute_new_tags_add_invalid_tag_errors() {
         // Add tags with spaces/special chars should error.
         let err = compute_new_tags(&[], &["ur gent".to_string()], &[]).unwrap_err();
-        assert!(err.to_string().contains("spaces"), "should reject spaces, got: {err}");
+        assert!(
+            err.to_string().contains("spaces"),
+            "should reject spaces, got: {err}"
+        );
 
         let err = compute_new_tags(&[], &["urgent!".to_string()], &[]).unwrap_err();
-        assert!(err.to_string().contains("special character"), "should reject special chars, got: {err}");
+        assert!(
+            err.to_string().contains("special character"),
+            "should reject special chars, got: {err}"
+        );
     }
 
     #[test]
@@ -937,8 +968,11 @@ mod tests {
         // Only normalize case — don't block the update.
         let current = vec!["UR GENT".to_string()];
         let result = compute_new_tags(&current, &[], &[]).unwrap();
-        assert_eq!(result, vec!["ur gent".to_string()],
-            "existing tags should be lowercased but preserved (spaces kept), got: {result:?}");
+        assert_eq!(
+            result,
+            vec!["ur gent".to_string()],
+            "existing tags should be lowercased but preserved (spaces kept), got: {result:?}"
+        );
     }
 
     #[test]
@@ -947,7 +981,10 @@ mod tests {
         // the same (lowercased) value.
         let current = vec!["ur gent".to_string()];
         let result = compute_new_tags(&current, &[], &["UR GENT".to_string()]).unwrap();
-        assert!(result.is_empty(), "should remove the tag case-insensitively, got: {result:?}");
+        assert!(
+            result.is_empty(),
+            "should remove the tag case-insensitively, got: {result:?}"
+        );
     }
 
     /// Build a Headline with tags via the builder, render it to a string,
@@ -972,7 +1009,11 @@ mod tests {
         // Parse back via orgize and verify tags round-trip.
         let config = org::todo_keywords_config();
         let org = config.parse(&rendered);
-        let parsed = org.document().headlines().next().expect("should parse one headline");
+        let parsed = org
+            .document()
+            .headlines()
+            .next()
+            .expect("should parse one headline");
         let tags: Vec<String> = parsed.tags().map(|t| t.to_string()).collect();
         assert_eq!(tags, vec!["errands".to_string(), "urgent".to_string()]);
     }
@@ -992,4 +1033,3 @@ mod tests {
         );
     }
 }
-

@@ -12,8 +12,7 @@ pub async fn recreate_index(index_path: &str) {
     tokio::fs::create_dir(index_path)
         .await
         .expect("Failed to recreate index directory");
-    let index_path =
-        tantivy::directory::MmapDirectory::open(index_path).expect("Index not found");
+    let index_path = tantivy::directory::MmapDirectory::open(index_path).expect("Index not found");
     let schema = note_schema();
     Index::open_or_create(index_path, schema.clone()).expect("Unable to open or create index");
 }

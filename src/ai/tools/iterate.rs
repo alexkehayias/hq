@@ -119,9 +119,7 @@ impl IterateTool {
                 properties: IterateProps {
                     items: Property {
                         r#type: String::from("array"),
-                        description: String::from(
-                            "The list of items to iterate over and process.",
-                        ),
+                        description: String::from("The list of items to iterate over and process."),
                         r#enum: None,
                     },
                     task: Property {
@@ -205,9 +203,7 @@ fn combine_outcomes(outcomes: Vec<ChunkOutcome>) -> String {
     for outcome in outcomes {
         let (index, status, text) = match outcome {
             ChunkOutcome::Ok(index, text) => (index, "ok", text),
-            ChunkOutcome::Errored(index, e) => {
-                (index, "error", format!("Subagent errored: {}", e))
-            }
+            ChunkOutcome::Errored(index, e) => (index, "error", format!("Subagent errored: {}", e)),
             ChunkOutcome::TimedOut(index) => {
                 (index, "timed out", "Subagent timed out.".to_string())
             }

@@ -1,11 +1,11 @@
+use anyhow::{Result, anyhow};
 use std::path::Path;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
-use anyhow::{anyhow, Result};
 
 use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
-use crate::eval::models::{EvalCase, EvalExpected, EvalRun};
 use crate::eval::db::{get_run, get_run_results, insert_result, insert_run, update_run_status};
+use crate::eval::models::{EvalCase, EvalExpected, EvalRun};
 use crate::openai::{Message, Role};
 
 pub async fn load_cases_from_jsonl(path: &Path) -> Result<Vec<EvalCase>> {
@@ -91,18 +91,40 @@ pub async fn run_eval(
                         output
                     );
                 }
-                insert_result(db, &result_id, &run_id, &case_id, &case.prompt, Some(&output), passed, None).await?;
+                insert_result(
+                    db,
+                    &result_id,
+                    &run_id,
+                    &case_id,
+                    &case.prompt,
+                    Some(&output),
+                    passed,
+                    None,
+                )
+                .await?;
             }
             Err(e) => {
                 tracing::error!("Eval case ERROR: {} — {}", case_id, e);
-                insert_result(db, &result_id, &run_id, &case_id, &case.prompt, None, false, Some(&e.to_string())).await?;
+                insert_result(
+                    db,
+                    &result_id,
+                    &run_id,
+                    &case_id,
+                    &case.prompt,
+                    None,
+                    false,
+                    Some(&e.to_string()),
+                )
+                .await?;
             }
         }
     }
 
     update_run_status(db, &run_id, "completed").await?;
 
-    Ok(get_run(db, &run_id).await?.expect("eval run must exist after insertion"))
+    Ok(get_run(db, &run_id)
+        .await?
+        .expect("eval run must exist after insertion"))
 }
 
 pub async fn run_eval_dry(
@@ -150,7 +172,12 @@ pub async fn run_eval_dry(
         }
     }
 
-    println!("\nTotal: {} | Passed: {} | Failed: {}", total, passed_count, total - passed_count);
+    println!(
+        "\nTotal: {} | Passed: {} | Failed: {}",
+        total,
+        passed_count,
+        total - passed_count
+    );
 
     Ok(())
 }
@@ -182,7 +209,12 @@ pub async fn print_results(db: &Connection, run_id: &str) -> Result<()> {
         }
     }
 
-    println!("\nTotal: {} | Passed: {} | Failed: {}", total, passed_count, total - passed_count);
+    println!(
+        "\nTotal: {} | Passed: {} | Failed: {}",
+        total,
+        passed_count,
+        total - passed_count
+    );
 
     Ok(())
 }

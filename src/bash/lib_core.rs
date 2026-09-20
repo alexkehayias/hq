@@ -8,7 +8,7 @@
 //! parser/interpreter/fs layers are delegated to their own modules; this file
 //! is just the orchestration layer.
 
-use crate::bash::builtins::{ExecutionDeadline, ExecutionExtensions, Builtin};
+use crate::bash::builtins::{Builtin, ExecutionDeadline, ExecutionExtensions};
 use crate::bash::error::{Error, Result};
 use crate::bash::fs::{FileSystem, InMemoryFs, MountableFs};
 use crate::bash::interpreter::{ExecResult, Interpreter};
@@ -102,7 +102,10 @@ impl Bash {
         script: &str,
         options: ExecOptions,
     ) -> Result<ExecResult> {
-        let ExecOptions { mut extensions, output_callback: _ } = options;
+        let ExecOptions {
+            mut extensions,
+            output_callback: _,
+        } = options;
         let active_limits = self.interpreter.limits().clone();
         let _ = extensions.insert(active_limits.clone());
         let _ = extensions.insert(ExecutionDeadline::new(active_limits.timeout));
@@ -123,7 +126,9 @@ impl Bash {
         }
 
         let script = if !self.interpreter.hooks().before_exec.is_empty() {
-            let input = crate::bash::hooks::ExecInput { script: script.to_string() };
+            let input = crate::bash::hooks::ExecInput {
+                script: script.to_string(),
+            };
             match self.interpreter.hooks().fire_before_exec(input) {
                 Some(modified) => std::borrow::Cow::Owned(modified.script),
                 None => return Ok(ExecResult::err("cancelled by before_exec hook", 1)),
@@ -168,15 +173,21 @@ impl Bash {
                     return Err(Error::parse(format!("parser task failed: {}", join_error)));
                 }
                 Err(_elapsed) => {
-                    return Err(Error::ResourceLimit(LimitExceeded::ParserTimeout(parser_timeout)));
+                    return Err(Error::ResourceLimit(LimitExceeded::ParserTimeout(
+                        parser_timeout,
+                    )));
                 }
             }
         };
 
         #[cfg(target_family = "wasm")]
         let ast = {
-            let parser =
-                Parser::with_limits_and_timeout(script, max_ast_depth, max_parser_operations, Some(parser_timeout));
+            let parser = Parser::with_limits_and_timeout(
+                script,
+                max_ast_depth,
+                max_parser_operations,
+                Some(parser_timeout),
+            );
             parser.parse()?
         };
 
@@ -189,7 +200,11 @@ impl Bash {
     ///
     /// After this, paths under `vfs_path` in the sandbox resolve to `fs`.
     /// Used by `hq` to mount a [`RealFs`] workspace directory at `/`.
-    pub fn mount(&mut self, vfs_path: impl AsRef<std::path::Path>, fs: Arc<dyn FileSystem>) -> Result<()> {
+    pub fn mount(
+        &mut self,
+        vfs_path: impl AsRef<std::path::Path>,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<()> {
         self.mountable.mount(vfs_path, fs)
     }
 

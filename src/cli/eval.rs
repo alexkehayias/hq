@@ -20,25 +20,17 @@ pub async fn run(
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("Eval config — model: {}, api_hostname: {}", model, api_hostname);
+    tracing::info!(
+        "Eval config — model: {}, api_hostname: {}",
+        model,
+        api_hostname
+    );
 
     if dry_run {
-        runner::run_eval_dry(
-            &api_hostname,
-            &api_key,
-            &model,
-            &file,
-        ).await?;
+        runner::run_eval_dry(&api_hostname, &api_key, &model, &file).await?;
     } else {
         let db = async_db(&db_path).await?;
-        let run_result = runner::run_eval(
-            &db,
-            &api_hostname,
-            &api_key,
-            &model,
-            &file,
-        )
-        .await?;
+        let run_result = runner::run_eval(&db, &api_hostname, &api_key, &model, &file).await?;
 
         runner::print_results(&db, &run_result.id).await?;
     }

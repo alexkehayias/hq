@@ -267,7 +267,6 @@ impl Builtin for Tee {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,5 +713,4 @@ mod tests {
                 || result.stderr.contains("invalid option")
         );
     }
-
 }

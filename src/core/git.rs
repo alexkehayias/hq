@@ -47,7 +47,10 @@ pub async fn maybe_clone_repo(deploy_key_path: &str, url: &str, storage_path: &s
 /// uncommitted changes and local commits. On conflict, runs `git rebase --abort`
 /// to return the repo to its pre-rebase state and returns an error.
 pub async fn maybe_pull_rebase(deploy_key_path: &str, path: &str) -> Result<()> {
-    let ssh = format!("GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes'", deploy_key_path);
+    let ssh = format!(
+        "GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes'",
+        deploy_key_path
+    );
 
     // Fetch first so we have origin's latest.
     let fetch = Command::new("sh")
@@ -150,7 +153,10 @@ pub async fn changed_files_between(path: &str, from: &str, to: &str) -> Result<V
 /// (atomic at OS level for small files) and self-heals on the next tick when
 /// the complete file gets committed. Not blocking.
 pub async fn sync_repo(deploy_key_path: &str, path: &str) -> Result<Vec<String>> {
-    let ssh = format!("GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes'", deploy_key_path);
+    let ssh = format!(
+        "GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes'",
+        deploy_key_path
+    );
 
     // 1. Capture pre-sync HEAD
     let pre_head = head_sha(path).await?;
@@ -350,11 +356,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         // Use a bare "remote" so push has somewhere to go
         let remote = TempDir::new().unwrap();
-        git(
-            remote.path().to_str().unwrap(),
-            "git init -b main --bare",
-        )
-        .await;
+        git(remote.path().to_str().unwrap(), "git init -b main --bare").await;
         // Init local repo with a remote pointing at the bare one, and push
         // the initial commit so refs/remotes/origin/main exists (sync_repo's
         // `git rebase origin/main` requires it).
@@ -362,10 +364,7 @@ mod tests {
         init_repo(path).await;
         git(
             path,
-            &format!(
-                "git remote add origin {}",
-                remote.path().to_str().unwrap()
-            ),
+            &format!("git remote add origin {}", remote.path().to_str().unwrap()),
         )
         .await;
         git(path, "git push -u origin main").await;
@@ -379,20 +378,13 @@ mod tests {
     #[tokio::test]
     async fn test_sync_repo_commits_and_pushes() {
         let remote = TempDir::new().unwrap();
-        git(
-            remote.path().to_str().unwrap(),
-            "git init -b main --bare",
-        )
-        .await;
+        git(remote.path().to_str().unwrap(), "git init -b main --bare").await;
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().to_str().unwrap();
         init_repo(path).await;
         git(
             path,
-            &format!(
-                "git remote add origin {}",
-                remote.path().to_str().unwrap()
-            ),
+            &format!("git remote add origin {}", remote.path().to_str().unwrap()),
         )
         .await;
         // Push initial commit so refs/remotes/origin/main is populated.
@@ -424,20 +416,13 @@ mod tests {
     #[tokio::test]
     async fn test_maybe_pull_rebase_preserves_local_changes() {
         let remote = TempDir::new().unwrap();
-        git(
-            remote.path().to_str().unwrap(),
-            "git init -b main --bare",
-        )
-        .await;
+        git(remote.path().to_str().unwrap(), "git init -b main --bare").await;
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().to_str().unwrap();
         init_repo(path).await;
         git(
             path,
-            &format!(
-                "git remote add origin {}",
-                remote.path().to_str().unwrap()
-            ),
+            &format!("git remote add origin {}", remote.path().to_str().unwrap()),
         )
         .await;
         // Push initial commit so origin/main exists on remote

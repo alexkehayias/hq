@@ -1,10 +1,12 @@
+use super::registry::{Tool, ToolConfig};
 use crate::notify::{
     PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
     mark_push_subscription_invalid,
 };
-use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
+use crate::openai::{
+    Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
+};
 use anyhow::{Error, Result};
-use super::registry::{Tool, ToolConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio_rusqlite::Connection;
@@ -68,19 +70,16 @@ impl ToolCall for NotifyTool {
             None,
         );
 
-        let failed_subscriptions = broadcast_push_notification(
-            subscriptions,
-            self.vapid_key_path.clone(),
-            payload,
-        )
-        .await;
+        let failed_subscriptions =
+            broadcast_push_notification(subscriptions, self.vapid_key_path.clone(), payload).await;
         let fail_count = failed_subscriptions.len();
         for sub in &failed_subscriptions {
             let _ = mark_push_subscription_invalid(&self.db, &sub.endpoint).await;
         }
 
         let status_message = if fail_count == total {
-            "Failed to send notification: all subscriptions are invalid and were removed.".to_string()
+            "Failed to send notification: all subscriptions are invalid and were removed."
+                .to_string()
         } else if fail_count > 0 {
             format!(
                 "Notification sent to {} of {} device(s). {} invalid subscription(s) removed.",
@@ -121,14 +120,14 @@ impl NotifyTool {
                     message: Property {
                         r#type: String::from("string"),
                         description: String::from(
-                            "The notification message body. Keep it concise and actionable (recommended under 200 characters)."
+                            "The notification message body. Keep it concise and actionable (recommended under 200 characters).",
                         ),
                         r#enum: None,
                     },
                     title: Some(Property {
                         r#type: String::from("string"),
                         description: String::from(
-                            "Optional notification title. Defaults to 'Notification' if not provided."
+                            "Optional notification title. Defaults to 'Notification' if not provided.",
                         ),
                         r#enum: None,
                     }),
@@ -181,18 +180,18 @@ mod tests {
         let db = setup_db().await;
         let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
 
-        let result = tool
-            .call(r#"{"message": "test notification"}"#)
-            .await;
+        let result = tool.call(r#"{"message": "test notification"}"#).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
-        assert!(recoverable
-            .unwrap()
-            .message
-            .contains("No push notification subscriptions found"));
+        assert!(
+            recoverable
+                .unwrap()
+                .message
+                .contains("No push notification subscriptions found")
+        );
     }
 
     #[tokio::test]
@@ -206,10 +205,12 @@ mod tests {
         let err = result.unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
-        assert!(recoverable
-            .unwrap()
-            .message
-            .contains("Notification message cannot be empty"));
+        assert!(
+            recoverable
+                .unwrap()
+                .message
+                .contains("Notification message cannot be empty")
+        );
     }
 
     #[tokio::test]

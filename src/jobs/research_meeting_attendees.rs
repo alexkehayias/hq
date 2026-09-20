@@ -42,10 +42,7 @@ impl PeriodicJob for ResearchMeetingAttendees {
         let tools: Vec<BoxedToolCall> = vec![
             Box::new(CalendarTool::new(db.clone(), note_search_api_url)),
             Box::new(WebSearchTool::new(note_search_api_url)),
-            Box::new(WebsiteViewTool::new(
-                &config.storage_path,
-                &session_id,
-            )),
+            Box::new(WebsiteViewTool::new(&config.storage_path, &session_id)),
         ];
 
         let calendar_emails = find_all_gmail_auth_emails(db).await.unwrap();

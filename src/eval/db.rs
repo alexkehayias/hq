@@ -1,5 +1,5 @@
+use crate::eval::models::{EvalResult, EvalRun};
 use tokio_rusqlite::Connection;
-use crate::eval::models::{EvalRun, EvalResult};
 
 pub async fn insert_run(db: &Connection, id: &str, name: &str, model: &str) -> anyhow::Result<()> {
     let id = id.to_string();
@@ -17,11 +17,7 @@ pub async fn insert_run(db: &Connection, id: &str, name: &str, model: &str) -> a
     Ok(())
 }
 
-pub async fn update_run_status(
-    db: &Connection,
-    run_id: &str,
-    status: &str,
-) -> anyhow::Result<()> {
+pub async fn update_run_status(db: &Connection, run_id: &str, status: &str) -> anyhow::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let run_id = run_id.to_string();
     let status = status.to_string();
@@ -95,8 +91,9 @@ pub async fn get_run_results(db: &Connection, run_id: &str) -> anyhow::Result<Ve
 pub async fn get_run(db: &Connection, run_id: &str) -> anyhow::Result<Option<EvalRun>> {
     let r_id = run_id.to_string();
 
-    Ok(db.call(move |conn| {
-        match conn.query_row(
+    Ok(db
+        .call(move |conn| {
+            match conn.query_row(
             "SELECT id, name, model, status, started_at, completed_at FROM eval_run WHERE id = ?1",
             [&r_id],
             |row| {
@@ -114,6 +111,6 @@ pub async fn get_run(db: &Connection, run_id: &str) -> anyhow::Result<Option<Eva
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(tokio_rusqlite::Error::Rusqlite(e)),
         }
-    })
-    .await?)
+        })
+        .await?)
 }

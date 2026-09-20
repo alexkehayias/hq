@@ -50,7 +50,11 @@ fn project_file_path(notes_path: &str, project_name: &str) -> Result<PathBuf> {
 }
 
 /// Create a new project file on disk and register it in the database.
-async fn create_project_file(db: &Connection, notes_path: &str, project_name: &str) -> Result<PathBuf> {
+async fn create_project_file(
+    db: &Connection,
+    notes_path: &str,
+    project_name: &str,
+) -> Result<PathBuf> {
     let project_id = Uuid::new_v4().to_string();
     let slug = slugify(project_name)?;
     let today = Local::now().format("%Y-%m-%d");
@@ -67,7 +71,11 @@ async fn create_project_file(db: &Connection, notes_path: &str, project_name: &s
         .title(project_name)
         .category(if special { project_name } else { &slug })
         .date(&today.to_string())
-        .filetags(if special { "private inbox" } else { "private project" })
+        .filetags(if special {
+            "private inbox"
+        } else {
+            "private project"
+        })
         .build()
         .to_string();
     orgmode::atomic_write(&full_path, &content)
@@ -130,10 +138,11 @@ pub async fn run_create(
 
     let file_path = if let Some(project_name) = project {
         // Look up existing project in DB, or create a new project file
-        let project_path = match projects::db::find_project_file(db, notes_path, project_name).await? {
-            Some(path) => path,
-            None => create_project_file(db, notes_path, project_name).await?,
-        };
+        let project_path =
+            match projects::db::find_project_file(db, notes_path, project_name).await? {
+                Some(path) => path,
+                None => create_project_file(db, notes_path, project_name).await?,
+            };
         println!("Created project file: {}", project_path.display());
         orgmode::with_file_lock(&project_path, || async {
             let mut project_content = fs::read_to_string(&project_path).await?;
@@ -204,7 +213,8 @@ pub async fn run_update(
     remove_tags: &[String],
 ) -> Result<()> {
     if let Some(project_ref) = project {
-        let path = projects::db::find_project_file(db, notes_path, project_ref).await?
+        let path = projects::db::find_project_file(db, notes_path, project_ref)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
         let filename = path
             .strip_prefix(notes_path)
@@ -224,7 +234,18 @@ pub async fn run_update(
         )
         .await?;
     } else {
-        orgmode::update_task(db, notes_path, id, None, title, body, status, add_tags, remove_tags).await?;
+        orgmode::update_task(
+            db,
+            notes_path,
+            id,
+            None,
+            title,
+            body,
+            status,
+            add_tags,
+            remove_tags,
+        )
+        .await?;
     }
     println!("Task {id} updated");
 
@@ -285,54 +306,51 @@ pub async fn run_refile(
         anyhow::bail!("Task is already in project '{project}'");
     }
 
-    orgmode::with_file_locks(
-        &[source_path.clone(), target_path.clone()],
-        || async {
-            // Re-read the task under the lock so a concurrent refile can't be
-            // overwritten (lost update) and the git sync never sees a partial file.
-            let location = orgmode::find_task_in_file(&source_path, id).await?;
+    orgmode::with_file_locks(&[source_path.clone(), target_path.clone()], || async {
+        // Re-read the task under the lock so a concurrent refile can't be
+        // overwritten (lost update) and the git sync never sees a partial file.
+        let location = orgmode::find_task_in_file(&source_path, id).await?;
 
-            // Extract the raw headline text (preserves all org-mode structure)
-            let headline_text = &location.content[location.range.start..location.range.end];
+        // Extract the raw headline text (preserves all org-mode structure)
+        let headline_text = &location.content[location.range.start..location.range.end];
 
-            // Remove the headline from the source file
-            let before = &location.content[..location.range.start];
-            let after = &location.content[location.range.end..];
-            let after = after.strip_prefix('\n').unwrap_or(after);
-            let new_source = format!("{before}{after}");
-            orgmode::atomic_write(&location.path, &new_source)
-                .await
-                .context("Failed to write source file after refile")?;
+        // Remove the headline from the source file
+        let before = &location.content[..location.range.start];
+        let after = &location.content[location.range.end..];
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        let new_source = format!("{before}{after}");
+        orgmode::atomic_write(&location.path, &new_source)
+            .await
+            .context("Failed to write source file after refile")?;
 
-            // Append the raw headline verbatim to the target project file
-            let mut target_content = fs::read_to_string(&target_path).await?;
-            if !target_content.ends_with('\n') {
-                target_content.push('\n');
-            }
-            target_content.push_str(headline_text);
+        // Append the raw headline verbatim to the target project file
+        let mut target_content = fs::read_to_string(&target_path).await?;
+        if !target_content.ends_with('\n') {
             target_content.push('\n');
-            orgmode::atomic_write(&target_path, &target_content)
-                .await
-                .context("Failed to write target project file")?;
+        }
+        target_content.push_str(headline_text);
+        target_content.push('\n');
+        orgmode::atomic_write(&target_path, &target_content)
+            .await
+            .context("Failed to write target project file")?;
 
-            println!(
-                "Refiled task {id} ('{}') from {} to {}",
-                location.current_title,
-                location.path.display(),
-                target_path.display()
-            );
+        println!(
+            "Refiled task {id} ('{}') from {} to {}",
+            location.current_title,
+            location.path.display(),
+            target_path.display()
+        );
 
-            // Re-index both files so note_meta and full-text search reflect the
-            // move: the task now lives in target, not source. Done under the
-            // file locks so concurrent refiles sharing these files also
-            // serialize their Tantivy index writes (an IndexWriter is exclusive
-            // per directory, so parallel writers would panic on LockBusy).
-            index_single_file(db, index_path, notes_path, source_path.clone()).await?;
-            index_single_file(db, index_path, notes_path, target_path.clone()).await?;
+        // Re-index both files so note_meta and full-text search reflect the
+        // move: the task now lives in target, not source. Done under the
+        // file locks so concurrent refiles sharing these files also
+        // serialize their Tantivy index writes (an IndexWriter is exclusive
+        // per directory, so parallel writers would panic on LockBusy).
+        index_single_file(db, index_path, notes_path, source_path.clone()).await?;
+        index_single_file(db, index_path, notes_path, target_path.clone()).await?;
 
-            Ok(())
-        },
-    )
+        Ok(())
+    })
     .await?;
 
     Ok(())
@@ -381,7 +399,8 @@ pub async fn run_list(
             let filename = format!("projects/{project_ref}.org");
             (vec![filename], None)
         } else {
-            let path = projects::db::find_project_file(db, notes_path, project_ref).await?
+            let path = projects::db::find_project_file(db, notes_path, project_ref)
+                .await?
                 .ok_or_else(|| anyhow::anyhow!("Project '{project_ref}' not found"))?;
             let filename = path
                 .strip_prefix(notes_path)
@@ -407,7 +426,10 @@ pub async fn run_list(
         return Ok(());
     }
 
-    println!("{:<40} {:<10} {:<24} {}", "ID", "Status", "Project", "Title");
+    println!(
+        "{:<40} {:<10} {:<24} {}",
+        "ID", "Status", "Project", "Title"
+    );
     println!("{}", "-".repeat(100));
     for (id, task_status, project_display, title) in &tasks {
         println!("{id:<40} {task_status:<10} {project_display:<24} {title}");
@@ -482,12 +504,7 @@ async fn list_tasks_from_files(
 /// org-to-markdown converter the tasks API uses (`core::markdown::MarkdownExport`).
 /// With `raw` set, the unparsed org-mode headline is returned verbatim — exactly
 /// as it appears in the file.
-pub async fn run_show(
-    db: &Connection,
-    notes_path: &str,
-    id: &str,
-    raw: bool,
-) -> Result<String> {
+pub async fn run_show(db: &Connection, notes_path: &str, id: &str, raw: bool) -> Result<String> {
     let location = orgmode::find_task(db, notes_path, id).await?;
 
     if raw {
@@ -528,8 +545,16 @@ mod tests {
     fn parsing_config() -> ParseConfig {
         ParseConfig {
             todo_keywords: (
-                vec!["TODO".to_string(), "NEXT".to_string(), "WAITING".to_string()],
-                vec!["DONE".to_string(), "CANCELED".to_string(), "SOMEDAY".to_string()],
+                vec![
+                    "TODO".to_string(),
+                    "NEXT".to_string(),
+                    "WAITING".to_string(),
+                ],
+                vec![
+                    "DONE".to_string(),
+                    "CANCELED".to_string(),
+                    "SOMEDAY".to_string(),
+                ],
             ),
             ..Default::default()
         }
@@ -571,7 +596,10 @@ mod tests {
 
     #[test]
     fn test_slugify_special_chars() {
-        assert_eq!(slugify("Fix bug! (urgent) #42").unwrap(), "fix-bug-urgent-42");
+        assert_eq!(
+            slugify("Fix bug! (urgent) #42").unwrap(),
+            "fix-bug-urgent-42"
+        );
     }
 
     #[test]
@@ -617,9 +645,17 @@ mod tests {
     async fn test_create_standalone_task_with_body() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Buy milk", Some("Milk, eggs, bread"), None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Buy milk",
+            Some("Milk, eggs, bread"),
+            None,
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
         let path = entries[0].as_ref().unwrap().path();
@@ -649,9 +685,17 @@ mod tests {
     async fn test_create_project_task_creates_project_file() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Fix login", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Fix login",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Should create project file with one headline
         let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
@@ -670,14 +714,30 @@ mod tests {
     async fn test_create_second_task_in_project() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Task one", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Task one",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Second create reuses the same project file
-        run_create(&db, &notes, &index, "Task two", None, Some("sprint-12"), "DONE")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Task two",
+            None,
+            Some("sprint-12"),
+            "DONE",
+        )
+        .await
+        .unwrap();
 
         // Single project file with two headlines
         let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
@@ -725,11 +785,21 @@ mod tests {
         assert_eq!(count_tasks_by_title(&db, "Doomed task").await, 1);
 
         // Extract the task ID from the capture file.
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         run_delete(&db, &notes, &index, &id).await.unwrap();
 
@@ -750,14 +820,36 @@ mod tests {
             .unwrap();
 
         // Find the created task's ID
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[task_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let (_, status, _) = parse_headline(&path);
         assert_eq!(status, "DONE");
@@ -767,18 +859,48 @@ mod tests {
     async fn test_update_standalone_title_and_body() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Old title", Some("Old body"), None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Old title",
+            Some("Old body"),
+            None,
+            "TODO",
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[task_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
-        run_update(&db, &notes, &index, &id, Some("New title"), Some("New body"), None, None, &[], &[])            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            Some("New title"),
+            Some("New body"),
+            None,
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let (_, status, title) = parse_headline(&path);
         assert_eq!(status, "TODO");
@@ -792,37 +914,76 @@ mod tests {
     async fn test_update_project_task_status() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Fix bug", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Fix bug",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the task ID from the project file
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         // The headline ID is the second occurrence (after the project-level ID)
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         // Re-parse and check the headline
         let config = parsing_config();
         let org = config.parse(&fs::read_to_string(&path).unwrap());
         let headlines: Vec<_> = org.document().headlines().collect();
         assert_eq!(headlines.len(), 1);
-        assert_eq!(
-            headlines[0].todo_keyword().unwrap().to_string(),
-            "DONE"
-        );
+        assert_eq!(headlines[0].todo_keyword().unwrap().to_string(), "DONE");
     }
 
     #[tokio::test]
     async fn test_update_nonexistent_task() {
         let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_update(&db, &notes, &index, "nonexistent-uuid", None, None, Some("DONE"), None, &[], &[]).await;
+        let result = run_update(
+            &db,
+            &notes,
+            &index,
+            "nonexistent-uuid",
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -836,11 +997,21 @@ mod tests {
         run_create(db, notes, &index, "Test task", None, None, "TODO")
             .await
             .unwrap();
-        let path = fs::read_dir(projects_dir(notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[task_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
         (path, id)
     }
 
@@ -849,9 +1020,20 @@ mod tests {
         let (db, _dir, notes, index) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(
@@ -873,9 +1055,20 @@ mod tests {
         let (db, _dir, notes, index) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &index, &id, None, None, Some("CANCELED"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("CANCELED"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(
@@ -893,9 +1086,20 @@ mod tests {
         let (db, _dir, notes, index) = test_env().await;
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
-        run_update(&db, &notes, &index, &id, None, None, Some("SOMEDAY"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("SOMEDAY"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(
@@ -914,16 +1118,38 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task first
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
         let closed_content = fs::read_to_string(&path).unwrap();
         assert!(closed_content.contains("CLOSED:"));
 
         // Reopen it
-        run_update(&db, &notes, &index, &id, None, None, Some("NEXT"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("NEXT"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let reopened_content = fs::read_to_string(&path).unwrap();
         assert!(
@@ -956,14 +1182,36 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task to populate CLOSED + LOGBOOK
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         // Now update the title only, status unchanged (status=None means preserve)
-        run_update(&db, &notes, &index, &id, Some("New title"), None, None, None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            Some("New title"),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let after_title_update = fs::read_to_string(&path).unwrap();
         // CLOSED should still be present
@@ -995,14 +1243,36 @@ mod tests {
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         // Close the task
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         // "Update" to the same status (DONE -> DONE)
-        run_update(&db, &notes, &index, &id, None, None, Some("DONE"), None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            Some("DONE"),
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         // No new logbook entry should be added when status doesn't change
@@ -1031,7 +1301,12 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         assert!(
             !content.contains("CLOSED:"),
@@ -1055,11 +1330,21 @@ mod tests {
             .await
             .unwrap();
 
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[task_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         run_delete(&db, &notes, &index, &id).await.unwrap();
 
@@ -1072,21 +1357,47 @@ mod tests {
     async fn test_delete_project_task() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Task one", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Task one",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Second create reuses the same project file
-        run_create(&db, &notes, &index, "Task two", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Task two",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         // Find the first headline's ID (second :ID: in file)
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         run_delete(&db, &notes, &index, &id).await.unwrap();
 
@@ -1098,15 +1409,33 @@ mod tests {
     async fn test_delete_last_project_task_leaves_project_file() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Only task", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Only task",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         run_delete(&db, &notes, &index, &id).await.unwrap();
 
@@ -1152,7 +1481,9 @@ mod tests {
         std::fs::create_dir_all(&notes).unwrap();
         std::fs::create_dir_all(format!("{notes}/projects")).unwrap();
         std::fs::create_dir_all(&index).unwrap();
-        let db = crate::core::db::async_db(dir.path().to_str().unwrap()).await.unwrap();
+        let db = crate::core::db::async_db(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
         db.call(|conn| {
             crate::core::db::initialize_db(conn).unwrap();
             Ok(())
@@ -1184,12 +1515,7 @@ mod tests {
     }
 
     /// Insert a project row into note_meta for testing.
-    fn insert_project(
-        conn: &rusqlite::Connection,
-        id: &str,
-        file_name: &str,
-        title: &str,
-    ) {
+    fn insert_project(conn: &rusqlite::Connection, id: &str, file_name: &str, title: &str) {
         conn.execute(
             "INSERT INTO note_meta (id, file_name, title, type, tags)
              VALUES (?1, ?2, ?3, 'note', 'project')",
@@ -1211,7 +1537,13 @@ mod tests {
     async fn test_list_refile_and_capture_with_tasks() {
         let (db, _dir) = test_db().await;
         db.call(|conn| {
-            insert_task(conn, "task-1", "projects/refile.org", "Buy groceries", "todo");
+            insert_task(
+                conn,
+                "task-1",
+                "projects/refile.org",
+                "Buy groceries",
+                "todo",
+            );
             insert_task(conn, "task-2", "projects/refile.org", "Fix login", "done");
             insert_task(conn, "task-3", "projects/capture.org", "Quick idea", "todo");
             Ok(())
@@ -1332,9 +1664,26 @@ mod tests {
 
         // Insert project and tasks into the DB
         db.call(|conn| {
-            insert_project(conn, "proj-1", "2026-05-31--project-my-project.org", "my-project");
-            insert_task(conn, "pt-1", "2026-05-31--project-my-project.org", "First task", "todo");
-            insert_task(conn, "pt-2", "2026-05-31--project-my-project.org", "Second task", "done");
+            insert_project(
+                conn,
+                "proj-1",
+                "2026-05-31--project-my-project.org",
+                "my-project",
+            );
+            insert_task(
+                conn,
+                "pt-1",
+                "2026-05-31--project-my-project.org",
+                "First task",
+                "todo",
+            );
+            insert_task(
+                conn,
+                "pt-2",
+                "2026-05-31--project-my-project.org",
+                "Second task",
+                "done",
+            );
             Ok(())
         })
         .await
@@ -1381,10 +1730,33 @@ mod tests {
         .unwrap();
 
         db.call(|conn| {
-            insert_project(conn, "proj-1", "2026-05-31--project-sprint-12.org", "sprint-12");
-            insert_task(conn, "a", "2026-05-31--project-sprint-12.org", "Task A", "todo");
-            insert_task(conn, "b", "2026-05-31--project-sprint-12.org", "Task B", "done");
-            insert_task(conn, "c", "2026-05-31--project-sprint-12.org", "Task C", "todo");
+            insert_project(
+                conn,
+                "proj-1",
+                "2026-05-31--project-sprint-12.org",
+                "sprint-12",
+            );
+            insert_task(
+                conn,
+                "a",
+                "2026-05-31--project-sprint-12.org",
+                "Task A",
+                "todo",
+            );
+            insert_task(
+                conn,
+                "b",
+                "2026-05-31--project-sprint-12.org",
+                "Task B",
+                "done",
+            );
+            insert_task(
+                conn,
+                "c",
+                "2026-05-31--project-sprint-12.org",
+                "Task C",
+                "todo",
+            );
             Ok(())
         })
         .await
@@ -1402,13 +1774,30 @@ mod tests {
     async fn test_show_renders_markdown() {
         let (db, _dir, notes, index) = test_env().await;
         let (_path, id) = create_todo_task(&db, &notes, &index).await;
-        run_update(&db, &notes, &index, &id, None, Some("Investigate redirect"), None, None, &[], &[])
-            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            Some("Investigate redirect"),
+            None,
+            None,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let output = run_show(&db, &notes, &id, false).await.unwrap();
-        assert!(output.contains("Test task"), "markdown output should contain title: {output}");
-        assert!(output.contains("Investigate redirect"), "markdown output should contain body: {output}");
+        assert!(
+            output.contains("Test task"),
+            "markdown output should contain title: {output}"
+        );
+        assert!(
+            output.contains("Investigate redirect"),
+            "markdown output should contain body: {output}"
+        );
         assert!(
             !output.contains("** ID**"),
             "markdown output should be just the rendered task, not metadata: {output}"
@@ -1419,9 +1808,17 @@ mod tests {
     async fn test_show_raw_returns_headline_verbatim() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Fix login", Some("Investigate redirect"), None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Fix login",
+            Some("Investigate redirect"),
+            None,
+            "TODO",
+        )
+        .await
+        .unwrap();
         let (path, id) = create_todo_task(&db, &notes, &index).await;
 
         let output = run_show(&db, &notes, &id, true).await.unwrap();
@@ -1432,8 +1829,14 @@ mod tests {
             content.contains(output.trim()),
             "raw output should match a substring of the file, got:\n{output}\n---file---\n{content}"
         );
-        assert!(output.starts_with("* TODO Fix login"), "raw output should start with the headline: {output}");
-        assert!(output.contains("Investigate redirect"), "raw output should include body: {output}");
+        assert!(
+            output.starts_with("* TODO Fix login"),
+            "raw output should start with the headline: {output}"
+        );
+        assert!(
+            output.contains("Investigate redirect"),
+            "raw output should include body: {output}"
+        );
     }
 
     #[tokio::test]
@@ -1518,16 +1921,34 @@ Investigate the redirect
     async fn test_update_project_task_by_filename() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Fix bug", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Fix bug",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the task ID from the project file
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         let filename = path
             .strip_prefix(&notes)
@@ -1537,8 +1958,20 @@ Investigate the redirect
             .to_string();
 
         // Update using --project with filename
-        run_update(&db, &notes, &index, &id, Some("Fixed bug"), None, Some("DONE"), Some(&filename), &[], &[])            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            Some("Fixed bug"),
+            None,
+            Some("DONE"),
+            Some(&filename),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let config = parsing_config();
         let org = config.parse(&fs::read_to_string(&path).unwrap());
@@ -1552,24 +1985,59 @@ Investigate the redirect
     async fn test_update_project_task_by_id() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Add tests", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Add tests",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the project file's ID (first :ID: in the file)
-        let path = fs::read_dir(projects_dir(&notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(&notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let first_id_start = content.find(id_marker).unwrap() + id_marker.len();
-        let project_id = content[first_id_start..].lines().next().unwrap().trim().to_string();
+        let project_id = content[first_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Find the task ID (second :ID:)
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let task_id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Update using --project with project ID
-        run_update(&db, &notes, &index, &task_id, None, None, Some("DONE"), Some(&project_id), &[], &[])            .await
-            .unwrap();
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &task_id,
+            None,
+            None,
+            Some("DONE"),
+            Some(&project_id),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
 
         let config = parsing_config();
         let org = config.parse(&fs::read_to_string(&path).unwrap());
@@ -1588,9 +2056,17 @@ Investigate the redirect
             .unwrap();
 
         // Create a project with a different task
-        run_create(&db, &notes, &index, "Project task", None, Some("my-project"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Project task",
+            None,
+            Some("my-project"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the standalone task's ID
         let standalone_path = fs::read_dir(projects_dir(&notes))
@@ -1598,24 +2074,60 @@ Investigate the redirect
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-") { None } else { Some(p) }
+                if n.contains("--project-") {
+                    None
+                } else {
+                    Some(p)
+                }
             })
             .next()
             .unwrap();
         let content = fs::read_to_string(&standalone_path).unwrap();
         let id_start = content.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
-        let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let task_id = content[id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Updating scoped to a project where the task doesn't exist should error
-        let result = run_update(&db, &notes, &index, &task_id, None, None, Some("DONE"), Some("my-project"), &[], &[]).await;
-        assert!(result.is_err(), "should error when task not found in scoped project file");
+        let result = run_update(
+            &db,
+            &notes,
+            &index,
+            &task_id,
+            None,
+            None,
+            Some("DONE"),
+            Some("my-project"),
+            &[],
+            &[],
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "should error when task not found in scoped project file"
+        );
     }
 
     #[tokio::test]
     async fn test_update_project_task_nonexistent_project() {
         let (db, _dir, notes, index) = test_env().await;
 
-        let result = run_update(&db, &notes, &index, "some-id", None, None, Some("DONE"), Some("nonexistent"), &[], &[]).await;
+        let result = run_update(
+            &db,
+            &notes,
+            &index,
+            "some-id",
+            None,
+            None,
+            Some("DONE"),
+            Some("nonexistent"),
+            &[],
+            &[],
+        )
+        .await;
         assert!(result.is_err(), "should error for nonexistent project");
     }
 
@@ -1627,9 +2139,17 @@ Investigate the redirect
     async fn test_refile_standalone_to_project() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Buy groceries", Some("Milk, eggs, bread"), None, "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Buy groceries",
+            Some("Milk, eggs, bread"),
+            None,
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the standalone task's ID
         let standalone_path = fs::read_dir(projects_dir(&notes))
@@ -1637,22 +2157,35 @@ Investigate the redirect
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-") { None } else { Some(p) }
+                if n.contains("--project-") {
+                    None
+                } else {
+                    Some(p)
+                }
             })
             .next()
             .unwrap();
         let content = fs::read_to_string(&standalone_path).unwrap();
         let id_start = content.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
-        let task_id = content[id_start..].lines().next().unwrap().trim().to_string();
+        let task_id = content[id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Refile to a project
-        run_refile(&db, &notes, &index, &task_id, "errands").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "errands")
+            .await
+            .unwrap();
 
         // Task headline should be removed from the standalone file
         // (document-level preamble with #+TITLE: may retain the title)
         let standalone_content = fs::read_to_string(&standalone_path).unwrap();
-        assert!(!standalone_content.contains("Milk, eggs, bread"),
-            "headline body should not remain in source");
+        assert!(
+            !standalone_content.contains("Milk, eggs, bread"),
+            "headline body should not remain in source"
+        );
         assert_eq!(headline_count(&standalone_path), 0);
 
         // Task should now be in the project file
@@ -1661,7 +2194,11 @@ Investigate the redirect
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-errands") { Some(p) } else { None }
+                if n.contains("--project-errands") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
@@ -1676,9 +2213,17 @@ Investigate the redirect
     async fn test_refile_from_one_project_to_another() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Fix login bug", None, Some("sprint-12"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Fix login bug",
+            None,
+            Some("sprint-12"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the task ID from the project file
         let project_path = fs::read_dir(projects_dir(&notes))
@@ -1686,17 +2231,28 @@ Investigate the redirect
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-sprint-12") { Some(p) } else { None }
+                if n.contains("--project-sprint-12") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
         let content = fs::read_to_string(&project_path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let task_id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Refile to a different project
-        run_refile(&db, &notes, &index, &task_id, "security").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "security")
+            .await
+            .unwrap();
 
         // Task should no longer be in the original project
         let sprint_content = fs::read_to_string(&project_path).unwrap();
@@ -1709,7 +2265,11 @@ Investigate the redirect
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-security") { Some(p) } else { None }
+                if n.contains("--project-security") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
@@ -1732,7 +2292,13 @@ Investigate the redirect
         )
         .unwrap();
         db.call(|conn| {
-            insert_task(conn, "archived-task", "projects/work.org_archive", "Old archived task", "done");
+            insert_task(
+                conn,
+                "archived-task",
+                "projects/work.org_archive",
+                "Old archived task",
+                "done",
+            );
             Ok(())
         })
         .await
@@ -1756,16 +2322,27 @@ Investigate the redirect
             .unwrap();
 
         // Find the standalone task's ID (document-level :ID: is first, task is second)
-        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
+        let capture_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("capture.org");
         let capture = fs::read_to_string(&capture_path).unwrap();
         let id_start = capture.match_indices(":ID:       ").nth(1).unwrap().0 + ":ID:       ".len();
-        let task_id = capture[id_start..].lines().next().unwrap().trim().to_string();
+        let task_id = capture[id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Refile to project alpha, then refile again to project beta. The second
         // refile depends on find_task locating the task in alpha — i.e. the index
         // must have been updated by the first refile.
-        run_refile(&db, &notes, &index, &task_id, "alpha").await.unwrap();
-        run_refile(&db, &notes, &index, &task_id, "beta").await.unwrap();
+        run_refile(&db, &notes, &index, &task_id, "alpha")
+            .await
+            .unwrap();
+        run_refile(&db, &notes, &index, &task_id, "beta")
+            .await
+            .unwrap();
 
         // find_task (index-driven, no fallback) must point at the beta file.
         let loc = orgmode::find_task(&db, &notes, &task_id).await.unwrap();
@@ -1781,7 +2358,11 @@ Investigate the redirect
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-beta") { Some(p) } else { None }
+                if n.contains("--project-beta") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
@@ -1795,7 +2376,9 @@ Investigate the redirect
         let (db, _dir, notes, index) = test_env().await;
 
         // Create a task with body text via refile.org
-        let refile_path = std::path::Path::new(&notes).join("projects").join("refile.org");
+        let refile_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("refile.org");
         fs::write(
             &refile_path,
             "\
@@ -1813,10 +2396,14 @@ Consider authentication requirements.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, &notes, refile_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, refile_path.clone())
+            .await
+            .unwrap();
 
         // Refile to a project
-        run_refile(&db, &notes, &index, "task-with-body", "research").await.unwrap();
+        run_refile(&db, &notes, &index, "task-with-body", "research")
+            .await
+            .unwrap();
 
         // Read the project file
         let project_path = fs::read_dir(projects_dir(&notes))
@@ -1824,7 +2411,11 @@ Consider authentication requirements.
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-research") { Some(p) } else { None }
+                if n.contains("--project-research") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
@@ -1845,9 +2436,17 @@ Consider authentication requirements.
     async fn test_refile_to_same_project_errors() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Task in project", None, Some("my-project"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Task in project",
+            None,
+            Some("my-project"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Find the task ID
         let project_path = fs::read_dir(projects_dir(&notes))
@@ -1855,20 +2454,35 @@ Consider authentication requirements.
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-my-project") { Some(p) } else { None }
+                if n.contains("--project-my-project") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
         let content = fs::read_to_string(&project_path).unwrap();
         let id_marker = ":ID:       ";
         let second_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let task_id = content[second_id_start..].lines().next().unwrap().trim().to_string();
+        let task_id = content[second_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Refiling to the same project should fail
         let result = run_refile(&db, &notes, &index, &task_id, "my-project").await;
-        assert!(result.is_err(), "should error when refiling to same project");
         assert!(
-            result.unwrap_err().to_string().contains("already in project"),
+            result.is_err(),
+            "should error when refiling to same project"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already in project"),
             "error should mention already-in-project"
         );
     }
@@ -1886,7 +2500,9 @@ Consider authentication requirements.
         let (db, _dir, notes, index) = test_env().await;
 
         // Simulate a task sitting in refile.org
-        let refile_path = std::path::Path::new(&notes).join("projects").join("refile.org");
+        let refile_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("refile.org");
         fs::write(
             &refile_path,
             "\
@@ -1908,10 +2524,14 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, &notes, refile_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, refile_path.clone())
+            .await
+            .unwrap();
 
         // Refile one task to a project
-        run_refile(&db, &notes, &index, "review-pr-42", "ops").await.unwrap();
+        run_refile(&db, &notes, &index, "review-pr-42", "ops")
+            .await
+            .unwrap();
 
         // The refiled task should be gone from refile.org
         let refile_content = fs::read_to_string(&refile_path).unwrap();
@@ -1928,7 +2548,11 @@ Need to check the middleware changes.
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-ops") { Some(p) } else { None }
+                if n.contains("--project-ops") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .unwrap();
@@ -1949,11 +2573,21 @@ Need to check the middleware changes.
 
         // Create several standalone tasks in capture.org.
         for i in 0..8 {
-            run_create(&db, &notes, &index, &format!("Task {i}"), Some("body"), None, "TODO")
-                .await
-                .unwrap();
+            run_create(
+                &db,
+                &notes,
+                &index,
+                &format!("Task {i}"),
+                Some("body"),
+                None,
+                "TODO",
+            )
+            .await
+            .unwrap();
         }
-        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
+        let capture_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("capture.org");
         let capture = fs::read_to_string(&capture_path).unwrap();
         // Skip the document-level :ID: (first) and collect each task's ID.
         let ids: Vec<String> = capture
@@ -1974,7 +2608,9 @@ Need to check the middleware changes.
             let notes = notes.clone();
             let index = index.clone();
             set.spawn(async move {
-                run_refile(&db, &notes, &index, &id, "errands").await.unwrap();
+                run_refile(&db, &notes, &index, &id, "errands")
+                    .await
+                    .unwrap();
             });
         }
         while let Some(_) = set.join_next().await {}
@@ -1985,7 +2621,11 @@ Need to check the middleware changes.
             .filter_map(|e| {
                 let p = e.unwrap().path();
                 let n = p.file_name().unwrap().to_str().unwrap().to_string();
-                if n.contains("--project-errands") { Some(p) } else { None }
+                if n.contains("--project-errands") {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .next()
             .expect("errands project file should exist");
@@ -2021,7 +2661,9 @@ Need to check the middleware changes.
         let (db, _dir, notes, index) = test_env().await;
 
         // Pre-existing special file with no date in its filename
-        let work_path = std::path::Path::new(&notes).join("projects").join("work.org");
+        let work_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("work.org");
         fs::write(
             &work_path,
             "\
@@ -2038,9 +2680,17 @@ Need to check the middleware changes.
         )
         .unwrap();
 
-        run_create(&db, &notes, &index, "New work task", None, Some("work"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "New work task",
+            None,
+            Some("work"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // No new dated project file — only work.org exists, with both tasks
         let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
@@ -2057,9 +2707,17 @@ Need to check the middleware changes.
     async fn test_create_special_file_creates_bare_name() {
         let (db, _dir, notes, index) = test_env().await;
 
-        run_create(&db, &notes, &index, "Personal task", None, Some("personal"), "TODO")
-            .await
-            .unwrap();
+        run_create(
+            &db,
+            &notes,
+            &index,
+            "Personal task",
+            None,
+            Some("personal"),
+            "TODO",
+        )
+        .await
+        .unwrap();
 
         // Special file is created with its bare name, not a dated --project-* name
         let entries: Vec<_> = fs::read_dir(projects_dir(&notes)).unwrap().collect();
@@ -2074,7 +2732,9 @@ Need to check the middleware changes.
         let (db, _dir, notes, index) = test_env().await;
 
         // Task in capture.org
-        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
+        let capture_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("capture.org");
         fs::write(
             &capture_path,
             "\
@@ -2090,10 +2750,14 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, &notes, capture_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, capture_path.clone())
+            .await
+            .unwrap();
 
         // Pre-existing work.org
-        let work_path = std::path::Path::new(&notes).join("projects").join("work.org");
+        let work_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("work.org");
         fs::write(
             &work_path,
             "\
@@ -2110,7 +2774,9 @@ Need to check the middleware changes.
         )
         .unwrap();
 
-        run_refile(&db, &notes, &index, "special-task", "work").await.unwrap();
+        run_refile(&db, &notes, &index, "special-task", "work")
+            .await
+            .unwrap();
 
         // Task removed from capture.org, appended to work.org
         let capture_content = fs::read_to_string(&capture_path).unwrap();
@@ -2128,7 +2794,9 @@ Need to check the middleware changes.
     async fn test_refile_creates_special_file_when_missing() {
         let (db, _dir, notes, index) = test_env().await;
 
-        let capture_path = std::path::Path::new(&notes).join("projects").join("capture.org");
+        let capture_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("capture.org");
         fs::write(
             &capture_path,
             "\
@@ -2144,12 +2812,18 @@ Need to check the middleware changes.
 ",
         )
         .unwrap();
-        index_single_file(&db, &index, &notes, capture_path.clone()).await.unwrap();
+        index_single_file(&db, &index, &notes, capture_path.clone())
+            .await
+            .unwrap();
 
-        run_refile(&db, &notes, &index, "special-task", "personal").await.unwrap();
+        run_refile(&db, &notes, &index, "special-task", "personal")
+            .await
+            .unwrap();
 
         // personal.org created with bare name (no date prefix)
-        let personal_path = std::path::Path::new(&notes).join("projects").join("personal.org");
+        let personal_path = std::path::Path::new(&notes)
+            .join("projects")
+            .join("personal.org");
         assert!(personal_path.exists());
         let content = fs::read_to_string(&personal_path).unwrap();
         assert!(content.contains("special-task"));
@@ -2168,11 +2842,21 @@ Need to check the middleware changes.
         run_create(db, notes, &index, "Tag test task", None, None, "TODO")
             .await
             .unwrap();
-        let path = fs::read_dir(projects_dir(notes)).unwrap().next().unwrap().unwrap().path();
+        let path = fs::read_dir(projects_dir(notes))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let content = fs::read_to_string(&path).unwrap();
         let id_marker = ":ID:       ";
         let task_id_start = content.match_indices(id_marker).nth(1).unwrap().0 + id_marker.len();
-        let id = content[task_id_start..].lines().next().unwrap().trim().to_string();
+        let id = content[task_id_start..]
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
         (path, id)
     }
 
@@ -2198,12 +2882,27 @@ Need to check the middleware changes.
         // Task starts with no tags
         assert!(read_headline_tags(&path).is_empty());
 
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         let tags = read_headline_tags(&path);
-        assert_eq!(tags, vec!["urgent".to_string()], "added tag should appear, got: {tags:?}");
+        assert_eq!(
+            tags,
+            vec!["urgent".to_string()],
+            "added tag should appear, got: {tags:?}"
+        );
     }
 
     #[tokio::test]
@@ -2212,17 +2911,42 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add a tag first
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         // Then remove it
-        run_update(&db, &notes, &index, &id, None, None, None, None, &[], &["urgent".to_string()])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["urgent".to_string()],
+        )
         .await
         .unwrap();
 
         let tags = read_headline_tags(&path);
-        assert!(tags.is_empty(), "after removing the only tag, headline should have no tags, got: {tags:?}");
+        assert!(
+            tags.is_empty(),
+            "after removing the only tag, headline should have no tags, got: {tags:?}"
+        );
     }
 
     #[tokio::test]
@@ -2231,12 +2955,34 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Start with tags a and b
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["a".to_string(), "b".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["a".to_string(), "b".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         // In one call: add c, remove a — result should be b and c.
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["c".to_string()], &["a".to_string()])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["c".to_string()],
+            &["a".to_string()],
+        )
         .await
         .unwrap();
 
@@ -2250,17 +2996,43 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add one tag so we have something to verify
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         // Removing a tag that isn't set should be a silent no-op (no error).
-        run_update(&db, &notes, &index, &id, None, None, None, None, &[], &["nonexistent".to_string()])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["nonexistent".to_string()],
+        )
         .await
         .unwrap();
 
         let tags = read_headline_tags(&path);
-        assert_eq!(tags, vec!["urgent".to_string()], "nonexistent removal should leave existing tags unchanged, got: {tags:?}");
+        assert_eq!(
+            tags,
+            vec!["urgent".to_string()],
+            "nonexistent removal should leave existing tags unchanged, got: {tags:?}"
+        );
     }
 
     #[tokio::test]
@@ -2269,12 +3041,34 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add a tag
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         // Update the title only (no add/remove tag flags) — existing tags should be preserved.
-        run_update(&db, &notes, &index, &id, Some("Renamed task"), None, None, None, &[], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            Some("Renamed task"),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+        )
         .await
         .unwrap();
 
@@ -2295,17 +3089,43 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Add the same tag that's already present — should dedupe to one.
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         // Add the same tag again — should NOT result in two "urgent" entries.
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         let tags = read_headline_tags(&path);
-        assert_eq!(tags, vec!["urgent".to_string()], "duplicate add should be deduped to a single entry, got: {tags:?}");
+        assert_eq!(
+            tags,
+            vec!["urgent".to_string()],
+            "duplicate add should be deduped to a single entry, got: {tags:?}"
+        );
     }
 
     #[tokio::test]
@@ -2314,7 +3134,18 @@ Need to check the middleware changes.
         let (_path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Adding a tag with spaces should error (validation runs in compute_new_tags).
-        let result = run_update(&db, &notes, &index, &id, None, None, None, None, &["ur gent".to_string()], &[])
+        let result = run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["ur gent".to_string()],
+            &[],
+        )
         .await;
         let err = result.unwrap_err();
         assert!(
@@ -2329,7 +3160,18 @@ Need to check the middleware changes.
         let (_path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Adding a tag with special chars should error.
-        let result = run_update(&db, &notes, &index, &id, None, None, None, None, &["urgent!".to_string()], &[])
+        let result = run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["urgent!".to_string()],
+            &[],
+        )
         .await;
         let err = result.unwrap_err();
         assert!(
@@ -2344,12 +3186,27 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Uppercase tags should be auto-lowercased (not rejected).
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["URGENT".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["URGENT".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         let tags = read_headline_tags(&path);
-        assert_eq!(tags, vec!["urgent".to_string()], "uppercase should be auto-lowercased, got: {tags:?}");
+        assert_eq!(
+            tags,
+            vec!["urgent".to_string()],
+            "uppercase should be auto-lowercased, got: {tags:?}"
+        );
     }
 
     #[tokio::test]
@@ -2358,12 +3215,27 @@ Need to check the middleware changes.
         let (path, id) = create_task_for_tags(&db, &notes, &index).await;
 
         // Underscores are allowed (per user's custom choice).
-        run_update(&db, &notes, &index, &id, None, None, None, None, &["work_project".to_string()], &[])
+        run_update(
+            &db,
+            &notes,
+            &index,
+            &id,
+            None,
+            None,
+            None,
+            None,
+            &["work_project".to_string()],
+            &[],
+        )
         .await
         .unwrap();
 
         let tags = read_headline_tags(&path);
-        assert_eq!(tags, vec!["work_project".to_string()], "underscores should be allowed, got: {tags:?}");
+        assert_eq!(
+            tags,
+            vec!["work_project".to_string()],
+            "underscores should be allowed, got: {tags:?}"
+        );
     }
 
     #[test]

@@ -1,10 +1,10 @@
+use super::registry::{Tool, ToolConfig};
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result, anyhow};
-use super::registry::{Tool, ToolConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 use std::path::PathBuf;
+use tokio::fs;
 
 const MAX_WORDS: usize = 2000;
 const MEMORY_FILENAME: &str = "MEMORY.md";

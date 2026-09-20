@@ -92,9 +92,6 @@ pub(crate) use helpers::BuiltinHelper;
 pub(crate) mod limits;
 pub(crate) use limits::MAX_FORMAT_WIDTH;
 
-
-
-
 pub use alias::{Alias, Unalias};
 pub use assert::Assert;
 pub use awk::Awk;
@@ -1162,7 +1159,8 @@ mod tests {
     #[test]
     fn no_clap_env_in_generated_parsers() {
         let pat = regex::Regex::new(r"\.env\s*\(").unwrap();
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bash/builtins/generated");
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bash/builtins/generated");
         let mut violations = Vec::new();
         for entry in std::fs::read_dir(&dir).expect("read generated dir") {
             let entry = entry.unwrap();
@@ -1205,7 +1203,8 @@ mod tests {
     /// branch that emits it was removed or skipped.
     #[test]
     fn every_generated_parser_emits_env_defaults_table() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bash/builtins/generated");
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bash/builtins/generated");
         let mut missing = Vec::new();
         for entry in std::fs::read_dir(&dir).expect("read generated dir") {
             let entry = entry.unwrap();
@@ -1270,7 +1269,8 @@ mod tests {
     #[test]
     fn generated_args_headers_match_pinned_uutils_revision() {
         let pin = generated::UUTILS_REVISION;
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bash/builtins/generated");
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bash/builtins/generated");
 
         let mut mismatches = Vec::new();
         for entry in std::fs::read_dir(&dir).expect("read generated dir") {

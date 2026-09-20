@@ -15,8 +15,8 @@
 //!    magic env var on the host process, and `assert_fuzz_invariants`
 //!    asserts that magic value never appears in builtin stdout/stderr.
 
-use crate::bash::interpreter::{ControlFlow, ExecResult};
 use crate::bash::Bash;
+use crate::bash::interpreter::{ControlFlow, ExecResult};
 
 /// Cross-tool banned substrings. Any of these in stderr means a leak —
 /// either a Rust `Debug` formatter reached the agent (TM-INF-022) or a

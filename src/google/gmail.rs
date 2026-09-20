@@ -1096,7 +1096,10 @@ mod tests {
 
         let client = reqwest::Client::new();
         let res = client
-            .get(format!("{}/gmail/v1/users/me/messages?q=from%3Aalice", server.url()))
+            .get(format!(
+                "{}/gmail/v1/users/me/messages?q=from%3Aalice",
+                server.url()
+            ))
             .bearer_auth("bad_token")
             .send()
             .await

@@ -22,7 +22,7 @@ use crate::ai::chat::db::{
 };
 use crate::core::fastembed_cache_dir;
 use crate::core::markdown::MarkdownExport;
-use crate::core::orgmode::{is_archive_file, ORG_ARCHIVE_SUFFIX};
+use crate::core::orgmode::{ORG_ARCHIVE_SUFFIX, is_archive_file};
 use crate::core::{AppConfig, git};
 use crate::openai::{Message, Role};
 
@@ -87,16 +87,18 @@ fn parse_note(file_name: &str, source_id: Option<&str>, content: &str) -> Result
     // Org archive files (`work.org_archive`) carry no document-level `:ID:`;
     // fall back to the source file's ID so archived content groups with the
     // note it was archived from.
-    let note_id = document_id(&d).or_else(|| source_id.map(str::to_owned)).with_context(|| {
-        format!(
-            "Missing org-id for note '{file_name}'{}",
-            if is_archive {
-                " and unable to resolve the source file's ID"
-            } else {
-                ""
-            }
-        )
-    })?;
+    let note_id = document_id(&d)
+        .or_else(|| source_id.map(str::to_owned))
+        .with_context(|| {
+            format!(
+                "Missing org-id for note '{file_name}'{}",
+                if is_archive {
+                    " and unable to resolve the source file's ID"
+                } else {
+                    ""
+                }
+            )
+        })?;
     // Archive files carry no `#+TITLE:`; fall back to the source filename stem
     // (e.g. `work` from `projects/work.org_archive`) so parsing succeeds.
     let note_title = p
@@ -104,7 +106,9 @@ fn parse_note(file_name: &str, source_id: Option<&str>, content: &str) -> Result
         .or_else(|| {
             is_archive.then(|| {
                 let stem = file_name.rsplit('/').next().unwrap_or(file_name);
-                stem.strip_suffix(ORG_ARCHIVE_SUFFIX).unwrap_or(stem).to_string()
+                stem.strip_suffix(ORG_ARCHIVE_SUFFIX)
+                    .unwrap_or(stem)
+                    .to_string()
             })
         })
         .context("No title found")?;
@@ -168,16 +172,10 @@ fn parse_note(file_name: &str, source_id: Option<&str>, content: &str) -> Result
         };
         let title = i.title_raw().trim().to_string();
 
-        let id = match i
-            .properties()
-            .and_then(|p| p.get("ID"))
-        {
+        let id = match i.properties().and_then(|p| p.get("ID")) {
             Some(id) => id.to_string(),
             None => {
-                tracing::warn!(
-                    "Skipping heading with missing ID: '{}'",
-                    title
-                );
+                tracing::warn!("Skipping heading with missing ID: '{}'", title);
                 continue;
             }
         };
@@ -759,8 +757,7 @@ pub async fn index_single_file(
     let file_name_for_db = file_name.clone();
     let note_for_db = note.clone();
     db.call(move |conn| {
-        index_note_meta(conn, &file_name_for_db, &note_for_db)
-            .expect("Upserting note meta failed");
+        index_note_meta(conn, &file_name_for_db, &note_for_db).expect("Upserting note meta failed");
         Ok(())
     })
     .await
@@ -1257,7 +1254,6 @@ mod tests {
     }
 
     /// ===== Tests for `delete_chat_session_index` =====
-
     use crate::ai::chat::db::{get_or_create_session, insert_chat_message};
     use crate::ai::chat::models::SessionMode;
     use crate::core::db::{async_db, initialize_db};
@@ -1296,22 +1292,15 @@ mod tests {
         let mut total = 0;
         for mid in message_ids {
             let term = tantivy::Term::from_field_text(id_field, mid);
-            let query = tantivy::query::TermQuery::new(
-                term,
-                tantivy::schema::IndexRecordOption::Basic,
-            );
-            total += searcher
-                .search(&query, &tantivy::collector::Count)
-                .unwrap();
+            let query =
+                tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
+            total += searcher.search(&query, &tantivy::collector::Count).unwrap();
         }
         total
     }
 
     /// Set up a chat session with two messages and index them.
-    async fn setup_session_with_messages(
-        db: &Connection,
-        session_id: &str,
-    ) -> Vec<Message> {
+    async fn setup_session_with_messages(db: &Connection, session_id: &str) -> Vec<Message> {
         get_or_create_session(db, session_id, &[], SessionMode::Chat)
             .await
             .unwrap();
@@ -1345,8 +1334,7 @@ mod tests {
         let s_id = session_id.to_string();
         let message_ids: Vec<String> = db
             .call(move |conn| {
-                let mut stmt =
-                    conn.prepare("SELECT id FROM chat_message WHERE session_id = ?")?;
+                let mut stmt = conn.prepare("SELECT id FROM chat_message WHERE session_id = ?")?;
                 let ids: Vec<String> = stmt
                     .query_map([&s_id], |row| row.get(0))?
                     .filter_map(|r| r.ok())
@@ -1411,7 +1399,10 @@ mod tests {
 
         // Should succeed without indexing anything
         let result = delete_chat_session_index(&db, &index_dir_path, session_id).await;
-        assert!(result.is_ok(), "expected Ok for empty session, got {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected Ok for empty session, got {result:?}"
+        );
     }
 
     #[tokio::test]

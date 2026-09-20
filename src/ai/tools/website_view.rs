@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::registry::{Tool, ToolConfig};
 use crate::core::http::html_to_markdown;
-use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
+use crate::openai::{
+    Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
+};
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
-use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
@@ -50,10 +52,7 @@ impl ToolCall for WebsiteViewTool {
             .context(fn_args.url)
             .expect("Invalid URL");
         let host = url.host_str().expect("Missing host");
-        let port = url
-            .port()
-            .map(|p| format!(":{}", p))
-            .unwrap_or_default();
+        let port = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
         let clean_url = format!("{}://{}{}{}", url.scheme(), host, port, url.path());
 
         // TODO: Rewrite URLs based on rules. For example, use mirrors
@@ -148,7 +147,9 @@ impl ToolCall for WebsiteViewTool {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            let file_path = self.workspace_path.join(format!("website_content_{}.md", timestamp));
+            let file_path = self
+                .workspace_path
+                .join(format!("website_content_{}.md", timestamp));
             fs::write(&file_path, &content).await?;
 
             let truncated: String = content.chars().take(TRUNCATED_PREFIX_CHARS).collect();
@@ -156,7 +157,9 @@ impl ToolCall for WebsiteViewTool {
             Ok(format!(
                 "{}\n\n---\n**Results truncated.** Full content (est. ~{} tokens) written to `{}`. \
                  Use the bash tool to read specific sections from the file.",
-                truncated, estimated_total_tokens, file_path.display(),
+                truncated,
+                estimated_total_tokens,
+                file_path.display(),
             ))
         } else {
             Ok(content)
@@ -178,8 +181,7 @@ impl Tool for WebsiteViewTool {
 
 impl WebsiteViewTool {
     pub fn new(storage_path: &str, session_id: &str) -> Self {
-        let workspace_path =
-            PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
 
         let function = Function {
             name: Self::NAME.to_string(),
@@ -263,10 +265,7 @@ mod tests {
         let err = result.unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
-        assert!(recoverable
-            .unwrap()
-            .message
-            .contains("server error"));
+        assert!(recoverable.unwrap().message.contains("server error"));
     }
 
     #[tokio::test]
@@ -306,9 +305,6 @@ mod tests {
         let err = result.unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
-        assert!(recoverable
-            .unwrap()
-            .message
-            .contains("server error"));
+        assert!(recoverable.unwrap().message.contains("server error"));
     }
 }

@@ -566,7 +566,9 @@ mod tests {
         struct ErrorProvider;
         impl SearchProvider for ErrorProvider {
             fn search(&self, _query: &SearchQuery) -> Result<SearchResults> {
-                Err(crate::bash::error::Error::Io(std::io::Error::other("index corrupted")))
+                Err(crate::bash::error::Error::Io(std::io::Error::other(
+                    "index corrupted",
+                )))
             }
             fn capabilities(&self) -> SearchCapabilities {
                 SearchCapabilities {

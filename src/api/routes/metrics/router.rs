@@ -54,8 +54,8 @@ async fn get_metrics(
     let metric = params.metric.unwrap_or_else(|| "tokens".to_string());
 
     let results = match metric.as_str() {
-        "sessions" => db
-            .call(move |conn| {
+        "sessions" => {
+            db.call(move |conn| {
                 let mut stmt = conn.prepare(
                     r#"
                     SELECT DATE(created_at) AS day, COUNT(*)
@@ -83,7 +83,8 @@ async fn get_metrics(
 
                 Ok(events)
             })
-            .await?,
+            .await?
+        }
         _ => {
             // Aggregate token buckets by calendar day. Legacy rows (migrated
             // from the pre-bucket schema) have 0 in all bucket columns so they

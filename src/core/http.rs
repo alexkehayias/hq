@@ -8,9 +8,9 @@ use std::time::Duration;
 /// [`html_to_markdown`] after making the request independently.
 pub async fn fetch_url_to_markdown(url: &str) -> Result<String> {
     // Validate the URL is well-formed and has a host before fetching
-    let parsed = reqwest::Url::parse(url)
-        .with_context(|| format!("Invalid URL: {url}"))?;
-    parsed.host_str()
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("Invalid URL: {url}"))?;
+    parsed
+        .host_str()
         .ok_or_else(|| anyhow::anyhow!("URL is missing a host: {url}"))?;
 
     let response = reqwest::Client::new()

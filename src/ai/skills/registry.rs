@@ -42,9 +42,9 @@ impl SkillRegistry {
     async fn load_summaries(&mut self) -> Result<()> {
         let dir_path = self.dir_path.clone();
 
-        let meta = fs::metadata(&dir_path).await.map_err(|_| {
-            anyhow!("Skills path '{}' is not a directory", dir_path.display())
-        })?;
+        let meta = fs::metadata(&dir_path)
+            .await
+            .map_err(|_| anyhow!("Skills path '{}' is not a directory", dir_path.display()))?;
 
         if !meta.is_dir() {
             return Err(anyhow!(
@@ -125,9 +125,9 @@ impl SkillRegistry {
     pub async fn load_skill(&self, name: &str) -> Result<Skill> {
         let skill_path = self.dir_path.join(name);
 
-        let meta = fs::metadata(&skill_path).await.map_err(|_| {
-            anyhow!("Skill '{}' not found", name)
-        })?;
+        let meta = fs::metadata(&skill_path)
+            .await
+            .map_err(|_| anyhow!("Skill '{}' not found", name))?;
 
         if !meta.is_dir() {
             return Err(anyhow!("Skill '{}' not found", name));

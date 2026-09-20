@@ -332,10 +332,8 @@ pub async fn delete_chat_session(
             let tx = conn.transaction()?;
 
             // 1. Delete chat messages (FK reference to session)
-            let messages_deleted = tx.execute(
-                "DELETE FROM chat_message WHERE session_id = ?",
-                [&s_id],
-            )?;
+            let messages_deleted =
+                tx.execute("DELETE FROM chat_message WHERE session_id = ?", [&s_id])?;
 
             // 2. Delete session_tag links (linking table cleanup)
             tx.execute("DELETE FROM session_tag WHERE session_id = ?", [&s_id])?;
@@ -382,8 +380,7 @@ mod tests {
         let p = param.to_string();
         let sql_owned = sql.to_string();
         db.call(move |conn| {
-            let count: i64 =
-                conn.query_row(&sql_owned, rusqlite::params![p], |row| row.get(0))?;
+            let count: i64 = conn.query_row(&sql_owned, rusqlite::params![p], |row| row.get(0))?;
             Ok(count)
         })
         .await
@@ -409,7 +406,12 @@ mod tests {
 
         // Verify setup: 1 session, 2 messages
         assert_eq!(
-            count_rows(&db, "SELECT COUNT(*) FROM session WHERE id = ?", "test-session-1").await,
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM session WHERE id = ?",
+                "test-session-1"
+            )
+            .await,
             1
         );
         assert_eq!(
@@ -430,7 +432,12 @@ mod tests {
 
         // Session and messages are gone
         assert_eq!(
-            count_rows(&db, "SELECT COUNT(*) FROM session WHERE id = ?", "test-session-1").await,
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM session WHERE id = ?",
+                "test-session-1"
+            )
+            .await,
             0
         );
         assert_eq!(
@@ -456,7 +463,12 @@ mod tests {
 
         // DB is still empty
         assert_eq!(
-            count_rows(&db, "SELECT COUNT(*) FROM session WHERE id = ?", "nonexistent-id").await,
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM session WHERE id = ?",
+                "nonexistent-id"
+            )
+            .await,
             0
         );
     }
@@ -475,7 +487,9 @@ mod tests {
         .await
         .unwrap();
         let msg = Message::new(Role::User, "Tagged session");
-        insert_chat_message(&db, "test-session-2", &msg).await.unwrap();
+        insert_chat_message(&db, "test-session-2", &msg)
+            .await
+            .unwrap();
 
         // Verify session_tag links exist (2 tags)
         assert_eq!(
@@ -507,9 +521,7 @@ mod tests {
 
         // Tag rows themselves are NOT deleted (shared lookup table)
         let total_tags: i64 = db
-            .call(|conn| {
-                Ok(conn.query_row("SELECT COUNT(*) FROM tag", [], |row| row.get(0))?)
-            })
+            .call(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM tag", [], |row| row.get(0))?))
             .await
             .unwrap();
         assert!(

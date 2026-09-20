@@ -198,9 +198,7 @@ enum TasksCommand {
         remove_tag: Option<String>,
     },
     /// Delete a task by UUID
-    Delete {
-        id: String,
-    },
+    Delete { id: String },
     /// List tasks, optionally filtered by project and/or status
     List {
         /// Project name or ID (looks up by slug or :ID: property)
@@ -228,13 +226,9 @@ enum TasksCommand {
 enum SessionCommand {
     /// Delete a chat session, its messages, search index entries, and
     /// workspace directory
-    Delete {
-        id: String,
-    },
+    Delete { id: String },
     /// Generate (or regenerate) a title and summary for a chat session
-    Summarize {
-        id: String,
-    },
+    Summarize { id: String },
     /// List chat sessions with their IDs and titles
     List {},
 }
@@ -270,8 +264,24 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
     let vec_db_path = format!("{}/db", storage_path);
 
     match cli.command {
-        Some(Command::Init { db, index, notes, skills, workspace }) => {
-            init::run(db, index, notes, skills, workspace, &vec_db_path, &index_path, &notes_path).await?;
+        Some(Command::Init {
+            db,
+            index,
+            notes,
+            skills,
+            workspace,
+        }) => {
+            init::run(
+                db,
+                index,
+                notes,
+                skills,
+                workspace,
+                &vec_db_path,
+                &index_path,
+                &notes_path,
+            )
+            .await?;
         }
         Some(Command::Migrate { db, index }) => {
             migrate::run(db, index, &vec_db_path, &index_path).await?;
@@ -303,8 +313,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             query::run(term, vector, &index_path, &vec_db_path).await?;
         }
         Some(Command::Chat {}) => {
-            let api_hostname =
-                env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let api_hostname = env::var("HQ_LOCAL_LLM_HOST")
+                .unwrap_or_else(|_| "https://api.openai.com".to_string());
             let api_key =
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
@@ -328,8 +338,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             debounce_ms,
             tools,
         }) => {
-            let api_hostname =
-                env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let api_hostname = env::var("HQ_LOCAL_LLM_HOST")
+                .unwrap_or_else(|_| "https://api.openai.com".to_string());
             let api_key =
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
@@ -353,7 +363,12 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             )
             .await?;
         }
-        Some(Command::Develop { name, no_init, no_examples, base_port }) => {
+        Some(Command::Develop {
+            name,
+            no_init,
+            no_examples,
+            base_port,
+        }) => {
             develop::run(name, no_init, no_examples, base_port).await?;
         }
         Some(Command::Auth { service }) => {
@@ -362,10 +377,17 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         Some(Command::Job { id }) => {
             job::run(id).await?;
         }
-        Some(Command::Eval { model, file, dry_run }) => {
-            let api_key = env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
-            let api_hostname = env::var("HQ_LOCAL_LLM_HOST").unwrap_or_else(|_| "https://api.openai.com".to_string());
-            let model = model.unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
+        Some(Command::Eval {
+            model,
+            file,
+            dry_run,
+        }) => {
+            let api_key =
+                env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
+            let api_hostname = env::var("HQ_LOCAL_LLM_HOST")
+                .unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let model = model
+                .unwrap_or_else(|| env::var("HQ_LOCAL_LLM_MODEL").expect("Missing model name"));
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
         }
@@ -382,68 +404,69 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         Some(Command::Tasks { command }) => {
             let task_db = crate::core::db::async_db(&vec_db_path).await?;
             match command {
-            TasksCommand::Create {
-                title,
-                body,
-                project,
-                status,
-            } => {
-                tasks::run_create(
-                    &task_db,
-                    &notes_path,
-                    &index_path,
-                    &title,
-                    body.as_deref(),
-                    project.as_deref(),
-                    &status,
-                )
-                .await?;
+                TasksCommand::Create {
+                    title,
+                    body,
+                    project,
+                    status,
+                } => {
+                    tasks::run_create(
+                        &task_db,
+                        &notes_path,
+                        &index_path,
+                        &title,
+                        body.as_deref(),
+                        project.as_deref(),
+                        &status,
+                    )
+                    .await?;
+                }
+                TasksCommand::Update {
+                    id,
+                    title,
+                    body,
+                    status,
+                    project,
+                    add_tag,
+                    remove_tag,
+                } => {
+                    let add_tags = add_tag
+                        .as_deref()
+                        .map(tasks::parse_tag_list)
+                        .unwrap_or_default();
+                    let remove_tags = remove_tag
+                        .as_deref()
+                        .map(tasks::parse_tag_list)
+                        .unwrap_or_default();
+                    tasks::run_update(
+                        &task_db,
+                        &notes_path,
+                        &index_path,
+                        &id,
+                        title.as_deref(),
+                        body.as_deref(),
+                        status.as_deref(),
+                        project.as_deref(),
+                        &add_tags,
+                        &remove_tags,
+                    )
+                    .await?;
+                }
+                TasksCommand::Delete { id } => {
+                    tasks::run_delete(&task_db, &notes_path, &index_path, &id).await?;
+                }
+                TasksCommand::List { project, status } => {
+                    tasks::run_list(&task_db, &notes_path, project.as_deref(), status.as_deref())
+                        .await?;
+                }
+                TasksCommand::Refile { id, project } => {
+                    tasks::run_refile(&task_db, &notes_path, &index_path, &id, &project).await?;
+                }
+                TasksCommand::Show { id, raw } => {
+                    let result = tasks::run_show(&task_db, &notes_path, &id, raw).await?;
+                    print!("{result}");
+                }
             }
-            TasksCommand::Update {
-                id,
-                title,
-                body,
-                status,
-                project,
-                add_tag,
-                remove_tag,
-            } => {
-                let add_tags = add_tag
-                    .as_deref()
-                    .map(tasks::parse_tag_list)
-                    .unwrap_or_default();
-                let remove_tags = remove_tag
-                    .as_deref()
-                    .map(tasks::parse_tag_list)
-                    .unwrap_or_default();
-                tasks::run_update(
-                    &task_db,
-                    &notes_path,
-                    &index_path,
-                    &id,
-                    title.as_deref(),
-                    body.as_deref(),
-                    status.as_deref(),
-                    project.as_deref(),
-                    &add_tags,
-                    &remove_tags,
-                )
-                .await?;
-            }
-            TasksCommand::Delete { id } => {
-                tasks::run_delete(&task_db, &notes_path, &index_path, &id).await?;
-            }
-            TasksCommand::List { project, status } => {
-                tasks::run_list(&task_db, &notes_path, project.as_deref(), status.as_deref()).await?;
-            }
-            TasksCommand::Refile { id, project } => {
-                tasks::run_refile(&task_db, &notes_path, &index_path, &id, &project).await?;
-            }
-            TasksCommand::Show { id, raw } => {
-                let result = tasks::run_show(&task_db, &notes_path, &id, raw).await?;
-                print!("{result}");
-            }
-        }
         }
         Some(Command::Session { command }) => match command {
             SessionCommand::Delete { id } => {
@@ -454,8 +477,8 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     .unwrap_or_else(|_| "https://api.openai.com".to_string());
                 let api_key = env::var("OPENAI_API_KEY")
                     .unwrap_or_else(|_| "thiswontworkforopenai".to_string());
-                let model = env::var("HQ_LOCAL_LLM_MODEL")
-                    .unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+                let model =
+                    env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
                 let db = crate::core::db::async_db(&vec_db_path).await?;
                 session::run_summarize(db, &api_hostname, &api_key, &model, &id).await?;
             }

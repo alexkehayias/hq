@@ -9,8 +9,8 @@ use tokio_rusqlite::{Connection, Result};
 use zerocopy::IntoBytes;
 
 use crate::ai::chat::db::get_chat_messages_by_ids;
-use crate::core::fastembed_cache_dir;
 use crate::api::public::notes::SearchResult;
+use crate::core::fastembed_cache_dir;
 use crate::openai::Role;
 use crate::search::aql::{self};
 use crate::search::fts::schema::note_schema;

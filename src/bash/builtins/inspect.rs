@@ -7,7 +7,6 @@ use crate::bash::error::Result;
 use crate::bash::fs::FileType;
 use crate::bash::interpreter::ExecResult;
 
-
 /// The file builtin - determine file type.
 ///
 /// Usage: file FILE...
@@ -389,7 +388,6 @@ mod tests {
 
         (fs, cwd, variables)
     }
-
 
     // ==================== file tests ====================
 

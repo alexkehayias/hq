@@ -38,7 +38,10 @@ pub async fn handler(request: Request) -> Response {
     match resolve(request.uri().path()) {
         Some((content_type, bytes)) => (
             [
-                (header::CONTENT_TYPE, HeaderValue::from_str(&content_type).unwrap()),
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_str(&content_type).unwrap(),
+                ),
                 (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
             ],
             bytes,

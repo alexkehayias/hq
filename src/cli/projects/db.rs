@@ -51,7 +51,11 @@ pub fn is_special_file(name: &str) -> bool {
 /// their bare filename (`{name}.org`) when present on disk, since they carry
 /// no date in their filename and are not registered under the
 /// `--project-{slug}.org` scheme.
-pub async fn find_project_file(db: &Connection, notes_path: &str, project_ref: &str) -> Result<Option<PathBuf>> {
+pub async fn find_project_file(
+    db: &Connection,
+    notes_path: &str,
+    project_ref: &str,
+) -> Result<Option<PathBuf>> {
     if is_special_file(project_ref) {
         let path = PathBuf::from(format!("{notes_path}/projects/{project_ref}.org"));
         if path.exists() {
@@ -102,7 +106,9 @@ pub async fn find_project_file(db: &Connection, notes_path: &str, project_ref: &
         }
         // Also try underscore variant for backwards compat
         let underscore_slug = slug.replace('-', "_");
-        if underscore_slug != slug && file_name.ends_with(&format!("--project-{underscore_slug}.org")) {
+        if underscore_slug != slug
+            && file_name.ends_with(&format!("--project-{underscore_slug}.org"))
+        {
             return Ok(Some(PathBuf::from(format!("{notes_path}/{file_name}"))));
         }
     }

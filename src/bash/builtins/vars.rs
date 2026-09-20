@@ -6,7 +6,9 @@ use async_trait::async_trait;
 
 use super::{Builtin, BuiltinSideEffect, Context};
 use crate::bash::error::Result;
-use crate::bash::interpreter::{ExecResult, is_hidden_variable, is_internal_variable, is_valid_var_name};
+use crate::bash::interpreter::{
+    ExecResult, is_hidden_variable, is_internal_variable, is_valid_var_name,
+};
 
 /// unset builtin - remove variables
 pub struct Unset;

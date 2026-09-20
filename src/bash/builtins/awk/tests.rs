@@ -1254,7 +1254,9 @@ async fn test_awk_getline_file_normalizes_cache_key() {
 
 #[tokio::test]
 async fn test_awk_getline_file_builtin_size_limit() {
-    let fs = Arc::new(InMemoryFs::with_limits(crate::bash::fs::FsLimits::unlimited()));
+    let fs = Arc::new(InMemoryFs::with_limits(
+        crate::bash::fs::FsLimits::unlimited(),
+    ));
     fs.write_file(
         std::path::Path::new("/tmp/big.txt"),
         &vec![b'x'; MAX_GETLINE_FILE_BYTES + 1],
@@ -1275,7 +1277,9 @@ async fn test_awk_getline_file_builtin_size_limit() {
 
 #[tokio::test]
 async fn test_awk_getline_file_total_cache_byte_limit() {
-    let fs = Arc::new(InMemoryFs::with_limits(crate::bash::fs::FsLimits::unlimited()));
+    let fs = Arc::new(InMemoryFs::with_limits(
+        crate::bash::fs::FsLimits::unlimited(),
+    ));
     let chunk = MAX_GETLINE_CACHE_BYTES / 2 + 1;
     fs.write_file(std::path::Path::new("/tmp/a.txt"), &vec![b'a'; chunk])
         .await
@@ -1312,9 +1316,10 @@ async fn no_leak_invalid_regex() {
 
 #[tokio::test]
 async fn no_leak_undefined_function_call() {
-    let r =
-        crate::bash::builtins::debug_leak_check::run("echo 1 | awk 'BEGIN { totally_undefined_fn() }'")
-            .await;
+    let r = crate::bash::builtins::debug_leak_check::run(
+        "echo 1 | awk 'BEGIN { totally_undefined_fn() }'",
+    )
+    .await;
     crate::bash::builtins::debug_leak_check::assert_no_leak(
         &r,
         "awk_undefined_function_call",

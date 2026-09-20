@@ -85,7 +85,10 @@ impl Chat {
         // file and change the response text to a summary that points
         // to the file to use other tools to inspect if needed.
 
-        Ok(Message::new_tool_call_response(&tool_call_result, tool_call_id))
+        Ok(Message::new_tool_call_response(
+            &tool_call_result,
+            tool_call_id,
+        ))
     }
 
     async fn handle_tool_calls(
@@ -273,7 +276,8 @@ impl Chat {
                     // catches). Substitutions are inserted in place of
                     // the actual results.
                     let final_msgs =
-                        match Self::run_after_middleware(middleware, &calls, &tool_call_msgs).await {
+                        match Self::run_after_middleware(middleware, &calls, &tool_call_msgs).await
+                        {
                             MiddlewareAction::Continue => tool_call_msgs,
                             MiddlewareAction::Reject(replacements) => replacements,
                             MiddlewareAction::StopWithError(err) => return Err(err),
@@ -359,7 +363,8 @@ impl Chat {
                     // invisible characters (or other issues middleware
                     // catches). Same as the non-streaming path.
                     let final_msgs =
-                        match Self::run_after_middleware(middleware, &calls, &tool_call_msgs).await {
+                        match Self::run_after_middleware(middleware, &calls, &tool_call_msgs).await
+                        {
                             MiddlewareAction::Continue => tool_call_msgs,
                             MiddlewareAction::Reject(replacements) => replacements,
                             MiddlewareAction::StopWithError(err) => return Err(err),
@@ -1220,13 +1225,8 @@ data: [DONE]
     struct StopMiddleware;
     #[async_trait::async_trait]
     impl ToolCallMiddleware for StopMiddleware {
-        async fn before_tool_calls(
-            &self,
-            _transcript: &[Message],
-        ) -> MiddlewareAction {
-            MiddlewareAction::StopWithError(anyhow!(
-                "Middleware stopped"
-            ))
+        async fn before_tool_calls(&self, _transcript: &[Message]) -> MiddlewareAction {
+            MiddlewareAction::StopWithError(anyhow!("Middleware stopped"))
         }
     }
 
@@ -1234,22 +1234,17 @@ data: [DONE]
     struct ContinueMiddleware;
     #[async_trait::async_trait]
     impl ToolCallMiddleware for ContinueMiddleware {
-        async fn before_tool_calls(
-            &self,
-            _transcript: &[Message],
-        ) -> MiddlewareAction {
+        async fn before_tool_calls(&self, _transcript: &[Message]) -> MiddlewareAction {
             MiddlewareAction::Continue
         }
     }
 
     #[tokio::test]
     async fn test_builder_middleware() {
-        let mw: Vec<Box<dyn ToolCallMiddleware>> =
-            vec![Box::new(StopMiddleware)];
+        let mw: Vec<Box<dyn ToolCallMiddleware>> = vec![Box::new(StopMiddleware)];
 
         let builder =
-            ChatBuilder::new("https://api.example.com", "test-key", "gpt-4")
-                .middleware(mw);
+            ChatBuilder::new("https://api.example.com", "test-key", "gpt-4").middleware(mw);
 
         assert_eq!(builder.middleware.len(), 1);
     }
@@ -1291,10 +1286,7 @@ data: [DONE]
         assert!(result.is_ok());
         let messages = result.unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(
-            messages[0].content.as_ref().unwrap(),
-            "Hello!"
-        );
+        assert_eq!(messages[0].content.as_ref().unwrap(), "Hello!");
     }
 
     #[tokio::test]
@@ -1410,10 +1402,7 @@ data: [DONE]
         let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
         let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
             .tools(tools)
-            .middleware(vec![
-                Box::new(ContinueMiddleware),
-                Box::new(StopMiddleware),
-            ])
+            .middleware(vec![Box::new(ContinueMiddleware), Box::new(StopMiddleware)])
             .build();
 
         let msg = Message::new(Role::User, "Search");
@@ -1518,7 +1507,11 @@ data: [DONE]
         let msg = Message::new(Role::User, "Keep searching");
         let result = chat.next_msg(msg).await;
 
-        assert!(result.is_ok(), "Expected OK (model recovers from rejection), got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected OK (model recovers from rejection), got: {:?}",
+            result.err()
+        );
         let messages = result.unwrap();
         // Messages should include:
         // 1. Tool call request (iter 1)
@@ -1533,7 +1526,11 @@ data: [DONE]
         let rejection = &messages[5];
         assert_eq!(*rejection.role(), crate::openai::Role::Tool);
         assert!(
-            rejection.content.as_ref().unwrap().contains("Tool call rejected due to infinite loop"),
+            rejection
+                .content
+                .as_ref()
+                .unwrap()
+                .contains("Tool call rejected due to infinite loop"),
             "Expected rejection message, got: {:?}",
             rejection.content
         );

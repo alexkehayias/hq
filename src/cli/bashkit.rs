@@ -1,5 +1,5 @@
+use crate::bash::{Builtin, BuiltinContext, ExecResult, Result, async_trait};
 use crate::cli;
-use crate::bash::{async_trait, Builtin, BuiltinContext, ExecResult, Result};
 use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
 use std::time::Duration;
@@ -40,8 +40,7 @@ struct CapturedOutput {
 #[async_trait]
 impl Builtin for HqBuiltin {
     async fn execute(&self, ctx: BuiltinContext<'_>) -> Result<ExecResult> {
-        let wants_help = ctx.args.is_empty()
-            || ctx.args.iter().any(|a| a == "--help" || a == "-h");
+        let wants_help = ctx.args.is_empty() || ctx.args.iter().any(|a| a == "--help" || a == "-h");
 
         if wants_help {
             return Ok(ExecResult::ok(FILTERED_HELP));
@@ -188,12 +187,8 @@ where
         // write end reference is not properly closed (e.g. inherited by a
         // background thread). Fall back to empty string on timeout.
         let capture_timeout = Duration::from_secs(5);
-        let captured_stdout = stdout_rx
-            .recv_timeout(capture_timeout)
-            .unwrap_or_default();
-        let captured_stderr = stderr_rx
-            .recv_timeout(capture_timeout)
-            .unwrap_or_default();
+        let captured_stdout = stdout_rx.recv_timeout(capture_timeout).unwrap_or_default();
+        let captured_stderr = stderr_rx.recv_timeout(capture_timeout).unwrap_or_default();
 
         let output = CapturedOutput {
             stdout: captured_stdout,
@@ -214,9 +209,7 @@ mod tests {
 
     /// Create a bash instance with the hq builtin registered.
     fn bash_with_hq() -> Bash {
-        Bash::builder()
-            .builtin("hq", Box::new(HqBuiltin))
-            .build()
+        Bash::builder().builtin("hq", Box::new(HqBuiltin)).build()
     }
 
     #[tokio::test]
