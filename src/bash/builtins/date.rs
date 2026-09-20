@@ -1176,7 +1176,8 @@ mod tests {
     #[tokio::test]
     async fn no_leak_invalid_format() {
         let r =
-            crate::bash::builtins::debug_leak_check::run(r#"date -d 'not a date in any format'"#).await;
+            crate::bash::builtins::debug_leak_check::run(r#"date -d 'not a date in any format'"#)
+                .await;
         crate::bash::builtins::debug_leak_check::assert_no_leak(
             &r,
             "date_invalid_format",

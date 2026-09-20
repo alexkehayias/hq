@@ -14,7 +14,7 @@ mod tests {
     use serial_test::serial;
     use tower::util::ServiceExt;
 
-    use crate::test_utils::{body_to_string, test_app, test_app_with_skills, create_test_skill};
+    use crate::test_utils::{body_to_string, create_test_skill, test_app, test_app_with_skills};
 
     /// Helper: create a test skill with subdirectories (scripts/, references/).
     fn create_test_skill_with_files(base_dir: &Path, name: &str) {
@@ -31,14 +31,16 @@ This skill has scripts and references.
 "#,
             name
         );
-        fs::write(skill_dir.join("SKILL.md"), skill_content)
-            .expect("Failed to write SKILL.md");
+        fs::write(skill_dir.join("SKILL.md"), skill_content).expect("Failed to write SKILL.md");
 
         // Create scripts subdirectory
         let scripts_dir = skill_dir.join("scripts");
         fs::create_dir_all(&scripts_dir).expect("Failed to create scripts dir");
-        fs::write(scripts_dir.join("process.py"), "#!/usr/bin/env python3\nprint('hello')")
-            .expect("Failed to write process.py");
+        fs::write(
+            scripts_dir.join("process.py"),
+            "#!/usr/bin/env python3\nprint('hello')",
+        )
+        .expect("Failed to write process.py");
         fs::write(scripts_dir.join("run.sh"), "#!/bin/bash\necho 'running'")
             .expect("Failed to write run.sh");
 
@@ -169,8 +171,8 @@ This skill has scripts and references.
     async fn it_lists_skill_files_with_subdirectories() {
         use std::sync::{Arc, RwLock};
 
-        use hq::api::{AppState, app};
         use hq::ai::skills::SkillRegistry;
+        use hq::api::{AppState, app};
         use hq::core::AppConfig;
         use hq::core::db::async_db;
 
@@ -214,8 +216,9 @@ This skill has scripts and references.
             openai_api_key: String::from("test-api-key"),
             system_message: String::from("You are a helpful assistant."),
         };
-        let skill_registry =
-            SkillRegistry::new(skills_path.display().to_string()).await.unwrap();
+        let skill_registry = SkillRegistry::new(skills_path.display().to_string())
+            .await
+            .unwrap();
         let app_state = AppState::new(db, app_config, skill_registry);
         let app = app(Arc::new(RwLock::new(app_state)));
 
@@ -455,7 +458,11 @@ This skill has scripts and references.
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_to_string(response.into_body()).await;
-        assert!(body.contains("\"skills\":[]"), "Expected empty skills: {}", body);
+        assert!(
+            body.contains("\"skills\":[]"),
+            "Expected empty skills: {}",
+            body
+        );
 
         // Create a new skill on disk (simulating save_skill)
         let skills_path = state.config.skills_path.clone();

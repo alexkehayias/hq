@@ -558,9 +558,15 @@ fn find_recursive<'a>(
 const OUTPUT_CAP_MSG: &str = "output size limit exceeded";
 
 /// Append `value` to `output`, returning an error if the total would exceed `cap`.
-fn push_find_output(output: &mut String, value: &str, cap: usize) -> crate::bash::error::Result<()> {
+fn push_find_output(
+    output: &mut String,
+    value: &str,
+    cap: usize,
+) -> crate::bash::error::Result<()> {
     if output.len() + value.len() > cap {
-        return Err(crate::bash::error::Error::Execution(OUTPUT_CAP_MSG.to_string()));
+        return Err(crate::bash::error::Error::Execution(
+            OUTPUT_CAP_MSG.to_string(),
+        ));
     }
     output.push_str(value);
     Ok(())
@@ -569,7 +575,9 @@ fn push_find_output(output: &mut String, value: &str, cap: usize) -> crate::bash
 /// Append a single char to `output`, returning an error if the total would exceed `cap`.
 fn push_find_char(output: &mut String, value: char, cap: usize) -> crate::bash::error::Result<()> {
     if output.len() + value.len_utf8() > cap {
-        return Err(crate::bash::error::Error::Execution(OUTPUT_CAP_MSG.to_string()));
+        return Err(crate::bash::error::Error::Execution(
+            OUTPUT_CAP_MSG.to_string(),
+        ));
     }
     output.push(value);
     Ok(())
@@ -585,7 +593,9 @@ fn push_find_line(
 ) -> crate::bash::error::Result<()> {
     let needed = path.len() + terminator.len();
     if output.len() + needed > cap {
-        return Err(crate::bash::error::Error::Execution(OUTPUT_CAP_MSG.to_string()));
+        return Err(crate::bash::error::Error::Execution(
+            OUTPUT_CAP_MSG.to_string(),
+        ));
     }
     output.push_str(path);
     output.push_str(terminator);

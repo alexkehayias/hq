@@ -1,9 +1,9 @@
+use super::registry::{Tool, ToolConfig};
 use crate::ai::prompt::{self, Prompt};
 use crate::api::public;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use super::registry::{Tool, ToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -41,9 +41,7 @@ impl ToolCall for EmailUnreadTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => {
-                return Ok(format!("Error fetching unread emails: {e}"))
-            }
+            Err(e) => return Ok(format!("Error fetching unread emails: {e}")),
         };
 
         let status = resp.status();
@@ -64,7 +62,7 @@ impl ToolCall for EmailUnreadTool {
             Err(e) => {
                 return Ok(format!(
                     "Error fetching unread emails: failed to parse response as JSON: {e}"
-                ))
+                ));
             }
         };
 
@@ -182,7 +180,7 @@ impl ToolCall for EmailSearchTool {
             Err(e) => {
                 return Ok(format!(
                     "Error searching emails: failed to parse response as JSON: {e}"
-                ))
+                ));
             }
         };
 
@@ -222,9 +220,7 @@ impl EmailSearchTool {
                 properties: EmailSearchProps {
                     email: Property {
                         r#type: String::from("string"),
-                        description: String::from(
-                            "The email address of the account to search.",
-                        ),
+                        description: String::from("The email address of the account to search."),
                         r#enum: None,
                     },
                     query: Property {

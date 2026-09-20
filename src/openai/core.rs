@@ -1,13 +1,13 @@
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 
-use std::fmt;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use erased_serde;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::fmt;
 use tracing;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -484,9 +484,7 @@ pub async fn completion_stream(
                                     name: function.name.clone(),
                                     arguments: function.arguments.clone(),
                                 },
-                                r#type: r#type
-                                    .clone()
-                                    .unwrap_or_else(|| "function".to_string()),
+                                r#type: r#type.clone().unwrap_or_else(|| "function".to_string()),
                             };
                             tool_calls.insert(*index, init_tool_call);
                         }

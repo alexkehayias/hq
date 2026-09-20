@@ -1,6 +1,8 @@
-use crate::openai::{Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args};
-use anyhow::{Error, Result};
 use super::registry::{Tool, ToolConfig};
+use crate::openai::{
+    Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
+};
+use anyhow::{Error, Result};
 use async_trait::async_trait;
 use chrono::{Days, Months, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -48,7 +50,9 @@ impl ToolCall for DateTimeTool {
 
         match fn_args.operation {
             DateTimeOperation::CurrentTime => Ok(current_time()),
-            DateTimeOperation::AddDuration => add_duration(fn_args.date, fn_args.days, fn_args.months),
+            DateTimeOperation::AddDuration => {
+                add_duration(fn_args.date, fn_args.days, fn_args.months)
+            }
             DateTimeOperation::TimeUntil => time_until(fn_args.target_datetime, fn_args.date),
         }
     }
@@ -71,7 +75,7 @@ impl DateTimeTool {
         let function = Function {
             name: Self::NAME.to_string(),
             description: String::from(
-                "Get the current date and time, perform calendar math (add days/months to a date), or calculate the duration until a target date/time."
+                "Get the current date and time, perform calendar math (add days/months to a date), or calculate the duration until a target date/time.",
             ),
             parameters: Parameters {
                 r#type: String::from("object"),
@@ -79,7 +83,7 @@ impl DateTimeTool {
                     operation: Property {
                         r#type: String::from("string"),
                         description: String::from(
-                            "The operation to perform: 'current_time' (get current datetime), 'add_duration' (add days/months to a date), or 'time_until' (calculate time until a target)."
+                            "The operation to perform: 'current_time' (get current datetime), 'add_duration' (add days/months to a date), or 'time_until' (calculate time until a target).",
                         ),
                         r#enum: Some(vec![
                             String::from("current_time"),
@@ -90,24 +94,28 @@ impl DateTimeTool {
                     date: Some(Property {
                         r#type: String::from("string"),
                         description: String::from(
-                            "Base date in ISO 8601 format (e.g. '2026-05-23'). Defaults to today. Used by 'add_duration' and 'time_until'."
+                            "Base date in ISO 8601 format (e.g. '2026-05-23'). Defaults to today. Used by 'add_duration' and 'time_until'.",
                         ),
                         r#enum: None,
                     }),
                     days: Some(Property {
                         r#type: String::from("integer"),
-                        description: String::from("Number of days to add (for 'add_duration' operation). Can be negative to subtract days."),
+                        description: String::from(
+                            "Number of days to add (for 'add_duration' operation). Can be negative to subtract days.",
+                        ),
                         r#enum: None,
                     }),
                     months: Some(Property {
                         r#type: String::from("integer"),
-                        description: String::from("Number of months to add (for 'add_duration' operation). Can be negative to subtract months."),
+                        description: String::from(
+                            "Number of months to add (for 'add_duration' operation). Can be negative to subtract months.",
+                        ),
                         r#enum: None,
                     }),
                     target_datetime: Some(Property {
                         r#type: String::from("string"),
                         description: String::from(
-                            "Target date or datetime in ISO 8601 format (e.g. '2026-12-25' or '2026-12-25T15:30:00'). Used by 'time_until' operation."
+                            "Target date or datetime in ISO 8601 format (e.g. '2026-12-25' or '2026-12-25T15:30:00'). Used by 'time_until' operation.",
                         ),
                         r#enum: None,
                     }),
@@ -142,7 +150,11 @@ fn current_time() -> String {
     )
 }
 
-fn add_duration(date: Option<String>, days: Option<i64>, months: Option<i32>) -> Result<String, Error> {
+fn add_duration(
+    date: Option<String>,
+    days: Option<i64>,
+    months: Option<i32>,
+) -> Result<String, Error> {
     let base_date = parse_date_or_today(date)?;
 
     let after_months = match months {
@@ -150,15 +162,25 @@ fn add_duration(date: Option<String>, days: Option<i64>, months: Option<i32>) ->
         Some(m) => base_date.checked_sub_months(Months::new(m.unsigned_abs())),
         None => Some(base_date),
     }
-    .ok_or_else(|| anyhow::Error::from(RecoverableToolError::new("Date overflow when adding months")))?;
+    .ok_or_else(|| {
+        anyhow::Error::from(RecoverableToolError::new(
+            "Date overflow when adding months",
+        ))
+    })?;
 
     let result = match days {
         Some(d) if d >= 0 => after_months
             .checked_add_days(Days::new(d as u64))
-            .ok_or_else(|| anyhow::Error::from(RecoverableToolError::new("Date overflow when adding days"))),
+            .ok_or_else(|| {
+                anyhow::Error::from(RecoverableToolError::new("Date overflow when adding days"))
+            }),
         Some(d) => after_months
             .checked_sub_days(Days::new(d.unsigned_abs()))
-            .ok_or_else(|| anyhow::Error::from(RecoverableToolError::new("Date overflow when subtracting days"))),
+            .ok_or_else(|| {
+                anyhow::Error::from(RecoverableToolError::new(
+                    "Date overflow when subtracting days",
+                ))
+            }),
         None => Ok(after_months),
     }?;
 
@@ -176,10 +198,9 @@ fn time_until(target: Option<String>, date: Option<String>) -> Result<String, Er
     let now = match date {
         Some(d) => {
             let base = parse_date_or_today(Some(d))?;
-            base.and_hms_opt(0, 0, 0)
-                .ok_or_else(|| {
-                    anyhow::Error::from(RecoverableToolError::new("Invalid time conversion"))
-                })?
+            base.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                anyhow::Error::from(RecoverableToolError::new("Invalid time conversion"))
+            })?
         }
         None => Utc::now().naive_utc(),
     };
@@ -400,14 +421,8 @@ mod tests {
         let enum_values = operation["enum"]
             .as_array()
             .expect("enum should be an array");
-        assert!(
-            enum_values.contains(&serde_json::json!("current_time"))
-        );
-        assert!(
-            enum_values.contains(&serde_json::json!("add_duration"))
-        );
-        assert!(
-            enum_values.contains(&serde_json::json!("time_until"))
-        );
+        assert!(enum_values.contains(&serde_json::json!("current_time")));
+        assert!(enum_values.contains(&serde_json::json!("add_duration")));
+        assert!(enum_values.contains(&serde_json::json!("time_until")));
     }
 }

@@ -61,7 +61,9 @@ fn fuzzy_distance(term: &str) -> u8 {
 /// `LowerCaser`, so without this step a query for "Lee" never matches
 /// the indexed token "lee".
 fn tokenize_value(idx: &Index, field: Field, text: &str) -> Vec<String> {
-    let mut analyzer = idx.tokenizer_for_field(field).expect("No tokenizer for field");
+    let mut analyzer = idx
+        .tokenizer_for_field(field)
+        .expect("No tokenizer for field");
     let mut stream = analyzer.token_stream(text);
     let mut out = Vec::new();
     while let Some(t) = stream.next() {
@@ -115,10 +117,7 @@ fn build_field_query(
         if negated {
             Some(Box::new(BooleanQuery::new(vec![
                 (Occur::Must, Box::new(AllQuery)),
-                (
-                    Occur::MustNot,
-                    Box::new(phrase_q) as Box<dyn Query>,
-                ),
+                (Occur::MustNot, Box::new(phrase_q) as Box<dyn Query>),
             ])))
         } else {
             Some(Box::new(phrase_q))
@@ -156,11 +155,7 @@ fn build_field_query(
     }
 }
 
-pub fn aql_to_index_query(
-    idx: &Index,
-    schema: &Schema,
-    expr: &Expr,
-) -> Option<Box<dyn Query>> {
+pub fn aql_to_index_query(idx: &Index, schema: &Schema, expr: &Expr) -> Option<Box<dyn Query>> {
     match expr {
         Expr::Term {
             field: Some(field), ..
@@ -249,10 +244,7 @@ pub fn aql_to_index_query(
             }
         }
         Expr::FieldExists { field, .. } if is_sql_only_field(field) => None,
-        Expr::FieldExists {
-            field,
-            negated,
-        } => {
+        Expr::FieldExists { field, negated } => {
             // `field:` with no value filters for documents that have any
             // non-null value in the field. Tantivy's `ExistsQuery` requires
             // fast fields, which our TEXT | STORED schema doesn't have, so
@@ -263,10 +255,7 @@ pub fn aql_to_index_query(
             if *negated {
                 Some(Box::new(BooleanQuery::from(vec![
                     (Occur::Must, Box::new(AllQuery) as Box<dyn Query>),
-                    (
-                        Occur::MustNot,
-                        Box::new(regex_query) as Box<dyn Query>,
-                    ),
+                    (Occur::MustNot, Box::new(regex_query) as Box<dyn Query>),
                 ])))
             } else {
                 Some(Box::new(regex_query))
@@ -459,7 +448,7 @@ mod tests {
     use crate::search::fts::schema::note_schema;
     use tantivy::directory::RamDirectory;
     use tantivy::schema::{Document as _, TantivyDocument, Value as _};
-    use tantivy::{doc, IndexWriter, ReloadPolicy};
+    use tantivy::{IndexWriter, ReloadPolicy, doc};
 
     /// Build an in-memory Tantivy index with the note schema. Used by
     /// tests that need to exercise tokenization via `tokenizer_for_field`.
@@ -499,7 +488,11 @@ mod tests {
         writer.commit().unwrap();
 
         // Force the reader to see the new doc
-        let reader = idx.reader_builder().reload_policy(ReloadPolicy::Manual).try_into().unwrap();
+        let reader = idx
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .unwrap();
         drop(reader);
     }
 
@@ -528,7 +521,11 @@ mod tests {
             .unwrap();
         writer.commit().unwrap();
 
-        let reader = idx.reader_builder().reload_policy(ReloadPolicy::Manual).try_into().unwrap();
+        let reader = idx
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .unwrap();
         drop(reader);
     }
 
@@ -557,7 +554,11 @@ mod tests {
             .unwrap();
         writer.commit().unwrap();
 
-        let reader = idx.reader_builder().reload_policy(ReloadPolicy::Manual).try_into().unwrap();
+        let reader = idx
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .unwrap();
         drop(reader);
     }
 
@@ -582,7 +583,11 @@ mod tests {
             .map(|(_, addr)| {
                 let doc = searcher.doc::<TantivyDocument>(*addr).unwrap();
                 let named = doc.to_named_doc(&schema).0;
-                named.get("id").unwrap()[0].as_ref().as_str().unwrap().to_string()
+                named.get("id").unwrap()[0]
+                    .as_ref()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
             })
             .collect()
     }
@@ -616,7 +621,10 @@ mod tests {
         let body_field = idx.schema().get_field("body").unwrap();
         // Pure punctuation yields no tokens (SimpleTokenizer strips it)
         let tokens = tokenize_value(&idx, body_field, "!!!");
-        assert!(tokens.is_empty(), "expected empty tokens for punctuation-only input");
+        assert!(
+            tokens.is_empty(),
+            "expected empty tokens for punctuation-only input"
+        );
     }
 
     #[test]
@@ -645,7 +653,10 @@ mod tests {
         );
         let binding = query.unwrap();
         let bq = binding.as_any().downcast_ref::<BooleanQuery>();
-        assert!(bq.is_some(), "top-level query should be a BooleanQuery (And)");
+        assert!(
+            bq.is_some(),
+            "top-level query should be a BooleanQuery (And)"
+        );
     }
 
     #[test]
@@ -655,9 +666,7 @@ mod tests {
         let (_schema, idx) = build_test_index();
         let title_field = idx.schema().get_field("title").unwrap();
         let query = build_token_query(title_field, true, "FMV");
-        let fuzzy = query
-            .as_any()
-            .downcast_ref::<FuzzyTermQuery>();
+        let fuzzy = query.as_any().downcast_ref::<FuzzyTermQuery>();
         assert!(
             fuzzy.is_some(),
             "short term on fuzzy field should be a FuzzyTermQuery"
@@ -671,9 +680,7 @@ mod tests {
         let (_schema, idx) = build_test_index();
         let title_field = idx.schema().get_field("title").unwrap();
         let query = build_token_query(title_field, true, "Sedol");
-        let fuzzy = query
-            .as_any()
-            .downcast_ref::<FuzzyTermQuery>();
+        let fuzzy = query.as_any().downcast_ref::<FuzzyTermQuery>();
         assert!(
             fuzzy.is_some(),
             "long term on fuzzy field should be a FuzzyTermQuery"
@@ -687,9 +694,7 @@ mod tests {
         let (_schema, idx) = build_test_index();
         let body_field = idx.schema().get_field("body").unwrap();
         let query = build_token_query(body_field, false, "FMV");
-        let term_q = query
-            .as_any()
-            .downcast_ref::<TermQuery>();
+        let term_q = query.as_any().downcast_ref::<TermQuery>();
         assert!(
             term_q.is_some(),
             "non-fuzzy field should produce a TermQuery, not FuzzyTermQuery"
@@ -777,7 +782,10 @@ mod tests {
         let (_schema, idx) = build_test_index();
         let body_field = idx.schema().get_field("body").unwrap();
         let query = build_field_query(&idx, body_field, "body", "lee sedol", false, true);
-        assert!(query.is_some(), "negated multi-token should produce a query");
+        assert!(
+            query.is_some(),
+            "negated multi-token should produce a query"
+        );
         let q = query.unwrap();
         let bq = q.as_any().downcast_ref::<BooleanQuery>();
         assert!(
@@ -829,7 +837,12 @@ mod tests {
         // title-fuzzy matched it (poorly). After the fix, body matches
         // too and the doc with "FMV" in its body ranks first.
         let (_schema, idx) = build_test_index();
-        index_doc(&idx, "doc-fmv", "FMV Review", "financial model validation fmv");
+        index_doc(
+            &idx,
+            "doc-fmv",
+            "FMV Review",
+            "financial model validation fmv",
+        );
         index_doc(&idx, "doc-other", "", "completely unrelated body text");
 
         let results = search_top_ids(&idx, "FMV", 10);
@@ -852,7 +865,10 @@ mod tests {
         let (_schema, idx) = build_test_index();
         index_doc(&idx, "doc-phrase", "", "lee sedol beats alphago");
         let results = search_top_ids(&idx, "\"Lee Sedol\"", 10);
-        assert!(!results.is_empty(), "phrase search for '\"Lee Sedol\"' should match");
+        assert!(
+            !results.is_empty(),
+            "phrase search for '\"Lee Sedol\"' should match"
+        );
         assert_eq!(results[0], "doc-phrase");
     }
 
@@ -991,10 +1007,7 @@ mod tests {
         );
 
         let expr = parse_query("-closed:").unwrap();
-        assert_eq!(
-            expr_to_sql(&expr),
-            Some("closed IS NULL".to_string())
-        );
+        assert_eq!(expr_to_sql(&expr), Some("closed IS NULL".to_string()));
     }
 
     #[test]
@@ -1014,9 +1027,21 @@ mod tests {
         index_doc_with_status(&idx, "doc-done", "", "body", "done");
 
         let results = search_top_ids(&idx, "todo:next,todo", 10);
-        assert!(results.contains(&"doc-next".to_string()), "status 'next' should match — got {:?}", results);
-        assert!(results.contains(&"doc-todo".to_string()), "status 'todo' should match — got {:?}", results);
-        assert!(!results.contains(&"doc-done".to_string()), "status 'done' should NOT match — got {:?}", results);
+        assert!(
+            results.contains(&"doc-next".to_string()),
+            "status 'next' should match — got {:?}",
+            results
+        );
+        assert!(
+            results.contains(&"doc-todo".to_string()),
+            "status 'todo' should match — got {:?}",
+            results
+        );
+        assert!(
+            !results.contains(&"doc-done".to_string()),
+            "status 'done' should NOT match — got {:?}",
+            results
+        );
     }
 
     #[test]
@@ -1029,9 +1054,21 @@ mod tests {
         index_doc_with_tags(&idx, "doc-none", "", "irrelevant", "unrelated");
 
         let results = search_top_ids(&idx, "tags:work,urgent", 10);
-        assert!(results.contains(&"doc-both".to_string()), "doc with both tags should match — got {:?}", results);
-        assert!(results.contains(&"doc-one".to_string()), "doc with one of the tags should match — got {:?}", results);
-        assert!(!results.contains(&"doc-none".to_string()), "doc with neither tag should NOT match — got {:?}", results);
+        assert!(
+            results.contains(&"doc-both".to_string()),
+            "doc with both tags should match — got {:?}",
+            results
+        );
+        assert!(
+            results.contains(&"doc-one".to_string()),
+            "doc with one of the tags should match — got {:?}",
+            results
+        );
+        assert!(
+            !results.contains(&"doc-none".to_string()),
+            "doc with neither tag should NOT match — got {:?}",
+            results
+        );
     }
 
     #[test]
@@ -1044,8 +1081,20 @@ mod tests {
         index_doc_with_tags(&idx, "doc-none", "", "irrelevant", "unrelated");
 
         let results = search_top_ids(&idx, "tags:work tags:urgent", 10);
-        assert!(results.contains(&"doc-both".to_string()), "doc with both tags should match — got {:?}", results);
-        assert!(!results.contains(&"doc-one".to_string()), "doc with only one tag should NOT match — got {:?}", results);
-        assert!(!results.contains(&"doc-none".to_string()), "doc with neither tag should NOT match — got {:?}", results);
+        assert!(
+            results.contains(&"doc-both".to_string()),
+            "doc with both tags should match — got {:?}",
+            results
+        );
+        assert!(
+            !results.contains(&"doc-one".to_string()),
+            "doc with only one tag should NOT match — got {:?}",
+            results
+        );
+        assert!(
+            !results.contains(&"doc-none".to_string()),
+            "doc with neither tag should NOT match — got {:?}",
+            results
+        );
     }
 }

@@ -168,7 +168,12 @@ impl Tool for SaveSkillTool {
     fn from_config(conf: &ToolConfig) -> Result<Self> {
         let handle = conf.skill_registry_handle("save_skill")?;
         let skills_dir = conf.skills_dir("save_skill")?;
-        Ok(Self::new(&skills_dir, &conf.storage_path, &conf.session_id, handle))
+        Ok(Self::new(
+            &skills_dir,
+            &conf.storage_path,
+            &conf.session_id,
+            handle,
+        ))
     }
 }
 

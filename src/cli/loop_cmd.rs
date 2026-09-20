@@ -25,7 +25,7 @@
 //! do not subscribe to untrusted publishers if the LLM's bash workspace must
 //! stay isolated.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::io::BufReader;
@@ -76,9 +76,12 @@ pub async fn run(
 
     for channel_id in channels {
         let path = socket_path(storage_path, channel_id)?;
-        let stream = UnixStream::connect(&path)
-            .await
-            .map_err(|_| anyhow!("channel '{}' not found — is the publisher running?", channel_id))?;
+        let stream = UnixStream::connect(&path).await.map_err(|_| {
+            anyhow!(
+                "channel '{}' not found — is the publisher running?",
+                channel_id
+            )
+        })?;
         println!("Subscribed to channel '{}'", channel_id);
 
         let ch_id = channel_id.clone();

@@ -1,9 +1,9 @@
+use super::registry::{Tool, ToolConfig};
+use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
-use super::registry::{Tool, ToolConfig};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -128,9 +128,7 @@ pub async fn run_in_sandbox(command: &str, workspace_path: &Path) -> Result<Bash
         .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
     let fs = Arc::new(PosixFs::new(backend));
 
-    let mut bash = Bash::builder()
-        .builtin("hq", Box::new(HqBuiltin))
-        .build();
+    let mut bash = Bash::builder().builtin("hq", Box::new(HqBuiltin)).build();
     bash.mount(SANDBOX_ROOT, fs)
         .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
 
@@ -156,7 +154,9 @@ mod tests {
     async fn temp_bash_tool() -> BashTool {
         let binding = env::temp_dir();
         let temp_dir = binding.to_string_lossy();
-        tokio::fs::create_dir(format!("{}/workspace", temp_dir)).await.ok();
+        tokio::fs::create_dir(format!("{}/workspace", temp_dir))
+            .await
+            .ok();
         let session_id = Uuid::new_v4().to_string();
         BashTool::new(&temp_dir, &session_id)
     }

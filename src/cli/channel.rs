@@ -20,19 +20,19 @@
 //! Events are visible to any such process; do not send secrets if untrusted
 //! local processes share the host.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use async_stream::stream;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::io::{stdin, AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader, stdin};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 /// Validate a channel ID. Must be non-empty and alphanumeric with dashes/underscores.
@@ -73,7 +73,9 @@ pub fn socket_path(storage_path: &str, id: &str) -> Result<PathBuf> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        Ok(PathBuf::from(storage_path).join("channels").join(format!("{}.sock", id)))
+        Ok(PathBuf::from(storage_path)
+            .join("channels")
+            .join(format!("{}.sock", id)))
     }
 }
 
@@ -198,7 +200,7 @@ fn flush_stdin() {
 pub async fn sigterm() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         if let Ok(mut s) = signal(SignalKind::terminate()) {
             s.recv().await;
         }

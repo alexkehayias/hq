@@ -1,8 +1,8 @@
 use crate::core::db::{async_db, initialize_db};
 use crate::search::index_all;
 use anyhow::Result;
-use tokio::fs;
 use std::path::Path;
+use tokio::fs;
 
 /// Copy example .org notes from the repo into the storage notes directory,
 /// then index them for search. Safe to run multiple times.
@@ -17,13 +17,17 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
     }
 
     // Ensure the target notes, db, and index directories exist
-    fs::create_dir_all(notes_path).await
+    fs::create_dir_all(notes_path)
+        .await
         .unwrap_or_else(|err| println!("Ignoring notes directory create failed: {}", err));
-    fs::create_dir_all(format!("{notes_path}/notes")).await
+    fs::create_dir_all(format!("{notes_path}/notes"))
+        .await
         .unwrap_or_else(|err| println!("Ignoring notes/notes directory create failed: {}", err));
-    fs::create_dir_all(vec_db_path).await
+    fs::create_dir_all(vec_db_path)
+        .await
         .unwrap_or_else(|err| println!("Ignoring vector DB create failed: {}", err));
-    fs::create_dir_all(index_path).await
+    fs::create_dir_all(index_path)
+        .await
         .unwrap_or_else(|err| println!("Ignoring index directory create failed: {}", err));
 
     // Copy each .org file from examples into the notes/ subdirectory
@@ -60,10 +64,7 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
 
     // Ensure the database is initialized
     let db = async_db(vec_db_path).await?;
-    db.call(|conn| {
-        initialize_db(conn)
-    })
-    .await?;
+    db.call(|conn| initialize_db(conn)).await?;
 
     // Index the example notes so they're immediately searchable
     println!("Indexing example notes...");

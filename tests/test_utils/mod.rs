@@ -258,7 +258,9 @@ pub async fn test_app_with_skills() -> Router {
         openai_api_key: String::from("test-api-key"),
         system_message: String::from("You are a helpful assistant."),
     };
-    let skill_registry = SkillRegistry::new(skills_path.display().to_string()).await.unwrap();
+    let skill_registry = SkillRegistry::new(skills_path.display().to_string())
+        .await
+        .unwrap();
     let app_state = AppState::new(db, app_config, skill_registry);
     app(Arc::new(RwLock::new(app_state)))
 }

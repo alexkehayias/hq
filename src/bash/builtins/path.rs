@@ -387,7 +387,9 @@ fn readlink_path_within_limits(fs: &dyn crate::bash::fs::FileSystem, path: &Path
     // latter still caps unlimited backends (e.g. RealFs reports
     // `FsLimits::unlimited()`), so the effective bound is the intersection.
     fs.limits().validate_path(path).is_ok()
-        && crate::bash::fs::FsLimits::default().validate_path(path).is_ok()
+        && crate::bash::fs::FsLimits::default()
+            .validate_path(path)
+            .is_ok()
 }
 
 async fn canonicalize_readlink_path(

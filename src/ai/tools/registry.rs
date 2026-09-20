@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tokio_rusqlite::Connection;
 
 use crate::ai::skills::SkillRegistry;
@@ -202,12 +202,12 @@ mod tests {
         // Skill tools are always registered, but resolving one errors with a
         // clear message when the context has no skill registry.
         let registry = ToolRegistry::builtin(test_context().await);
-        let err = registry
-            .from_str("list_skills")
-            .err()
-            .unwrap()
-            .to_string();
+        let err = registry.from_str("list_skills").err().unwrap().to_string();
         assert!(err.contains("requires a skill registry"));
-        assert!(registry.available_names().contains(&"list_skills".to_string()));
+        assert!(
+            registry
+                .available_names()
+                .contains(&"list_skills".to_string())
+        );
     }
 }

@@ -56,12 +56,7 @@ pub async fn run(
     } else {
         println!("  Creating git worktree...");
         let status = Command::new("git")
-            .args([
-                "worktree", "add",
-                &worktree_path,
-                "main",
-                "-b", &name,
-            ])
+            .args(["worktree", "add", &worktree_path, "main", "-b", &name])
             .status()
             .context("Failed to run git worktree add")?;
         if !status.success() {
@@ -89,7 +84,9 @@ pub async fn run(
         .ok()
         .and_then(|output| {
             if output.status.success() {
-                String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
             } else {
                 None
             }
@@ -134,7 +131,17 @@ pub async fn run(
     // Step 6: Run init
     if !no_init {
         println!("\n--- Running init ---");
-        init::run(true, true, false, true, true, ".hq-data/db", ".hq-data/index", ".hq-data/notes").await?;
+        init::run(
+            true,
+            true,
+            false,
+            true,
+            true,
+            ".hq-data/db",
+            ".hq-data/index",
+            ".hq-data/notes",
+        )
+        .await?;
     }
 
     // Step 7: Load example data
@@ -200,7 +207,9 @@ fn ensure_herdr_server() -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("Failed to spawn herdr server — is herdr installed? https://herdr.dev/docs/install/")?;
+        .context(
+            "Failed to spawn herdr server — is herdr installed? https://herdr.dev/docs/install/",
+        )?;
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -257,7 +266,9 @@ fn find_workspace_for_cwd(worktree_abs: &str) -> Result<Option<(String, String)>
         let pane_output = Command::new("herdr")
             .args(["pane", "list", "--workspace", &workspace_id])
             .output()
-            .with_context(|| format!("Failed to run `herdr pane list --workspace {workspace_id}`"))?;
+            .with_context(|| {
+                format!("Failed to run `herdr pane list --workspace {workspace_id}`")
+            })?;
         if !pane_output.status.success() {
             continue;
         }
@@ -267,14 +278,14 @@ fn find_workspace_for_cwd(worktree_abs: &str) -> Result<Option<(String, String)>
         };
         let panes = pane_json
             .get("result")
-        .and_then(|r| r.get("panes"))
-        .and_then(|p| p.as_array());
+            .and_then(|r| r.get("panes"))
+            .and_then(|p| p.as_array());
         if let Some(panes) = panes {
             for pane in panes {
                 if pane.get("cwd").and_then(|c| c.as_str()) == Some(worktree_abs) {
                     let root_pane = pane
                         .get("pane_id")
-                    .and_then(|v| v.as_str())
+                        .and_then(|v| v.as_str())
                         .with_context(|| format!("pane entry missing pane_id: {pane:?}"))?
                         .to_string();
                     return Ok(Some((workspace_id, root_pane)));
@@ -293,10 +304,14 @@ fn create_herdr_workspace(worktree_abs: &str, name: &str) -> Result<(String, Str
     let zdotdir = format!("{worktree_abs}/.hq-data");
     let output = Command::new("herdr")
         .args([
-            "workspace", "create",
-            "--cwd", worktree_abs,
-            "--label", name,
-            "--env", &format!("ZDOTDIR={zdotdir}"),
+            "workspace",
+            "create",
+            "--cwd",
+            worktree_abs,
+            "--label",
+            name,
+            "--env",
+            &format!("ZDOTDIR={zdotdir}"),
             "--no-focus",
         ])
         .output()
@@ -312,14 +327,14 @@ fn create_herdr_workspace(worktree_abs: &str, name: &str) -> Result<(String, Str
         .context("workspace create response missing result")?;
     let root_pane = result
         .get("root_pane")
-    .and_then(|r| r.get("pane_id"))
-    .and_then(|v| v.as_str())
+        .and_then(|r| r.get("pane_id"))
+        .and_then(|v| v.as_str())
         .context("workspace create response missing result.root_pane.pane_id")?
         .to_string();
     let workspace_id = result
         .get("workspace")
-    .and_then(|w| w.get("workspace_id"))
-    .and_then(|v| v.as_str())
+        .and_then(|w| w.get("workspace_id"))
+        .and_then(|v| v.as_str())
         .context("workspace create response missing result.workspace.workspace_id")?
         .to_string();
     Ok((workspace_id, root_pane))
@@ -347,7 +362,9 @@ fn focus_workspace(workspace_id: &str) -> Result<()> {
         .status()
         .with_context(|| format!("Failed to run `herdr workspace focus {workspace_id}`"))?;
     if !status.success() {
-        eprintln!("  warning: herdr workspace focus failed (attach may show a different workspace)");
+        eprintln!(
+            "  warning: herdr workspace focus failed (attach may show a different workspace)"
+        );
     }
     Ok(())
 }

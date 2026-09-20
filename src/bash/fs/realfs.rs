@@ -146,7 +146,10 @@ impl RealFs {
         // Canonicalize the nearest existing ancestor first so symlink hops in
         // any existing prefix cannot redirect creation outside the mount root.
         let mut nearest_existing = joined.as_path();
-        while !tokio::fs::try_exists(nearest_existing).await.unwrap_or(false) {
+        while !tokio::fs::try_exists(nearest_existing)
+            .await
+            .unwrap_or(false)
+        {
             nearest_existing = nearest_existing.parent().ok_or_else(|| {
                 IoError::new(ErrorKind::PermissionDenied, "path escapes realfs root")
             })?;
@@ -513,7 +516,10 @@ impl FsBackend for RealFs {
         let link_parent = real_link.parent().unwrap_or(&self.root);
         let joined = normalize_host_path(&link_parent.join(target));
         let mut nearest_existing = joined.as_path();
-        while !tokio::fs::try_exists(nearest_existing).await.unwrap_or(false) {
+        while !tokio::fs::try_exists(nearest_existing)
+            .await
+            .unwrap_or(false)
+        {
             nearest_existing = nearest_existing.parent().ok_or_else(|| {
                 IoError::new(
                     ErrorKind::PermissionDenied,
@@ -701,7 +707,9 @@ mod tests {
     #[tokio::test]
     async fn readwrite_can_write() {
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.write(Path::new("/new.txt"), b"new data").await.unwrap();
         let data = fs.read(Path::new("/new.txt")).await.unwrap();
         assert_eq!(data, b"new data");
@@ -710,7 +718,9 @@ mod tests {
     #[tokio::test]
     async fn readwrite_can_mkdir() {
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.mkdir(Path::new("/newdir"), false).await.unwrap();
         assert!(fs.exists(Path::new("/newdir")).await.unwrap());
     }
@@ -718,7 +728,9 @@ mod tests {
     #[tokio::test]
     async fn readwrite_can_remove() {
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.remove(Path::new("/hello.txt"), false).await.unwrap();
         assert!(!fs.exists(Path::new("/hello.txt")).await.unwrap());
     }
@@ -726,7 +738,9 @@ mod tests {
     #[tokio::test]
     async fn readwrite_append() {
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.append(Path::new("/hello.txt"), b" appended")
             .await
             .unwrap();
@@ -762,7 +776,9 @@ mod tests {
     #[tokio::test]
     async fn rename_readwrite() {
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.rename(Path::new("/hello.txt"), Path::new("/renamed.txt"))
             .await
             .unwrap();
@@ -774,7 +790,9 @@ mod tests {
     #[tokio::test]
     async fn copy_readwrite() {
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.copy(Path::new("/hello.txt"), Path::new("/copied.txt"))
             .await
             .unwrap();
@@ -789,7 +807,8 @@ mod tests {
         let result = RealFs::new(
             "/nonexistent/path/that/does/not/exist",
             RealFsMode::ReadOnly,
-        ).await;
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -893,7 +912,9 @@ mod tests {
         // Write to deeply nested non-existent path should create under root,
         // not escape via fallback.
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
 
         // This goes through the fallback (parent doesn't exist).
         // The resolved path must be under root.
@@ -916,7 +937,9 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         symlink(outside.path(), root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs
             .write(Path::new("/link/newdir/pwned.txt"), b"owned")
             .await;
@@ -934,7 +957,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("deep/a/b/c")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs
             .symlink(
                 Path::new("../../../etc/passwd"),
@@ -961,7 +986,9 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         symlink(outside.path(), root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs
             .symlink(Path::new("link/secret.txt"), Path::new("/escape-link"))
             .await;
@@ -990,7 +1017,9 @@ mod tests {
         // so a naive open(O_CREAT) would create outside the mount.
         symlink(&outside_target, root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs.write(Path::new("/link"), b"pwned").await;
         assert!(
             result.is_err(),
@@ -1012,7 +1041,9 @@ mod tests {
         let outside_target = outside.path().join("appendme.txt");
         symlink(&outside_target, root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs.append(Path::new("/link"), b"x").await;
         assert!(result.is_err(), "append through leaf symlink must fail");
         assert!(!outside_target.exists());
@@ -1029,7 +1060,9 @@ mod tests {
         let outside_target = outside.path().join("escaped.txt");
         symlink(&outside_target, root.path().join("dst")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs.copy(Path::new("/src.txt"), Path::new("/dst")).await;
         assert!(result.is_err(), "copy through leaf symlink must fail");
         assert!(!outside_target.exists());
@@ -1047,7 +1080,9 @@ mod tests {
         std::fs::write(root.path().join("victim.txt"), b"original").unwrap();
         symlink("victim.txt", root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         let result = fs.write(Path::new("/link"), b"new").await;
         assert!(
             result.is_err(),
@@ -1064,7 +1099,9 @@ mod tests {
     async fn write_to_plain_path_still_works() {
         // Sanity: the leaf-symlink check must not break ordinary writes.
         let dir = setup();
-        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(dir.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.write(Path::new("/new.txt"), b"plain").await.unwrap();
         assert_eq!(std::fs::read(dir.path().join("new.txt")).unwrap(), b"plain");
     }
@@ -1089,7 +1126,9 @@ mod tests {
         std::fs::write(root.path().join("target.txt"), b"target body").unwrap();
         symlink("target.txt", root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadOnly).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadOnly)
+            .await
+            .unwrap();
         let meta = fs.stat(Path::new("/link")).await.unwrap();
         assert!(
             meta.file_type.is_symlink(),
@@ -1106,7 +1145,9 @@ mod tests {
         std::fs::write(root.path().join("target.txt"), b"target body").unwrap();
         symlink("target.txt", root.path().join("link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadOnly).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadOnly)
+            .await
+            .unwrap();
         let target = fs.read_link(Path::new("/link")).await.unwrap();
         assert_eq!(target, PathBuf::from("target.txt"));
     }
@@ -1123,7 +1164,9 @@ mod tests {
         std::fs::write(root.path().join("real_dir/inside.txt"), b"keep").unwrap();
         symlink("real_dir", root.path().join("dir_link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         fs.remove(Path::new("/dir_link"), true).await.unwrap();
 
         // Symlink unlinked …
@@ -1150,7 +1193,9 @@ mod tests {
         std::fs::write(outside.path().join("victim.txt"), b"important").unwrap();
         symlink(outside.path(), root.path().join("escape_link")).unwrap();
 
-        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite).await.unwrap();
+        let fs = RealFs::new(root.path(), RealFsMode::ReadWrite)
+            .await
+            .unwrap();
         // Removing the link itself should always succeed and never wipe the
         // outside tree. (resolve_no_follow keeps the leaf in-root because
         // only the parent is canonicalized.)
