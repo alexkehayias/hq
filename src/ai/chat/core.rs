@@ -1016,12 +1016,12 @@ data: [DONE]
         assert!(result.is_ok());
         let messages = result.unwrap();
 
-        // Should return the assistant's response (assembled from streamed chunks)
-        // Note: The last chunk with finish_reason="stop" doesn't add content,
-        // so only "Hello World" (not the "!") is assembled
+        // Should return the assistant's response (assembled from streamed chunks).
+        // The last chunk carries content alongside finish_reason="stop", and its
+        // content is included too.
         assert_eq!(messages.len(), 1);
         let content = messages[0].content.as_ref().expect("Should have content");
-        assert_eq!(content, "Hello World");
+        assert_eq!(content, "Hello World!");
 
         // Verify the raw chunks were also sent to the streaming channel
         let mut chunk_count = 0;
