@@ -132,11 +132,13 @@ pub async fn run(
     if !no_init {
         println!("\n--- Running init ---");
         init::run(
-            true,
-            true,
-            false,
-            true,
-            true,
+            init::InitOptions {
+                db: true,
+                index: true,
+                notes: false,
+                skills: true,
+                workspace: true,
+            },
             ".hq-data/db",
             ".hq-data/index",
             ".hq-data/notes",
@@ -399,7 +401,6 @@ mod tests {
         // Use a very high base port that's almost certainly free
         let port = pick_port("127.0.0.1", u16::MAX - 10);
         assert!(port >= u16::MAX - 10, "port should be >= base");
-        assert!(port <= u16::MAX, "port should be <= 65535");
     }
 
     #[test]

@@ -3,16 +3,29 @@ use crate::core::git::maybe_clone_repo;
 use anyhow::Result;
 use tokio::fs;
 
+/// Which components to initialize. Each flag mirrors a `--<name>` CLI option.
+#[derive(Default)]
+pub struct InitOptions {
+    pub db: bool,
+    pub index: bool,
+    pub notes: bool,
+    pub skills: bool,
+    pub workspace: bool,
+}
+
 pub async fn run(
-    db: bool,
-    index: bool,
-    notes: bool,
-    skills: bool,
-    workspace: bool,
+    options: InitOptions,
     vec_db_path: &str,
     index_path: &str,
     notes_path: &str,
 ) -> Result<()> {
+    let InitOptions {
+        db,
+        index,
+        notes,
+        skills,
+        workspace,
+    } = options;
     let storage_path = std::env::var("HQ_STORAGE_PATH").unwrap_or_else(|_| "./".to_string());
 
     if db {

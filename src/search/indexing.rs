@@ -643,7 +643,7 @@ pub async fn index_all(
         // files in subdirectories (notes/, projects/) are locatable.
         let file_name = Arc::new(
             p.strip_prefix(notes_dir_path)
-                .unwrap_or_else(|_| p.as_path())
+                .unwrap_or(p.as_path())
                 .to_str()
                 .unwrap_or_default()
                 .to_owned(),
@@ -738,7 +738,7 @@ pub async fn index_single_file(
 ) -> Result<()> {
     let file_name = file_path
         .strip_prefix(notes_path)
-        .unwrap_or_else(|_| file_path.as_path())
+        .unwrap_or(file_path.as_path())
         .to_str()
         .unwrap_or_default()
         .to_owned();
@@ -1185,7 +1185,7 @@ mod tests {
 
         for entry in fs::read_dir(&examples_dir).unwrap() {
             let path = entry.unwrap().path();
-            if path.extension().map_or(false, |e| e == "org") {
+            if path.extension().is_some_and(|e| e == "org") {
                 let content = fs::read_to_string(&path).unwrap();
                 let result = parse_note("", None, &content);
                 assert!(

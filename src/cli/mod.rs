@@ -272,11 +272,13 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             workspace,
         }) => {
             init::run(
-                db,
-                index,
-                notes,
-                skills,
-                workspace,
+                init::InitOptions {
+                    db,
+                    index,
+                    notes,
+                    skills,
+                    workspace,
+                },
                 &vec_db_path,
                 &index_path,
                 &notes_path,
@@ -350,16 +352,18 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             let db = crate::core::db::async_db(&vec_db_path).await?;
             loop_cmd::run(
                 db,
-                &api_base_url,
-                &api_hostname,
-                &api_key,
-                &model,
-                &storage_path,
-                &vapid_key_path,
-                &channel,
-                &tools,
-                Duration::from_millis(debounce_ms),
-                prompt.as_deref(),
+                loop_cmd::LoopConfig {
+                    api_base_url: &api_base_url,
+                    api_hostname: &api_hostname,
+                    api_key: &api_key,
+                    model: &model,
+                    storage_path: &storage_path,
+                    vapid_key_path: &vapid_key_path,
+                    channels: &channel,
+                    tools: &tools,
+                    debounce: Duration::from_millis(debounce_ms),
+                    system_prompt: prompt.as_deref(),
+                },
             )
             .await?;
         }

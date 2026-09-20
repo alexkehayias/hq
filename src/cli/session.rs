@@ -173,7 +173,7 @@ pub async fn run_list(db: Connection) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<40} {}", "ID", "Title");
+    println!("{:<40} Title", "ID");
     println!("{}", "-".repeat(80));
     for (id, title) in sessions {
         let title = title.unwrap_or_else(|| "—".to_string());

@@ -41,6 +41,21 @@ use crate::cli::channel::{event_stream_from_reader, sigterm, socket_path};
 use crate::openai::{Message, Role};
 use tokio_rusqlite::Connection;
 
+/// Configuration for the event loop, assembled by `run_dispatch` from CLI
+/// args and environment.
+pub struct LoopConfig<'a> {
+    pub api_base_url: &'a str,
+    pub api_hostname: &'a str,
+    pub api_key: &'a str,
+    pub model: &'a str,
+    pub storage_path: &'a str,
+    pub vapid_key_path: &'a str,
+    pub channels: &'a [String],
+    pub tools: &'a [String],
+    pub debounce: Duration,
+    pub system_prompt: Option<&'a str>,
+}
+
 /// Run the loop: subscribe to `channels`, feed events into an LLM chat.
 ///
 /// One reader task per channel merges events into a single mpsc receiver. The
@@ -54,19 +69,20 @@ use tokio_rusqlite::Connection;
 /// All config (LLM endpoint/key/model, channel list, storage path, db) is passed
 /// in by the caller (`mod.rs` run_dispatch); this module does not parse env
 /// vars. The [`ToolConfig`] is constructed here from those arguments.
-pub async fn run(
-    db: Connection,
-    api_base_url: &str,
-    api_hostname: &str,
-    api_key: &str,
-    model: &str,
-    storage_path: &str,
-    vapid_key_path: &str,
-    channels: &[String],
-    tools: &[String],
-    debounce: Duration,
-    system_prompt: Option<&str>,
-) -> Result<()> {
+pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
+    let LoopConfig {
+        api_base_url,
+        api_hostname,
+        api_key,
+        model,
+        storage_path,
+        vapid_key_path,
+        channels,
+        tools,
+        debounce,
+        system_prompt,
+    } = config;
+
     if channels.is_empty() {
         return Err(anyhow!("at least one --channel is required"));
     }
@@ -165,10 +181,10 @@ pub async fn run(
 
                 match chat.next_msg(Message::new(Role::User, &user_msg)).await {
                     Ok(resp) => {
-                        if let Some(msg) = resp.last() {
-                            if let Some(content) = &msg.content {
-                                println!("{}", content);
-                            }
+                        if let Some(msg) = resp.last()
+                            && let Some(content) = &msg.content
+                        {
+                            println!("{}", content);
                         }
                     }
                     Err(e) => eprintln!("chat error: {}", e),

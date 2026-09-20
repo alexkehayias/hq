@@ -57,6 +57,12 @@ pub struct Date {
     offset_seconds: i64,
 }
 
+impl Default for Date {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Date {
     pub fn new() -> Self {
         Self {

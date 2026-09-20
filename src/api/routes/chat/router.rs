@@ -397,7 +397,7 @@ async fn chat_handler(
                     .expect("Unable to read skill registry")
                     .clone();
 
-                match registry.load_skill(&skill_name).await {
+                match registry.load_skill(skill_name).await {
                     Ok(skill) => {
                         let skill_msg = format!(
                             "<skill>\n<name>{name}</name>\n<path>{path}</path>\n{content}</skill>",
@@ -462,7 +462,7 @@ async fn chat_handler(
             // Run a command in the bashkit sandbox and return the output
             let workspace_path =
                 PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
-            let response = match run_in_sandbox(&command, &workspace_path).await {
+            let response = match run_in_sandbox(command, &workspace_path).await {
                 Ok(output) => {
                     let mut parts = Vec::new();
                     parts.push("```".to_string());

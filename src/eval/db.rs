@@ -33,27 +33,19 @@ pub async fn update_run_status(db: &Connection, run_id: &str, status: &str) -> a
     Ok(())
 }
 
-pub async fn insert_result(
-    db: &Connection,
-    id: &str,
-    run_id: &str,
-    case_id: &str,
-    input: &str,
-    output: Option<&str>,
-    passed: bool,
-    error: Option<&str>,
-) -> anyhow::Result<()> {
-    let id = id.to_string();
-    let run_id = run_id.to_string();
-    let case_id = case_id.to_string();
-    let input = input.to_string();
-    let output = output.map(|s| s.to_string());
-    let error = error.map(|s| s.to_string());
-
+pub async fn insert_result(db: &Connection, result: EvalResult) -> anyhow::Result<()> {
     db.call(move |conn| {
         Ok(conn.execute(
             "INSERT INTO eval_result (id, run_id, case_id, input, output, passed, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![id, run_id, case_id, input, output, passed as i32, error],
+            rusqlite::params![
+                result.id,
+                result.run_id,
+                result.case_id,
+                result.input,
+                result.output,
+                result.passed as i32,
+                result.error
+            ],
         )?)
     })
     .await?;

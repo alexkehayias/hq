@@ -126,7 +126,7 @@ impl ToolCall for WebsiteViewTool {
                             .map(|s| format!("Website view failed with HTTP status code {}", s))
                             .unwrap_or_else(|| format!("Website view failed: {}", i));
                         tracing::warn!("{}", msg);
-                        String::from(msg)
+                        msg
                     }
                     _ => anyhow::bail!("Website view failed: {}", e),
                 }

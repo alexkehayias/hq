@@ -35,7 +35,7 @@ pub async fn run(notes_path: &str, index_path: &str, vec_db_path: &str) -> Resul
     if let Ok(mut entries) = fs::read_dir(examples_path).await {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "org") {
+            if path.extension().is_some_and(|ext| ext == "org") {
                 let file_name = path.file_name().unwrap();
                 let dest = Path::new(notes_path).join("notes").join(file_name);
                 match fs::copy(&path, &dest).await {

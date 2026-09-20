@@ -273,10 +273,10 @@ fn walk_directory(
         let path = entry.path();
 
         // Skip hidden files/directories (starting with '.')
-        if let Some(name) = path.file_name() {
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
+        if let Some(name) = path.file_name()
+            && name.to_string_lossy().starts_with('.')
+        {
+            continue;
         }
 
         let relative = path
