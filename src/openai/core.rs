@@ -265,6 +265,9 @@ struct FunctionArgsDelta {
 // OpenAI has two different deltas to handle for tool calls that are
 // slightly different and hard to notice, one with initial fields and
 // then subsequent deltas for streaming the function arguments.
+//
+// `type` is optional: OpenAI sends it on every chunk, but some
+// OpenAI-compatible servers (e.g. ds4) omit it on the argument deltas.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum ToolCallChunk {
@@ -272,12 +275,14 @@ enum ToolCallChunk {
         id: String,
         index: usize,
         function: FunctionInitDelta,
-        r#type: String,
+        #[serde(default)]
+        r#type: Option<String>,
     },
     ArgsDelta {
         index: usize,
         function: FunctionArgsDelta,
-        r#type: String,
+        #[serde(default)]
+        r#type: Option<String>,
     },
 }
 
@@ -299,34 +304,29 @@ struct ToolCallFinal {
     r#type: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum Delta {
-    Content {
-        content: String,
-    },
+// A single streaming delta, modeled as a bag of optional fields rather
+// than an untagged enum. Servers vary in which fields they send (some
+// include `role` with content, some send `reasoning` vs
+// `reasoning_content`, some omit `type` on tool-call deltas) and a
+// delta can carry more than one kind of field at once. A struct handles
+// all of those and ignores unknown fields. An untagged enum with a
+// catch-all variant was tried before, but the empty catch-all silently
+// matched any object it didn't recognize — which truncated the stream
+// whenever a delta failed to parse.
+#[derive(Debug, Default, Deserialize)]
+struct Delta {
+    #[serde(default)]
+    content: Option<String>,
 
-    Reasoning {
-        reasoning: String,
-    },
+    #[serde(default)]
+    reasoning: Option<String>,
 
     // Qwen uses "reasoning_content" instead of "reasoning"
-    ReasoningContent {
-        reasoning_content: String,
-    },
+    #[serde(default)]
+    reasoning_content: Option<String>,
 
-    // Some models send role along with content (e.g., first chunk has role)
-    #[allow(dead_code)]
-    ContentWithRole {
-        role: String,
-        content: Option<String>,
-    },
-
-    ToolCall {
-        tool_calls: Vec<ToolCallChunk>,
-    },
-
-    Stop {},
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCallChunk>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -455,75 +455,57 @@ pub async fn completion_stream(
             })?;
             let choice = chunk.choices.first().expect("Missing choices field");
 
-            match &choice.delta {
-                Delta::Reasoning { reasoning } => {
-                    if choice.finish_reason.is_some() {
-                        break 'outer;
-                    }
-                    reasoning_buf += &reasoning.clone();
-                }
-                // Qwen3.5 sends back `reasoning_content`. This may
-                // also be a breaking API change from LM Studio
-                Delta::ReasoningContent { reasoning_content } => {
-                    if choice.finish_reason.is_some() {
-                        break 'outer;
-                    }
-                    reasoning_buf += &reasoning_content.clone();
-                }
-                Delta::Content { content } => {
-                    if choice.finish_reason.is_some() {
-                        break 'outer;
-                    }
-
-                    content_buf += &content.clone();
-                }
-                Delta::ContentWithRole { role: _, content } => {
-                    if choice.finish_reason.is_some() {
-                        break 'outer;
-                    }
-                    if let Some(c) = content {
-                        content_buf += &c.clone();
-                    }
-                }
-                Delta::ToolCall {
-                    tool_calls: tool_call_deltas,
-                } => {
-                    if choice.finish_reason.is_some() {
-                        break 'outer;
-                    }
-                    for tool_call_delta in tool_call_deltas.iter() {
-                        match tool_call_delta {
-                            ToolCallChunk::Init {
-                                id,
-                                index,
-                                function,
-                                r#type,
-                            } => {
-                                let init_tool_call = ToolCallFinal {
-                                    index: *index,
-                                    id: id.clone(),
-                                    function: FunctionFinal {
-                                        name: function.name.clone(),
-                                        arguments: function.arguments.clone(),
-                                    },
-                                    r#type: r#type.clone(),
-                                };
-                                tool_calls.insert(*index, init_tool_call);
-                            }
-                            ToolCallChunk::ArgsDelta {
-                                index, function, ..
-                            } => {
-                                tool_calls.entry(*index).and_modify(|v| {
-                                    let args = function.arguments.clone();
-                                    v.function.arguments += &args;
-                                });
-                            }
+            // Accumulate every field present in this delta. A single
+            // delta may carry more than one kind of field.
+            if let Some(reasoning) = &choice.delta.reasoning {
+                reasoning_buf += reasoning;
+            }
+            // Qwen3.5 sends back `reasoning_content`. This may
+            // also be a breaking API change from LM Studio
+            if let Some(reasoning_content) = &choice.delta.reasoning_content {
+                reasoning_buf += reasoning_content;
+            }
+            if let Some(content) = &choice.delta.content {
+                content_buf += content;
+            }
+            if let Some(tool_call_deltas) = &choice.delta.tool_calls {
+                for tool_call_delta in tool_call_deltas.iter() {
+                    match tool_call_delta {
+                        ToolCallChunk::Init {
+                            id,
+                            index,
+                            function,
+                            r#type,
+                        } => {
+                            let init_tool_call = ToolCallFinal {
+                                index: *index,
+                                id: id.clone(),
+                                function: FunctionFinal {
+                                    name: function.name.clone(),
+                                    arguments: function.arguments.clone(),
+                                },
+                                r#type: r#type
+                                    .clone()
+                                    .unwrap_or_else(|| "function".to_string()),
+                            };
+                            tool_calls.insert(*index, init_tool_call);
+                        }
+                        ToolCallChunk::ArgsDelta {
+                            index, function, ..
+                        } => {
+                            tool_calls.entry(*index).and_modify(|v| {
+                                v.function.arguments += &function.arguments;
+                            });
                         }
                     }
                 }
-                Delta::Stop {} => {
-                    break 'outer;
-                }
+            }
+
+            // Stop once the server signals the turn is complete. Checked
+            // after accumulating so a final chunk carrying content and a
+            // finish reason isn't dropped.
+            if choice.finish_reason.is_some() {
+                break 'outer;
             }
         }
     }
@@ -737,20 +719,14 @@ mod tests {
     fn test_delta_content_deserialization() {
         let json = r#"{"content":"Hello"}"#;
         let delta: Delta = serde_json::from_str(json).unwrap();
-        match delta {
-            Delta::Content { content } => assert_eq!(content, "Hello"),
-            _ => panic!("Expected Content variant"),
-        }
+        assert_eq!(delta.content.as_deref(), Some("Hello"));
     }
 
     #[test]
     fn test_delta_reasoning_deserialization() {
         let json = r#"{"reasoning":"Thinking..."}"#;
         let delta: Delta = serde_json::from_str(json).unwrap();
-        match delta {
-            Delta::Reasoning { reasoning } => assert_eq!(reasoning, "Thinking..."),
-            _ => panic!("Expected Reasoning variant"),
-        }
+        assert_eq!(delta.reasoning.as_deref(), Some("Thinking..."));
     }
 
     #[test]
@@ -758,22 +734,26 @@ mod tests {
         // Qwen uses "reasoning_content" instead of "reasoning"
         let json = r#"{"reasoning_content":"Thinking..."}"#;
         let delta: Delta = serde_json::from_str(json).unwrap();
-        match delta {
-            Delta::ReasoningContent { reasoning_content } => {
-                assert_eq!(reasoning_content, "Thinking...")
-            }
-            _ => panic!("Expected ReasoningContent variant"),
-        }
+        assert_eq!(delta.reasoning_content.as_deref(), Some("Thinking..."));
     }
 
     #[test]
-    fn test_delta_stop_deserialization() {
+    fn test_delta_empty_deserialization() {
         let json = r#"{}"#;
         let delta: Delta = serde_json::from_str(json).unwrap();
-        match delta {
-            Delta::Stop {} => {}
-            _ => panic!("Expected Stop variant"),
-        }
+        assert!(delta.content.is_none());
+        assert!(delta.reasoning.is_none());
+        assert!(delta.reasoning_content.is_none());
+        assert!(delta.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_delta_ignores_unknown_fields() {
+        // e.g. the leading `{"role":"assistant"}` delta some servers send
+        let json = r#"{"role":"assistant"}"#;
+        let delta: Delta = serde_json::from_str(json).unwrap();
+        assert!(delta.content.is_none());
+        assert!(delta.tool_calls.is_none());
     }
 
     #[test]
@@ -787,12 +767,7 @@ mod tests {
             }]
         }"#;
         let delta: Delta = serde_json::from_str(json).unwrap();
-        match delta {
-            Delta::ToolCall { tool_calls } => {
-                assert_eq!(tool_calls.len(), 1);
-            }
-            _ => panic!("Expected ToolCall variant"),
-        }
+        assert_eq!(delta.tool_calls.unwrap().len(), 1);
     }
 
     #[test]
@@ -814,7 +789,7 @@ mod tests {
                 assert_eq!(id, "call_abc");
                 assert_eq!(index, 0);
                 assert_eq!(function.name, "search");
-                assert_eq!(r#type, "function");
+                assert_eq!(r#type.as_deref(), Some("function"));
             }
             _ => panic!("Expected Init variant"),
         }
@@ -836,7 +811,26 @@ mod tests {
             } => {
                 assert_eq!(index, 0);
                 assert_eq!(function.arguments, r#""q":"test"}"#);
-                assert_eq!(r#type, "function");
+                assert_eq!(r#type.as_deref(), Some("function"));
+            }
+            _ => panic!("Expected ArgsDelta variant"),
+        }
+    }
+
+    #[test]
+    fn test_tool_call_chunk_args_delta_without_type() {
+        // ds4 omits `type` on argument deltas; must still parse as ArgsDelta
+        let json = r#"{"index":0,"function":{"arguments":"{\"city\":\"Paris\"}"}}"#;
+        let chunk: ToolCallChunk = serde_json::from_str(json).unwrap();
+        match chunk {
+            ToolCallChunk::ArgsDelta {
+                index,
+                function,
+                r#type,
+            } => {
+                assert_eq!(index, 0);
+                assert_eq!(function.arguments, r#"{"city":"Paris"}"#);
+                assert!(r#type.is_none());
             }
             _ => panic!("Expected ArgsDelta variant"),
         }
@@ -1062,6 +1056,128 @@ data: [DONE]
         mock.assert();
         assert!(result.is_ok());
         assert!(result.unwrap().unwrap().is_ok());
+    }
+
+    // Regression test for ds4 streaming tool calls.
+    // Unlike the OpenAI fixture, ds4 emits a leading `{"role":"assistant"}`
+    // delta, streams content before the tool call, omits `type` on the
+    // argument deltas, sends the tool-call init chunk with an empty
+    // `arguments` string, and ends with `finish_reason:"tool_calls"` on an
+    // empty delta. Previously the argument deltas failed to parse and were
+    // silently swallowed by a catch-all `Stop` variant, truncating the stream
+    // and leaving the tool arguments empty.
+    #[tokio::test]
+    async fn test_completion_stream_ds4_tool_call() {
+        let mut server = mockito::Server::new_async().await;
+
+        let sse_response = r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"I'll check the weather in Paris for you."},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_47c4859f7facaccd5f14a35ddedda70e","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"city\":\""}}]},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"Paris"}}]},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_response)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "What is the weather in Paris?")];
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_url = server.url();
+
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            completion_stream(tx, &messages, &None, server_url.as_str(), "test-key", "m"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        mock.assert();
+
+        let calls = result["choices"][0]["message"]["tool_calls"]
+            .as_array()
+            .expect("expected tool_calls in response");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["name"], "get_weather");
+        assert_eq!(calls[0]["function"]["arguments"], r#"{"city":"Paris"}"#);
+    }
+
+    // Regression test for the omlx inference server. It differs from both
+    // OpenAI and ds4: it returns the entire tool call (name and complete
+    // arguments) in a single Init chunk rather than streaming the arguments.
+    // It also interleaves `keepalive` chunks carrying a role+empty-content
+    // delta, a role-only delta with no `finish_reason` key at all, and
+    // `reasoning_content` deltas. It still ends with an empty delta carrying
+    // `finish_reason`, followed by a usage chunk with an empty `choices` array
+    // that must not be parsed.
+    #[tokio::test]
+    async fn test_completion_stream_omlx_tool_call() {
+        let mut server = mockito::Server::new_async().await;
+
+        let sse_response = r#"data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"keepalive","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"reasoning_content":"The user wants the weather."}}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"\n\n"}}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_085bd900","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris\"}"}}]}}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+data: [DONE]
+
+"#;
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_response)
+            .create();
+
+        let messages = vec![Message::new(Role::User, "What is the weather in Paris?")];
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_url = server.url();
+
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            completion_stream(tx, &messages, &None, server_url.as_str(), "test-key", "m"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        mock.assert();
+
+        let calls = result["choices"][0]["message"]["tool_calls"]
+            .as_array()
+            .expect("expected tool_calls in response");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["name"], "get_weather");
+        assert_eq!(calls[0]["function"]["arguments"], r#"{"city": "Paris"}"#);
     }
 
     #[tokio::test]
