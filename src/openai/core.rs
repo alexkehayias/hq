@@ -267,7 +267,7 @@ struct FunctionArgsDelta {
 // then subsequent deltas for streaming the function arguments.
 //
 // `type` is optional: OpenAI sends it on every chunk, but some
-// OpenAI-compatible servers omit it on the argument deltas.
+// OpenAI-compatible servers (e.g. ds4) omit it on the argument deltas.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum ToolCallChunk {
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_chunk_args_delta_without_type() {
-        // Some servers omit `type` on argument deltas; must still parse as ArgsDelta
+        // ds4 omits `type` on argument deltas; must still parse as ArgsDelta
         let json = r#"{"index":0,"function":{"arguments":"{\"city\":\"Paris\"}"}}"#;
         let chunk: ToolCallChunk = serde_json::from_str(json).unwrap();
         match chunk {
@@ -1058,15 +1058,16 @@ data: [DONE]
         assert!(result.unwrap().unwrap().is_ok());
     }
 
-    // Regression test for a server that streams tool-call argument deltas
-    // without the `type` field. Unlike the OpenAI fixture, it emits a leading
-    // `{"role":"assistant"}` delta, streams content before the tool call,
-    // sends the tool-call init chunk with an empty `arguments` string, then
-    // streams the arguments in separate deltas that omit `type`. Previously
-    // those deltas failed to parse and were silently swallowed by a catch-all
-    // `Stop` variant, truncating the stream and leaving the arguments empty.
+    // Regression test for ds4 streaming tool calls.
+    // Unlike the OpenAI fixture, ds4 emits a leading `{"role":"assistant"}`
+    // delta, streams content before the tool call, omits `type` on the
+    // argument deltas, sends the tool-call init chunk with an empty
+    // `arguments` string, and ends with `finish_reason:"tool_calls"` on an
+    // empty delta. Previously the argument deltas failed to parse and were
+    // silently swallowed by a catch-all `Stop` variant, truncating the stream
+    // and leaving the tool arguments empty.
     #[tokio::test]
-    async fn test_completion_stream_split_args_without_type_tool_call() {
+    async fn test_completion_stream_ds4_tool_call() {
         let mut server = mockito::Server::new_async().await;
 
         let sse_response = r#"data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
@@ -1120,15 +1121,16 @@ data: [DONE]
         assert_eq!(calls[0]["function"]["arguments"], r#"{"city":"Paris"}"#);
     }
 
-    // Regression test for a server that returns the entire tool call (name and
-    // complete arguments) in a single Init chunk rather than streaming the
-    // arguments. It also interleaves `keepalive` chunks carrying a
-    // role+empty-content delta, a role-only delta with no `finish_reason` key
-    // at all, and `reasoning_content` deltas. It still ends with an empty delta
-    // carrying `finish_reason`, followed by a usage chunk with an empty
-    // `choices` array that must not be parsed.
+    // Regression test for the omlx inference server. It differs from both
+    // OpenAI and ds4: it returns the entire tool call (name and complete
+    // arguments) in a single Init chunk rather than streaming the arguments.
+    // It also interleaves `keepalive` chunks carrying a role+empty-content
+    // delta, a role-only delta with no `finish_reason` key at all, and
+    // `reasoning_content` deltas. It still ends with an empty delta carrying
+    // `finish_reason`, followed by a usage chunk with an empty `choices` array
+    // that must not be parsed.
     #[tokio::test]
-    async fn test_completion_stream_single_chunk_tool_call() {
+    async fn test_completion_stream_omlx_tool_call() {
         let mut server = mockito::Server::new_async().await;
 
         let sse_response = r#"data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"keepalive","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
