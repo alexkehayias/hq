@@ -22,6 +22,7 @@ use crate::ai::chat::db::{
 };
 use crate::core::fastembed_cache_dir;
 use crate::core::markdown::MarkdownExport;
+use crate::core::orgmode::{is_archive_file, ORG_ARCHIVE_SUFFIX};
 use crate::core::{AppConfig, git};
 use crate::openai::{Message, Role};
 
@@ -69,15 +70,44 @@ struct Note {
     headings: Vec<Heading>,
 }
 
-/// Parse the content into a `Note`
-fn parse_note(content: &str) -> Result<Note> {
+/// Parse the content into a `Note`.
+///
+/// `file_name` is the note's path relative to the notes root. `source_id` is
+/// the document-level `:ID:` of the note an archive file was archived from
+/// (e.g. `work.org` for `work.org_archive`); it is used only when the content
+/// itself carries no `:ID:`. Resolution is the caller's responsibility so this
+/// stays free of file I/O.
+fn parse_note(file_name: &str, source_id: Option<&str>, content: &str) -> Result<Note> {
     let config = crate::org::todo_keywords_config();
     let p = config.parse(content);
     let d = p.document();
 
-    let props = d.properties().context("Missing property drawer")?;
-    let note_id = props.get("ID").context("Missing org-id")?.to_string();
-    let note_title = p.title().context("No title found")?;
+    let is_archive = is_archive_file(file_name);
+
+    // Org archive files (`work.org_archive`) carry no document-level `:ID:`;
+    // fall back to the source file's ID so archived content groups with the
+    // note it was archived from.
+    let note_id = document_id(&d).or_else(|| source_id.map(str::to_owned)).with_context(|| {
+        format!(
+            "Missing org-id for note '{file_name}'{}",
+            if is_archive {
+                " and unable to resolve the source file's ID"
+            } else {
+                ""
+            }
+        )
+    })?;
+    // Archive files carry no `#+TITLE:`; fall back to the source filename stem
+    // (e.g. `work` from `projects/work.org_archive`) so parsing succeeds.
+    let note_title = p
+        .title()
+        .or_else(|| {
+            is_archive.then(|| {
+                let stem = file_name.rsplit('/').next().unwrap_or(file_name);
+                stem.strip_suffix(ORG_ARCHIVE_SUFFIX).unwrap_or(stem).to_string()
+            })
+        })
+        .context("No title found")?;
     let note_category = p
         .keywords()
         .filter_map(|k| match k.key().to_string().as_str() {
@@ -128,10 +158,13 @@ fn parse_note(content: &str) -> Result<Note> {
             .map(|j| j.to_string())
             .collect::<Vec<String>>()
             .join(",");
-        let tags = if tag_string.is_empty() {
-            None
-        } else {
-            Some(tag_string.clone())
+        // Mark every entry indexed from an archive file as archived so it can
+        // be distinguished from live content in search and listings.
+        let tags = match (tag_string.is_empty(), is_archive) {
+            (true, false) => None,
+            (true, true) => Some("archive".to_string()),
+            (false, false) => Some(tag_string.clone()),
+            (false, true) => Some(format!("{tag_string},archive")),
         };
         let title = i.title_raw().trim().to_string();
 
@@ -253,6 +286,28 @@ fn parse_note(content: &str) -> Result<Note> {
     })
 }
 
+/// For `.org_archive` files (Org mode's archive location), resolve the
+/// document-level `:ID:` of the source file the entries were archived from
+/// (e.g. `work.org_archive` -> `work.org`). Returns `None` when the file isn't
+/// an archive or the source's ID can't be determined.
+async fn archive_source_id(notes_dir_path: &str, file_name: &str) -> Option<String> {
+    let source_name = format!("{}.org", file_name.strip_suffix(ORG_ARCHIVE_SUFFIX)?);
+    let source_path = if file_name.starts_with('/') {
+        source_name
+    } else {
+        format!("{notes_dir_path}/{source_name}")
+    };
+    let content = fs::read_to_string(&source_path).await.ok()?;
+    let config = crate::org::todo_keywords_config();
+    document_id(&config.parse(&content).document())
+}
+
+/// The document-level `:ID:` property of a parsed Org document.
+fn document_id(d: &orgize::ast::Document) -> Option<String> {
+    d.properties()
+        .and_then(|props| props.get("ID").map(|id| id.to_string()))
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DocType {
@@ -291,11 +346,9 @@ fn index_note_full_text(
     file_name_value: &str,
     note: &Note,
 ) -> tantivy::Result<()> {
-    // Delete the document first to get upsert behavior
-    let id = schema.get_field("id")?;
-    let term_id = Term::from_field_text(id, &note.id);
-    index_writer.delete_term(term_id);
+    let is_archive = is_archive_file(file_name_value);
 
+    let id = schema.get_field("id")?;
     let r#type = schema.get_field("type")?;
     let title = schema.get_field("title")?;
     let category = schema.get_field("category")?;
@@ -317,20 +370,28 @@ fn index_note_full_text(
         headings: note_headings,
     } = note;
 
-    let mut doc = doc!(
-        id => note_id.as_str(),
-        r#type => note_type,
-        title => note_title.as_str(),
-        category => note_category.clone(),
-        body => note_body.as_str(),
-        file_name => file_name_value,
-    );
+    // Archive files share the source note's ID; skip the note-level doc (and
+    // its delete, which would otherwise remove the source's doc) so archives
+    // don't clobber the source note. Their entries are indexed below.
+    if !is_archive {
+        let term_id = Term::from_field_text(id, &note.id);
+        index_writer.delete_term(term_id);
 
-    // This needs to be done outside of the `doc!` macro
-    if let Some(tag_list) = note_tags {
-        doc.add_text(tags, tag_list);
+        let mut doc = doc!(
+            id => note_id.as_str(),
+            r#type => note_type,
+            title => note_title.as_str(),
+            category => note_category.clone(),
+            body => note_body.as_str(),
+            file_name => file_name_value,
+        );
+
+        // This needs to be done outside of the `doc!` macro
+        if let Some(tag_list) = note_tags {
+            doc.add_text(tags, tag_list);
+        }
+        index_writer.add_document(doc)?;
     }
-    index_writer.add_document(doc)?;
 
     // Index each meeting
     for m in note_meetings.iter() {
@@ -454,22 +515,27 @@ fn store_embeddings_in_db(
 /// should always be safe to query an index and then lookup the
 /// note(s) by ID.
 fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) -> Result<()> {
+    let is_archive = is_archive_file(file_name);
     let mut note_meta_stmt = db.prepare(
         "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )?;
 
-    // Update the note meta table
-    note_meta_stmt
-        .execute(tokio_rusqlite::params![
-            note.id,
-            "note",
-            note.category,
-            file_name,
-            note.title,
-            note.tags,
-            note.body
-        ])
-        .expect("Note meta upsert failed");
+    // Archive files share the source note's ID, so skip the note-level row to
+    // avoid clobbering the source's row and to keep archives out of the
+    // project listing. Only their meetings/headings/tasks are indexed.
+    if !is_archive {
+        note_meta_stmt
+            .execute(tokio_rusqlite::params![
+                note.id,
+                "note",
+                note.category,
+                file_name,
+                note.title,
+                note.tags,
+                note.body
+            ])
+            .expect("Note meta upsert failed");
+    }
 
     let mut meeting_meta_stmt = db.prepare(
         "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -584,7 +650,13 @@ pub async fn index_all(
                 .unwrap_or_default()
                 .to_owned(),
         );
-        let note = match parse_note(&content) {
+        let is_archive = is_archive_file(file_name.as_str());
+        let source_id = if is_archive {
+            archive_source_id(notes_dir_path, file_name.as_str()).await
+        } else {
+            None
+        };
+        let note = match parse_note(file_name.as_str(), source_id.as_deref(), &content) {
             Ok(note) => Arc::new(note),
             Err(e) => {
                 tracing::warn!("Skipping note {:?}: {}", p, e);
@@ -608,8 +680,10 @@ pub async fn index_all(
         .expect("DB work failed");
 
         // If vector indexing is enabled, generate embeddings asynchronously
-        // and then store them in the database
-        if index_vector {
+        // and then store them in the database. Archives share the source
+        // note's ID but have no note-level row, so skip them: storing their
+        // body embedding under that ID would clobber the source's embedding.
+        if index_vector && !is_archive {
             // Spawn a blocking task for the CPU-intensive embedding generation
             let embeddings = tokio::task::spawn_blocking(move || {
                 generate_embeddings(&mut embeddings_model.lock().unwrap(), &splitter, &note_body)
@@ -674,7 +748,12 @@ pub async fn index_single_file(
     let content = fs::read_to_string(&file_path)
         .await
         .with_context(|| format!("Failed to read file: {:?}", file_path))?;
-    let note = parse_note(&content)?;
+    let source_id = if is_archive_file(&file_name) {
+        archive_source_id(notes_path, &file_name).await
+    } else {
+        None
+    };
+    let note = parse_note(&file_name, source_id.as_deref(), &content)?;
 
     // Index metadata in SQLite (backs tasks list / projects list)
     let file_name_for_db = file_name.clone();
@@ -1111,7 +1190,7 @@ mod tests {
             let path = entry.unwrap().path();
             if path.extension().map_or(false, |e| e == "org") {
                 let content = fs::read_to_string(&path).unwrap();
-                let result = parse_note(&content);
+                let result = parse_note("", None, &content);
                 assert!(
                     result.is_ok(),
                     "Failed to parse example note {:?}: {}",
@@ -1123,6 +1202,58 @@ mod tests {
         }
 
         assert!(tested > 0, "No .org files found in examples/notes/");
+    }
+
+    /// Parsing a `.org_archive` file resolves the source note's document-level
+    /// `:ID:` (so archived content groups with its source note) and tags every
+    /// indexed entry with `archive`. The archive itself carries no document-level
+    /// `:ID:`, matching Org mode's archive files.
+    #[tokio::test]
+    async fn test_parse_archive_resolves_source_id_and_tags() {
+        let dir = TempDir::new().unwrap();
+        let notes_root = dir.path();
+
+        let projects_dir = notes_root.join("projects");
+        fs::create_dir_all(&projects_dir).unwrap();
+
+        fs::write(
+            projects_dir.join("work.org"),
+            ":PROPERTIES:\n:ID: source-work\n:END:\n#+TITLE: Work\n\n* TODO Live task\n:PROPERTIES:\n:ID: live-task\n:END:\n",
+        )
+        .unwrap();
+
+        fs::write(
+            projects_dir.join("work.org_archive"),
+            "Archived entries from file work.org\n\n* DONE Archived task\n:PROPERTIES:\n:ARCHIVE_TIME: 2022-10-16 Sun 09:37\n:ID: archived-task\n:END:\nCLOSED: [2022-10-16 Sun 09:37]\n\n* Archived heading\n:PROPERTIES:\n:ID: archived-heading\n:END:\n",
+        )
+        .unwrap();
+
+        let file_name = "projects/work.org_archive";
+        let archive = fs::read_to_string(projects_dir.join("work.org_archive")).unwrap();
+        let source_id = archive_source_id(notes_root.to_str().unwrap(), file_name).await;
+        let note = parse_note(file_name, source_id.as_deref(), &archive).unwrap();
+
+        // Same document-level ID as the source note.
+        assert_eq!(note.id, "source-work");
+
+        let mut tagged = 0;
+        for t in &note.tasks {
+            assert!(
+                t.tags.as_deref().unwrap_or("").contains("archive"),
+                "task missing archive tag: {:?}",
+                t.tags
+            );
+            tagged += 1;
+        }
+        for h in &note.headings {
+            assert!(
+                h.tags.as_deref().unwrap_or("").contains("archive"),
+                "heading missing archive tag: {:?}",
+                h.tags
+            );
+            tagged += 1;
+        }
+        assert!(tagged > 0, "expected at least one tagged archived entry");
     }
 
     /// ===== Tests for `delete_chat_session_index` =====
