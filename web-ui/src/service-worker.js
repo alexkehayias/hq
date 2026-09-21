@@ -24,23 +24,28 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const { request } = event;
+
+  // Only GET requests are cacheable. Let the browser handle mutations
+  // (POST/PATCH/DELETE) directly so a network failure isn't turned into a
+  // cache lookup, which resolves to undefined for these methods.
+  if (request.method !== 'GET') return;
+
   // Network-first strategy: always try network first, fall back to cache if offline
   event.respondWith(
-    fetch(event.request)
+    fetch(request)
       .then((response) => {
-        // Only cache GET requests (POST/PUT/DELETE are not cacheable)
-        if (event.request.method === 'GET') {
-          // Clone the response before caching it
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
-        }
+        // Clone the response before caching it
+        const responseClone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => {
+          cache.put(request, responseClone);
+        });
         return response;
       })
-      .catch(() => {
-        // If network fails, try the cache
-        return caches.match(event.request);
+      .catch(async () => {
+        // If network fails, try the cache. respondWith requires a Response, so
+        // return a network error response when there's no cached match.
+        return (await caches.match(request)) || Response.error();
       }),
   );
 });
