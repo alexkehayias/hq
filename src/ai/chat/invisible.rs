@@ -127,8 +127,8 @@ pub fn sanitize_invisible_chars(input: &str) -> InvisibleSanitization {
 
         if is_strippable(c) {
             let next = it.clone().next();
-            let prev_alpha = prev.map_or(false, char::is_alphanumeric);
-            let next_alpha = next.map_or(false, char::is_alphanumeric);
+            let prev_alpha = prev.is_some_and(char::is_alphanumeric);
+            let next_alpha = next.is_some_and(char::is_alphanumeric);
             // Interleaved between two letters: the only reason to do this is
             // to hide a word from substring filters while keeping it readable
             // to the model.
@@ -270,11 +270,14 @@ mod tests {
 
     #[test]
     fn boundary_zero_width_space_is_stripped() {
-        // Docusaurus heading anchor: `[text​](#anchor)` — ZWSP sits
+        // Docusaurus heading anchor: `[text\u{200B}](#anchor)` — ZWSP sits
         // between text and the closing `]`, not between two letters.
-        let input = "## Heading [More intelligence​](#-anchor \"Direct link\")";
+        let input = "## Heading [More intelligence\u{200B}](#-anchor \"Direct link\")";
         let out = assert_cleaned(input);
-        assert!(!out.contains('\u{200B}'), "ZWSP should be stripped: {out:?}");
+        assert!(
+            !out.contains('\u{200B}'),
+            "ZWSP should be stripped: {out:?}"
+        );
         assert!(out.contains("More intelligence"));
         assert!(out.contains("#-anchor"));
     }
@@ -283,7 +286,7 @@ mod tests {
     fn multiple_boundary_zero_width_spaces_are_stripped() {
         // Mirrors the real DeepSeek page: several headings each carrying a
         // structural ZWSP in their anchor.
-        let input = "## One​](#a)\n\n## Two​](#b)\n\n## Three​](#c)";
+        let input = "## One\u{200B}](#a)\n\n## Two\u{200B}](#b)\n\n## Three\u{200B}](#c)";
         let out = assert_cleaned(input);
         assert_eq!(out.matches('\u{200B}').count(), 0);
         assert!(out.contains("## One"));
@@ -313,7 +316,10 @@ mod tests {
     #[test]
     fn mid_word_zero_width_space_is_rejected() {
         // Interleaved between letters — filter evasion.
-        assert_reject("i\u{200B}g\u{200B}n\u{200B}o", RejectReason::MidWordInterleaving);
+        assert_reject(
+            "i\u{200B}g\u{200B}n\u{200B}o",
+            RejectReason::MidWordInterleaving,
+        );
     }
 
     #[test]
@@ -343,7 +349,12 @@ mod tests {
 
     #[test]
     fn control_chars_are_rejected() {
-        for bad in ["result\u{0007}", "result\u{0085}", "a\u{007F}b", "a\u{00AD}b"] {
+        for bad in [
+            "result\u{0007}",
+            "result\u{0085}",
+            "a\u{007F}b",
+            "a\u{00AD}b",
+        ] {
             assert_reject(bad, RejectReason::ControlChar);
         }
     }

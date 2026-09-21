@@ -1129,6 +1129,21 @@ pub async fn reindex_changed_notes(
     index_all(db, index_path, notes_path, full_text, vector, Some(paths)).await
 }
 
+/// Reindex specific files while holding `SYNC_LOCK`. Server-side callers that
+/// index outside `sync_and_reindex_notes` (e.g. the note status PATCH) must use
+/// this so they don't race the periodic sync on Tantivy's writer lock.
+pub async fn index_files_locked(
+    db: &Connection,
+    index_path: &str,
+    notes_path: &str,
+    full_text: bool,
+    vector: bool,
+    paths: Option<Vec<PathBuf>>,
+) -> Result<()> {
+    let _guard = SYNC_LOCK.lock().await;
+    index_all(db, index_path, notes_path, full_text, vector, paths).await
+}
+
 /// Commit local note changes, pull origin, and push (via `sync_repo`), then
 /// reindex only the files that changed as a result of the rebase.
 pub async fn sync_and_reindex_notes(db: &Connection, config: &AppConfig) {

@@ -250,10 +250,15 @@ class HqNoteModal extends HTMLElement {
     };
     document.addEventListener('click', this.#closeDropdowns);
 
+    // Dropdown items carry data-status too, so this single selector covers both
+    // the top-level chips and the menu options. Wiring each button once keeps a
+    // click to one PATCH request.
     content.querySelectorAll('[data-status]').forEach((btn) => {
-      btn.addEventListener('click', async () =>
-        this.#updateStatus(btn.dataset.status),
-      );
+      btn.addEventListener('click', async () => {
+        const dropdown = btn.closest('[id^="dropdown-"]');
+        if (dropdown) dropdown.classList.add('hidden');
+        await this.#updateStatus(btn.dataset.status);
+      });
     });
 
     content.querySelectorAll('[data-dropdown]').forEach((btn) => {
@@ -267,16 +272,6 @@ class HqNoteModal extends HTMLElement {
         dd.classList.toggle('hidden');
       });
     });
-
-    content
-      .querySelectorAll('[id^="dropdown-"] button[data-status]')
-      .forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const newStatus = btn.dataset.status;
-          btn.closest('[id^="dropdown-"]').classList.add('hidden');
-          await this.#updateStatus(newStatus);
-        });
-      });
   }
 
   async #updateStatus(newStatus) {

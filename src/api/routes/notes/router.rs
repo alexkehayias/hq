@@ -7,7 +7,7 @@ use crate::api::routes::notes::db as notes_db;
 use crate::api::state::AppState;
 use crate::core::orgmode as core_org;
 use crate::search::aql;
-use crate::search::index_all;
+use crate::search::index_files_locked;
 use crate::search::search_notes;
 use axum::{
     Router,
@@ -108,7 +108,7 @@ async fn update_note(
     .await?;
 
     // Re-index only the file that was modified
-    index_all(
+    index_files_locked(
         &db,
         &index_path,
         &notes_path,
