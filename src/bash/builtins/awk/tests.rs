@@ -1299,6 +1299,28 @@ async fn test_awk_getline_file_total_cache_byte_limit() {
     assert_eq!(result.stdout, "1 -1\n");
 }
 
+#[tokio::test]
+async fn test_awk_subtraction_without_whitespace() {
+    // A numeric literal immediately followed by `-` or `+` is subtraction,
+    // not part of the number token.
+    let result = run_awk(&["BEGIN { print 1-1 }"], None).await.unwrap();
+    assert_eq!(result.stdout, "0\n");
+
+    let result = run_awk(&["{ print 1-$1 }"], Some("2\n")).await.unwrap();
+    assert_eq!(result.stdout, "-1\n");
+
+    let result = run_awk(&["BEGIN { print 2+3 }"], None).await.unwrap();
+    assert_eq!(result.stdout, "5\n");
+}
+
+#[tokio::test]
+async fn test_awk_number_exponents() {
+    let result = run_awk(&["BEGIN { print 1e3, 1e-3, 2.5e2 }"], None)
+        .await
+        .unwrap();
+    assert_eq!(result.stdout, "1000 0.001 250\n");
+}
+
 // TM-INF-022: malformed-input corpus must not leak Debug shapes.
 const AWK_BANNED: &[&str] = &["AwkError::", "ParseError {", "Token::"];
 

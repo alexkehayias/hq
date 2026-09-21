@@ -1536,12 +1536,38 @@ impl<'a> AwkParser<'a> {
 
     fn parse_number(&mut self) -> Result<AwkExpr> {
         let start = self.pos;
-        while self.pos < self.input.len() {
-            let c = self.current_char().unwrap();
-            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+' {
+
+        // Integer part
+        while self.pos < self.input.len() && self.current_char().unwrap().is_ascii_digit() {
+            self.pos += 1;
+        }
+
+        // Fractional part
+        if self.current_char() == Some('.') {
+            self.pos += 1;
+            while self.pos < self.input.len() && self.current_char().unwrap().is_ascii_digit() {
                 self.pos += 1;
-            } else {
-                break;
+            }
+        }
+
+        // Exponent part. Only consume `e`/`E` when it is followed by an
+        // optional sign and at least one digit. Otherwise the sign belongs
+        // to a following operator (e.g. the `-` in `1-1`), not the number.
+        if matches!(self.current_char(), Some('e') | Some('E')) {
+            let mut lookahead = self.input[self.pos..].chars();
+            lookahead.next(); // skip `e`/`E`
+            let mut next = lookahead.next();
+            if matches!(next, Some('+') | Some('-')) {
+                next = lookahead.next();
+            }
+            if matches!(next, Some(c) if c.is_ascii_digit()) {
+                self.advance(); // `e`/`E`
+                if matches!(self.current_char(), Some('+') | Some('-')) {
+                    self.advance();
+                }
+                while self.pos < self.input.len() && self.current_char().unwrap().is_ascii_digit() {
+                    self.pos += 1;
+                }
             }
         }
 
