@@ -1,7 +1,9 @@
 use super::registry::{Tool, ToolConfig};
 use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use crate::cli::bashkit::HqBuiltin;
-use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
+use crate::openai::{
+    Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
+};
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -132,10 +134,14 @@ pub async fn run_in_sandbox(command: &str, workspace_path: &Path) -> Result<Bash
     bash.mount(SANDBOX_ROOT, fs)
         .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
 
-    let output = bash
-        .exec(command)
-        .await
-        .map_err(|e| anyhow::anyhow!("bash exec failed: {e}"))?;
+    let output = bash.exec(command).await.map_err(|e| {
+        // bashkit reports command-level failures (bad syntax, unsupported
+        // constructs, resource limits) as errors rather than exit codes.
+        // The agent can react to these by fixing the command, so surface
+        // them as a recoverable tool error instead of aborting the chat
+        // loop.
+        RecoverableToolError::new(&format!("bash command failed: {e}"))
+    })?;
 
     Ok(BashOutput {
         exit_code: output.exit_code,
@@ -262,6 +268,18 @@ mod tests {
 
         // Small output should not be truncated
         assert!(!output.truncated);
+    }
+
+    #[tokio::test]
+    async fn test_bash_exec_error_is_recoverable() {
+        let tool = temp_bash_tool().await;
+        // `awk` with no program fails inside the interpreter instead of
+        // returning a non-zero exit code.
+        let err = tool.call(r#"{"command": "awk"}"#).await.unwrap_err();
+        let recoverable = err
+            .downcast_ref::<crate::openai::RecoverableToolError>()
+            .expect("bash execution errors should be recoverable by the agent");
+        assert!(recoverable.message.contains("bash command failed"));
     }
 
     #[tokio::test]
