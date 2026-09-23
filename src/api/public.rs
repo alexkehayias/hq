@@ -42,6 +42,10 @@ pub mod email {
     pub use crate::api::routes::email::public::*;
 }
 
+pub mod files {
+    pub use crate::api::routes::files::public::*;
+}
+
 pub mod metrics {
     pub use crate::api::routes::metrics::public::*;
 }

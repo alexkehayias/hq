@@ -3,6 +3,7 @@
 pub mod calendar;
 pub mod chat;
 pub mod email;
+pub mod files;
 mod kv;
 pub mod metrics;
 pub mod notes;
@@ -25,6 +26,8 @@ pub fn router() -> Router<SharedState> {
         .nest("/notes", notes::router())
         // Chat routes
         .nest("/chat", chat::router())
+        // File upload routes
+        .nest("/files", files::router())
         // KV routes (for latest selection)
         .nest("/notes/search", kv::router())
         // Push notification routes
