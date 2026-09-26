@@ -7,7 +7,7 @@
 use std::fmt::Write as _;
 
 use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const RESET: &str = "\x1b[0m";
 const HEADING_COLOR: u8 = 39;
@@ -504,7 +504,7 @@ fn emit(items: &[Item], width: usize, ansi: bool) -> String {
                 first, cont, body, ..
             } => {
                 let budget = width.saturating_sub(visible_width(first)).max(10);
-                let lines = wrap(body, budget);
+                let lines = wrap(body, budget, false);
                 if lines.is_empty() {
                     emit_line(&mut out, first, ansi);
                 }
@@ -575,7 +575,7 @@ fn emit_table(
             .map(|column| {
                 let cell = row.get(column).cloned().unwrap_or_default();
                 let cell = if header { bolden(&cell) } else { cell };
-                wrap(&cell, widths[column].max(1))
+                wrap(&cell, widths[column].max(1), true)
             })
             .collect();
 
@@ -608,30 +608,52 @@ fn emit_table(
 }
 
 /// Shrink columns to fit `available` visible columns, proportionally and never
-/// below [`MIN_COLUMN`]. If the minimum cannot fit, the table overflows.
+/// below a floor of [`MIN_COLUMN`] — or `available / columns` when that is
+/// smaller, so the floors themselves always fit and the table stays inside the
+/// terminal. Overflow is only possible when `available < columns`, i.e. the
+/// gutters alone already exceed the width.
 fn fit_widths(widths: &mut [usize], available: usize) {
     const MIN_COLUMN: usize = 8;
     let total: usize = widths.iter().sum();
     if total <= available {
         return;
     }
+    let floor = (available / widths.len().max(1)).clamp(1, MIN_COLUMN);
     let mut fitted: Vec<usize> = widths
         .iter()
-        .map(|column| (*column * available / total).max(MIN_COLUMN))
+        .map(|column| (*column * available / total).max(floor))
         .collect();
+
     let mut excess = fitted.iter().sum::<usize>().saturating_sub(available);
     while excess > 0 {
         let widest = fitted
             .iter()
             .enumerate()
-            .filter(|(_, column)| **column > MIN_COLUMN)
+            .filter(|(_, column)| **column > floor)
             .max_by_key(|(_, column)| **column)
             .map(|(index, _)| index);
         let Some(index) = widest else { break };
-        let take = (fitted[index] - MIN_COLUMN).min(excess);
+        let take = (fitted[index] - floor).min(excess);
         fitted[index] -= take;
         excess -= take;
     }
+
+    // Scaling truncates, so a little width may be left over. Hand it back to
+    // whichever columns still want it most, rather than leaving it unused.
+    let mut slack = available.saturating_sub(fitted.iter().sum::<usize>());
+    while slack > 0 {
+        let neediest = fitted
+            .iter()
+            .enumerate()
+            .filter(|(index, column)| **column < widths[*index])
+            .max_by_key(|(index, column)| widths[*index] - **column)
+            .map(|(index, _)| index);
+        let Some(index) = neediest else { break };
+        let take = (widths[index] - fitted[index]).min(slack);
+        fitted[index] += take;
+        slack -= take;
+    }
+
     widths.copy_from_slice(&fitted);
 }
 
@@ -718,8 +740,10 @@ fn visible_width(spans: &[Span]) -> usize {
 }
 
 /// Greedily wrap spans to `width` visible columns, breaking on whitespace.
-/// `\n` forces a break; words longer than the width are allowed to overflow.
-fn wrap(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
+/// `\n` forces a break. Words longer than `width` overflow unless
+/// `break_long_words` is set, which hard-breaks them mid-word instead — table
+/// cells need this so a long URL cannot push the table past the terminal.
+fn wrap(spans: &[Span], width: usize, break_long_words: bool) -> Vec<Vec<Span>> {
     let mut lines: Vec<Vec<Span>> = Vec::new();
     let mut current: Vec<Span> = Vec::new();
     let mut current_width = 0usize;
@@ -741,6 +765,21 @@ fn wrap(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
                         current_width = 0;
                         continue;
                     }
+                } else if break_long_words && chunk_width > width {
+                    if current_width > 0 {
+                        lines.push(std::mem::take(&mut current));
+                        current_width = 0;
+                    }
+                    for piece in split_by_width(chunk, width) {
+                        let piece_width = UnicodeWidthStr::width(piece.as_str());
+                        if current_width > 0 && current_width + piece_width > width {
+                            lines.push(std::mem::take(&mut current));
+                            current_width = 0;
+                        }
+                        push_span(&mut current, span.style, &piece);
+                        current_width += piece_width;
+                    }
+                    continue;
                 } else if current_width > 0 && current_width + chunk_width > width {
                     lines.push(std::mem::take(&mut current));
                     current_width = 0;
@@ -754,6 +793,27 @@ fn wrap(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
         lines.push(current);
     }
     lines
+}
+
+/// Split `text` into pieces of at most `width` display columns. A single
+/// character wider than `width` becomes a piece of its own.
+fn split_by_width(text: &str, width: usize) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for c in text.chars() {
+        let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+        if current_width > 0 && current_width + char_width > width {
+            pieces.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(c);
+        current_width += char_width;
+    }
+    if !current.is_empty() {
+        pieces.push(current);
+    }
+    pieces
 }
 
 /// Split text into alternating whitespace and non-whitespace runs.
@@ -791,7 +851,7 @@ fn push_span(spans: &mut Vec<Span>, style: Style, text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{render, split_by_width};
     use unicode_width::UnicodeWidthStr;
 
     /// Strip SGR sequences so assertions can be written against visible text.
@@ -992,6 +1052,66 @@ mod tests {
         for line in strip(&rendered).lines() {
             assert!(UnicodeWidthStr::width(line) <= 40, "too wide: {line:?}");
         }
+    }
+
+    #[test]
+    fn table_cell_with_a_long_url_stays_within_width() {
+        let url = "https://example.com/a/very/long/path/that/keeps/going/and/going";
+        let markdown = format!("| url |\n|:----|\n| {url} |");
+        let visible = strip(&render(&markdown, 40, true));
+        for line in visible.lines() {
+            assert!(UnicodeWidthStr::width(line) <= 40, "too wide: {line:?}");
+        }
+        // The cell is hard-broken, but no characters are lost.
+        let body: String = visible.lines().skip(2).map(str::trim_end).collect();
+        assert_eq!(body, url);
+    }
+
+    #[test]
+    fn many_column_table_stays_within_width() {
+        let markdown = "\
+| alpha | bravo | charlie | delta | echo | foxtrot | golf | hotel |
+|:------|:------|:--------|:------|:-----|:--------|:-----|:------|
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |";
+        for width in [50, 40, 30] {
+            let rendered = render(markdown, width, true);
+            for line in strip(&rendered).lines() {
+                assert!(
+                    UnicodeWidthStr::width(line) <= width,
+                    "width {width}: too wide: {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn table_uses_the_full_available_width() {
+        // Two 11-column cells in a 24-column terminal: 21 columns of content
+        // plus 3 for the gutter, so the table should fill each line exactly.
+        let markdown = "\
+| aaaaaaaaaaa | bbbbbbbbbbb |
+|:------------|:------------|
+| ccccccccccc | ddddddddddd |";
+        let visible = strip(&render(markdown, 24, true));
+        let widths: Vec<usize> = visible.lines().map(UnicodeWidthStr::width).collect();
+        assert!(widths.iter().all(|width| *width <= 24), "{visible:?}");
+        assert_eq!(widths[0], 24, "{visible:?}");
+    }
+
+    #[test]
+    fn paragraphs_do_not_break_long_words() {
+        let url = "https://example.com/a/very/long/path/that/keeps/going/and/going";
+        assert_eq!(lines(url, 30), vec![url]);
+    }
+
+    #[test]
+    fn split_by_width_respects_display_columns() {
+        assert_eq!(split_by_width("abcdef", 2), vec!["ab", "cd", "ef"]);
+        assert_eq!(split_by_width("ab", 4), vec!["ab"]);
+        assert_eq!(split_by_width("", 4), Vec::<String>::new());
+        // Each CJK character is two columns wide, so it needs a piece of its own.
+        assert_eq!(split_by_width("字字", 3), vec!["字", "字"]);
+        assert_eq!(split_by_width("a字", 2), vec!["a", "字"]);
     }
 
     #[test]
