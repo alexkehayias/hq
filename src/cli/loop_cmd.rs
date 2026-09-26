@@ -38,6 +38,7 @@ use crate::ai::chat::{
 };
 use crate::ai::tools::{ToolConfig, ToolRegistry};
 use crate::cli::channel::{event_stream_from_reader, sigterm, socket_path};
+use crate::core::markdown_render;
 use crate::openai::{Message, Role};
 use tokio_rusqlite::Connection;
 
@@ -181,10 +182,8 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
 
                 match chat.next_msg(Message::new(Role::User, &user_msg)).await {
                     Ok(resp) => {
-                        if let Some(msg) = resp.last()
-                            && let Some(content) = &msg.content
-                        {
-                            println!("{}", content);
+                        if let Some(content) = resp.last().and_then(|msg| msg.content.as_deref()) {
+                            print!("{}", markdown_render::render_for_stdout(content));
                         }
                     }
                     Err(e) => eprintln!("chat error: {}", e),

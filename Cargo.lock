@@ -2126,6 +2126,7 @@ dependencies = [
  "once_cell",
  "orgize",
  "os_display",
+ "pulldown-cmark",
  "regex",
  "reqwest 0.13.4",
  "rusqlite",
@@ -2139,6 +2140,7 @@ dependencies = [
  "sqlite-vec",
  "tantivy",
  "tempfile",
+ "terminal_size",
  "text-splitter",
  "thiserror 2.0.18",
  "tiktoken-rs",
@@ -2149,6 +2151,7 @@ dependencies = [
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "unit-prefix",
  "url",
  "urlencoding",
@@ -4052,6 +4055,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5457,6 +5471,16 @@ checksum = "c4790fc369d5a530f4b544b094e31388b9b3a37c0f4652ade4505945f5660d24"
 dependencies = [
  "new_debug_unreachable",
  "utf-8",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
