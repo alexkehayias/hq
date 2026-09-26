@@ -242,10 +242,32 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSendButtonState();
   };
 
+  // Remove an uploaded file from the session workspace on the server. The chip
+  // is already gone from the UI by the time this runs, so failures are only
+  // logged.
+  const deleteUploadedFile = async (fileData) => {
+    try {
+      const response = await fetch(
+        `/api/files/${encodeURIComponent(sessionId)}/${encodeURIComponent(fileData.filename)}`,
+        { method: 'DELETE' },
+      );
+      if (!response.ok && response.status !== 404) {
+        console.warn(`Failed to delete attachment (${response.status})`);
+      }
+    } catch (error) {
+      console.warn('Failed to delete attachment:', error);
+    }
+  };
+
   const removeAttachment = (attachment) => {
+    // Mark it so an upload still in flight cleans itself up when it finishes.
+    attachment.removed = true;
     pendingAttachments = pendingAttachments.filter((a) => a !== attachment);
     if (attachment.objectUrl) {
       URL.revokeObjectURL(attachment.objectUrl);
+    }
+    if (attachment.status === 'done' && attachment.data) {
+      deleteUploadedFile(attachment.data);
     }
     renderChips();
   };
@@ -274,6 +296,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // The chip may have been dismissed while we were converting the image.
+    if (attachment.removed) {
+      return;
+    }
+
     attachment.objectUrl = URL.createObjectURL(blob);
     renderChips();
 
@@ -293,6 +320,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await response.json();
       attachment.status = 'done';
       attachment.data = data.files[0];
+      // The chip was dismissed while the upload was in flight; don't leave the
+      // file behind on the server.
+      if (attachment.removed) {
+        deleteUploadedFile(attachment.data);
+      }
     } catch (error) {
       console.error('Upload failed:', error);
       attachment.status = 'error';

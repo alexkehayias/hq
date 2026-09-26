@@ -57,6 +57,14 @@ mod tests {
             .unwrap()
     }
 
+    fn delete_request(session_id: &str, filename: &str) -> Request<Body> {
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/files/{session_id}/{filename}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
     fn files_dir(storage: &str, session_id: &str) -> PathBuf {
         Path::new(storage)
             .join("workspace")
@@ -200,6 +208,89 @@ mod tests {
 
         let body = multipart_body(&[("session_id", None, b"session-no-file")]);
         let response = app.oneshot(upload_request(body)).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Deleting an uploaded file removes it from the session workspace.
+    #[tokio::test]
+    #[serial]
+    async fn it_deletes_uploaded_file() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let session_id = "session-delete";
+
+        let body = multipart_body(&[
+            ("session_id", None, session_id.as_bytes()),
+            ("file", Some("screenshot.png"), PNG_BYTES),
+        ]);
+        let response = app.clone().oneshot(upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = files_dir(&storage, session_id).join("screenshot.png");
+        assert!(stored.exists());
+
+        let response = app
+            .oneshot(delete_request(session_id, "screenshot.png"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(
+            !stored.exists(),
+            "file should be removed from the workspace"
+        );
+    }
+
+    /// Deleting a file that isn't there is a 404.
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_not_found_when_deleting_missing_file() {
+        let (app, _state) = test_app_with_state().await;
+
+        let response = app
+            .oneshot(delete_request("session-missing", "nope.png"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// A delete is scoped to the session in the path: another session's file
+    /// with the same name is left untouched.
+    #[tokio::test]
+    #[serial]
+    async fn it_scopes_delete_to_session() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let owner = "session-owner";
+
+        let body = multipart_body(&[
+            ("session_id", None, owner.as_bytes()),
+            ("file", Some("screenshot.png"), PNG_BYTES),
+        ]);
+        let response = app.clone().oneshot(upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(delete_request("session-other", "screenshot.png"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let stored = files_dir(&storage, owner).join("screenshot.png");
+        assert!(stored.exists(), "owner's file must not be deleted");
+    }
+
+    /// A session ID that isn't safe as a path segment is rejected.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_invalid_session_id_on_delete() {
+        let (app, _state) = test_app_with_state().await;
+
+        let response = app
+            .oneshot(delete_request("session.bad", "screenshot.png"))
+            .await
+            .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }

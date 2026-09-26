@@ -5,10 +5,10 @@ use std::sync::{Arc, RwLock};
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, State},
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{delete, post},
 };
 
 use super::public::{FileUploadResponse, UploadedFile};
@@ -207,9 +207,47 @@ async fn upload_files(
     Ok(Json(FileUploadResponse { files: uploaded }).into_response())
 }
 
+/// Delete a file previously uploaded into the session workspace `files/`
+/// directory. The session ID is part of the path so a delete is always scoped
+/// to a single session and cannot reach another session's uploads.
+async fn delete_file(
+    State(state): State<SharedState>,
+    AxumPath((session_id, filename)): AxumPath<(String, String)>,
+) -> Result<Response, ApiError> {
+    if !is_valid_session_id(&session_id) {
+        return Ok((StatusCode::BAD_REQUEST, "Invalid session_id").into_response());
+    }
+
+    let Some(filename) = sanitize_filename(&filename) else {
+        return Ok((StatusCode::BAD_REQUEST, "Invalid filename").into_response());
+    };
+
+    let storage_path = state
+        .read()
+        .expect("Unable to read shared state")
+        .config
+        .storage_path
+        .clone();
+
+    let path = PathBuf::from(&storage_path)
+        .join("workspace")
+        .join(&session_id)
+        .join("files")
+        .join(&filename);
+
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT.into_response()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok((StatusCode::NOT_FOUND, "File not found").into_response())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Create the file uploads router.
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", post(upload_files))
+        .route("/{session_id}/{filename}", delete(delete_file))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
 }
