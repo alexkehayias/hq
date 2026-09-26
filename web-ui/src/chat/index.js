@@ -1,3 +1,4 @@
+import AttachmentBubble from './attachment-bubble.js';
 import MessageBubble from './message-bubble.js';
 
 // Polyfill to get a UUID with a fallback if running in a non https
@@ -87,6 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatContainer = document.getElementById('chat-container');
   const chatInput = document.getElementById('chat-input');
   const sendButton = document.getElementById('send-button');
+  const attachButton = document.getElementById('attach-button');
+  const fileInput = document.getElementById('file-input');
+  const chipsContainer = document.getElementById('attachment-chips');
 
   const scrollToBottom = () => {
     chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -100,6 +104,211 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   chatInput.addEventListener('input', autoResize);
+
+  // Files uploaded for the next message. Each entry is
+  // { file, objectUrl, status: 'uploading' | 'done' | 'error', data?, error? }.
+  let pendingAttachments = [];
+
+  // The send button is only meaningful once there's something to send: typed
+  // text or at least one fully-uploaded attachment.
+  const updateSendButtonState = () => {
+    const hasText = chatInput.value.trim() !== '';
+    const hasReadyAttachment = pendingAttachments.some(
+      (attachment) => attachment.status === 'done',
+    );
+    sendButton.disabled = !hasText && !hasReadyAttachment;
+  };
+
+  chatInput.addEventListener('input', updateSendButtonState);
+  updateSendButtonState();
+
+  // Types the upload API accepts, plus image extensions it doesn't (iPhone
+  // photos are HEIC) which we re-encode to JPEG before uploading.
+  const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
+  const IMAGE_EXTENSIONS = [
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'webp',
+    'heic',
+    'heif',
+    'avif',
+    'bmp',
+    'tiff',
+    'tif',
+  ];
+
+  const extensionOf = (name) => {
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? '' : name.slice(dot + 1).toLowerCase();
+  };
+
+  const isImageFile = (file) =>
+    file.type.startsWith('image/') ||
+    IMAGE_EXTENSIONS.includes(extensionOf(file.name));
+
+  const needsConversion = (file) =>
+    isImageFile(file) && !ALLOWED_EXTENSIONS.includes(extensionOf(file.name));
+
+  const convertToJpeg = (file) =>
+    new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        // JPEG has no alpha channel; fill white so transparent areas don't
+        // turn black.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) =>
+            blob ? resolve(blob) : reject(new Error('Could not convert image')),
+          'image/jpeg',
+          0.92,
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not read image file'));
+      };
+      img.src = url;
+    });
+
+  const buildChip = (attachment) => {
+    const isError = attachment.status === 'error';
+    const chip = document.createElement('div');
+    chip.className = isError
+      ? 'flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 max-w-[22rem]'
+      : 'flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 max-w-[16rem]';
+
+    if (isError) {
+      const icon = document.createElement('span');
+      icon.className =
+        'w-8 h-8 flex items-center justify-center shrink-0 text-red-500';
+      icon.textContent = '⚠️';
+      chip.appendChild(icon);
+    } else if (attachment.objectUrl) {
+      const img = document.createElement('img');
+      img.src = attachment.objectUrl;
+      img.alt = attachment.file.name;
+      img.className = 'w-8 h-8 rounded object-cover shrink-0';
+      chip.appendChild(img);
+    } else {
+      const icon = document.createElement('span');
+      icon.className =
+        'w-8 h-8 flex items-center justify-center shrink-0 text-gray-400';
+      icon.textContent = '📄';
+      chip.appendChild(icon);
+    }
+
+    const label = document.createElement('span');
+    if (isError) {
+      label.className =
+        'text-xs text-red-700 dark:text-red-300 break-words min-w-0';
+      label.textContent = attachment.error || 'Upload failed';
+    } else {
+      label.className = 'text-xs text-gray-700 dark:text-gray-200 truncate';
+      label.textContent =
+        attachment.status === 'uploading' ? 'Uploading…' : attachment.file.name;
+    }
+    chip.appendChild(label);
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.setAttribute(
+      'aria-label',
+      isError ? 'Dismiss error' : 'Remove attachment',
+    );
+    removeButton.className =
+      'shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200';
+    removeButton.textContent = '×';
+    removeButton.addEventListener('click', () => removeAttachment(attachment));
+    chip.appendChild(removeButton);
+
+    return chip;
+  };
+
+  const renderChips = () => {
+    chipsContainer.innerHTML = '';
+    for (const attachment of pendingAttachments) {
+      chipsContainer.appendChild(buildChip(attachment));
+    }
+    updateSendButtonState();
+  };
+
+  const removeAttachment = (attachment) => {
+    pendingAttachments = pendingAttachments.filter((a) => a !== attachment);
+    if (attachment.objectUrl) {
+      URL.revokeObjectURL(attachment.objectUrl);
+    }
+    renderChips();
+  };
+
+  const uploadFile = async (file) => {
+    const attachment = {
+      file,
+      objectUrl: null,
+      status: 'uploading',
+    };
+    pendingAttachments.push(attachment);
+    renderChips();
+
+    let blob = file;
+    let filename = file.name;
+
+    if (needsConversion(file)) {
+      try {
+        blob = await convertToJpeg(file);
+        filename = `${file.name.replace(/\.[^.]+$/, '')}.jpg`;
+      } catch (error) {
+        attachment.status = 'error';
+        attachment.error = error.message;
+        renderChips();
+        return;
+      }
+    }
+
+    attachment.objectUrl = URL.createObjectURL(blob);
+    renderChips();
+
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    formData.append('file', blob, filename);
+
+    try {
+      const response = await fetch('/api/files', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Upload failed (${response.status})`);
+      }
+      const data = await response.json();
+      attachment.status = 'done';
+      attachment.data = data.files[0];
+    } catch (error) {
+      console.error('Upload failed:', error);
+      attachment.status = 'error';
+      attachment.error = error.message;
+    }
+    renderChips();
+  };
+
+  attachButton.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    for (const file of fileInput.files) {
+      uploadFile(file);
+    }
+    // Reset so picking the same file again still fires a change event.
+    fileInput.value = '';
+  });
 
   // Unix-style word navigation helpers
   const findPreviousWordBoundary = (text, pos) => {
@@ -149,7 +358,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const sendMessage = () => {
     const message = chatInput.value.trim();
-    if (message === '') return;
+    const hasReadyAttachment = pendingAttachments.some(
+      (attachment) => attachment.status === 'done',
+    );
+    if (message === '' && !hasReadyAttachment) return;
 
     // Create user message bubble
     const userBubble = new MessageBubble();
@@ -165,6 +377,27 @@ document.addEventListener('DOMContentLoaded', () => {
     assistantBubble.setAttribute('is-tool-call', 'false');
     assistantBubble.setAttribute('is-loading', 'true');
     document.getElementById('chat-display').prepend(assistantBubble);
+
+    // Move finished uploads into their own bubble. Inserted directly after the
+    // user bubble so it renders above the text in the reversed chat display.
+    const readyAttachments = pendingAttachments.filter(
+      (attachment) => attachment.status === 'done',
+    );
+    if (readyAttachments.length > 0) {
+      const files = readyAttachments.map((attachment) => ({
+        filename: attachment.data.filename,
+        content_type: attachment.data.content_type,
+        objectUrl: attachment.objectUrl,
+      }));
+      const attachmentBubble = new AttachmentBubble();
+      attachmentBubble.setAttribute('files', JSON.stringify(files));
+      userBubble.after(attachmentBubble);
+
+      pendingAttachments = pendingAttachments.filter(
+        (attachment) => attachment.status !== 'done',
+      );
+      renderChips();
+    }
 
     scrollToBottom();
 
@@ -259,6 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chatInput.value = ''; // Clear input field
     chatInput.style.height = 'auto'; // Reset height after sending
+    updateSendButtonState();
   };
 
   // Handle initial prompt from query parameter (after functions are defined)
