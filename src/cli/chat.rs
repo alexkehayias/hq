@@ -10,6 +10,7 @@ use crate::ai::tools::{
     NoteSearchTool, WebSearchTool,
 };
 use crate::core::db::async_db;
+use crate::core::markdown_render;
 use crate::openai::{BoxedToolCall, Message, Role};
 
 pub async fn run(
@@ -90,8 +91,9 @@ pub async fn run(
             Ok(line) => {
                 let user_msg = Message::new(Role::User, line.as_str());
                 let resp = chat.next_msg(user_msg).await?;
-                let msg = resp.last().unwrap();
-                println!("{}", msg.content.clone().unwrap());
+                if let Some(content) = resp.last().and_then(|msg| msg.content.as_deref()) {
+                    print!("{}", markdown_render::render_for_stdout(content));
+                }
             }
             Err(ReadlineError::Interrupted) => break,
             Err(ReadlineError::Eof) => break,

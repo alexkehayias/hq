@@ -48,6 +48,9 @@ tokio-rusqlite = "0.6.0"
 tokio-stream = "0.1.18"
 htmd = "0.5.4"
 libc = "0.2"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+terminal_size = "0.4.4"
+unicode-width = "0.2.2"
 
 # Vendored bashkit deps (previously transitive via bashkit)
 bitflags = "2"

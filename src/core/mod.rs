@@ -4,4 +4,5 @@ pub mod db;
 pub mod git;
 pub mod http;
 pub mod markdown;
+pub mod markdown_render;
 pub mod orgmode;
