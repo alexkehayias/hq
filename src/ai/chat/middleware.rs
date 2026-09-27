@@ -410,7 +410,7 @@ impl ToolCallMiddleware for InvisibleCharFilter {
         let mut out: Vec<Message> = Vec::with_capacity(results.len());
         let mut any_rejected = false;
         for (call, result) in tool_calls.iter().zip(results.iter()) {
-            let content = result.content.as_deref().unwrap_or("");
+            let content = result.text().unwrap_or("");
             if !contains_invisible_chars(content) {
                 out.push(result.clone());
                 continue;
@@ -575,12 +575,11 @@ mod tests {
                 assert_eq!(*msgs[0].role(), Role::Tool);
                 assert!(
                     msgs[0]
-                        .content
-                        .as_ref()
+                        .text()
                         .unwrap()
                         .contains("Tool call rejected due to infinite loop"),
                     "Expected rejection message, got: {:?}",
-                    msgs[0].content
+                    msgs[0].text()
                 );
             }
             _ => panic!("Expected Reject"),
@@ -642,7 +641,7 @@ mod tests {
             MiddlewareAction::Reject(msgs) => {
                 assert_eq!(msgs.len(), 1);
                 assert_eq!(*msgs[0].role(), Role::Tool);
-                let content = msgs[0].content.as_ref().expect("missing content");
+                let content = msgs[0].text().expect("missing content");
                 assert!(
                     content.contains("view_website"),
                     "rejection should name the blocked tool, got: {content}",
@@ -935,7 +934,7 @@ mod tests {
                 assert_eq!(msgs.len(), 1);
                 assert_eq!(*msgs[0].role(), Role::Tool);
                 assert_eq!(msgs[0].tool_call_id(), Some("call_1"));
-                let content = msgs[0].content.as_ref().expect("missing content");
+                let content = msgs[0].text().expect("missing content");
                 assert!(
                     content.contains("invisible characters"),
                     "expected rejection message, got: {content}",
@@ -1029,13 +1028,10 @@ mod tests {
                 assert_eq!(msgs.len(), 2, "expected one msg per result");
                 // First message: clean — passed through unchanged
                 assert_eq!(msgs[0].tool_call_id(), Some("call_1"));
-                assert_eq!(
-                    msgs[0].content.as_ref().expect("missing content"),
-                    "clean result",
-                );
+                assert_eq!(msgs[0].text().expect("missing content"), "clean result",);
                 // Second message: dirty — replaced with rejection
                 assert_eq!(msgs[1].tool_call_id(), Some("call_2"));
-                let content = msgs[1].content.as_ref().expect("missing content");
+                let content = msgs[1].text().expect("missing content");
                 assert!(
                     content.contains("invisible characters"),
                     "expected rejection message for call_2, got: {content}",
@@ -1053,7 +1049,7 @@ mod tests {
         let action = mw.after_tool_calls(&calls, &results).await;
         match action {
             MiddlewareAction::Reject(msgs) => {
-                let content = msgs[0].content.as_ref().expect("missing content");
+                let content = msgs[0].text().expect("missing content");
                 assert!(
                     content.contains("my_special_tool"),
                     "rejection should name the tool, got: {content}",
@@ -1150,7 +1146,7 @@ mod tests {
         match action {
             MiddlewareAction::Reject(msgs) => {
                 assert_eq!(msgs.len(), 1);
-                let content = msgs[0].content.as_ref().expect("missing content");
+                let content = msgs[0].text().expect("missing content");
                 // Rejection message should NOT contain the hidden tag-block
                 // instructions — those should be stripped in favor of the
                 // rejection explanation.

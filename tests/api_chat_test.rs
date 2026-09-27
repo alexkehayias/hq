@@ -534,17 +534,12 @@ mod tests {
         // First message should be user's /exit
         let (_id1, msg1) = &messages[messages.len() - 2];
         assert_eq!(*msg1.role(), Role::User);
-        assert!(msg1.content.as_ref().expect("content").contains("/exit"));
+        assert!(msg1.text().expect("content").contains("/exit"));
 
         // Second message should be assistant's response
         let (_id2, msg2) = &messages[messages.len() - 1];
         assert_eq!(*msg2.role(), Role::Assistant);
-        assert!(
-            msg2.content
-                .as_ref()
-                .expect("content")
-                .contains("Exited agent mode")
-        );
+        assert!(msg2.text().expect("content").contains("Exited agent mode"));
     }
 
     /// Tests /skills command lists skills when no skill name is provided (empty registry)

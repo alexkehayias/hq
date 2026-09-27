@@ -43,7 +43,7 @@ impl PeriodicJob for ProcessEmail {
         )
         .await;
         let last_msg = messages.last().unwrap();
-        let summary = last_msg.content.clone().unwrap();
+        let summary = last_msg.text().unwrap_or_default().to_string();
 
         // Broadcast push notification to all subscribers, using a new read lock for DB/config each time
         let chat_url = format!("/chat?session_id={}", session_id);

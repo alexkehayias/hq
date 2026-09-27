@@ -298,7 +298,7 @@ pub async fn search_notes(
             // Only include user and assistant messages (not system/tool)
             if *role == Role::User || *role == Role::Assistant {
                 let title = session_title.unwrap_or_default();
-                let body = msg.content.clone().unwrap_or_default();
+                let body = msg.text().unwrap_or_default().to_string();
 
                 results.push(SearchResult {
                     id: message_id,

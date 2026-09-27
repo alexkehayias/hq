@@ -182,7 +182,7 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
                 match chat.next_msg(Message::new(Role::User, &user_msg)).await {
                     Ok(resp) => {
                         if let Some(msg) = resp.last()
-                            && let Some(content) = &msg.content
+                            && let Some(content) = msg.text()
                         {
                             println!("{}", content);
                         }

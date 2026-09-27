@@ -50,7 +50,7 @@ async fn run_case(
     messages
         .iter()
         .find(|m| m.role() == &Role::Assistant)
-        .and_then(|m| m.content.clone())
+        .and_then(|m| m.text().map(str::to_string))
         .ok_or_else(|| anyhow!("No assistant response for case {}", case.id))
 }
 

@@ -91,7 +91,7 @@ pub async fn run(
                 let user_msg = Message::new(Role::User, line.as_str());
                 let resp = chat.next_msg(user_msg).await?;
                 let msg = resp.last().unwrap();
-                println!("{}", msg.content.clone().unwrap());
+                println!("{}", msg.text().unwrap_or_default());
             }
             Err(ReadlineError::Interrupted) => break,
             Err(ReadlineError::Eof) => break,
