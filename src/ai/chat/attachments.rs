@@ -10,13 +10,16 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use image::{ImageFormat, imageops::FilterType};
+use image::{ImageFormat, ImageReader, imageops::FilterType};
 
 use crate::openai::{ContentPart, Message, MessageContent, Role};
 
 /// Maximum width/height (in pixels) an image is scaled down to before being
 /// sent to the model. Images already within this bound are sent unchanged.
-pub const MAX_IMAGE_DIMENSION: u32 = 8192;
+///
+/// 1568 is the long-edge cap providers recommend for vision input; sending
+/// larger images costs more tokens and latency without improving recognition.
+pub const MAX_IMAGE_DIMENSION: u32 = 1568;
 
 /// Build a user message from text and attachment filenames. Images are stored
 /// as workspace-relative references (`/files/{name}`) that
@@ -34,9 +37,6 @@ pub fn user_message_with_attachments(text: &str, filenames: &[String]) -> Messag
         parts.push(ContentPart::image(&format!("/files/{filename}")));
     }
 
-    if parts.is_empty() {
-        return Message::new(Role::User, text);
-    }
     Message::new_with_parts(Role::User, parts)
 }
 
@@ -115,12 +115,16 @@ fn mime_for_path(path: &Path) -> &'static str {
 /// already within the bound are returned unchanged.
 fn downscale(bytes: &[u8], mime: &'static str) -> Result<(&'static str, Vec<u8>)> {
     let format = image::guess_format(bytes)?;
-    let image = image::load_from_memory_with_format(bytes, format)?;
 
-    if image.width() <= MAX_IMAGE_DIMENSION && image.height() <= MAX_IMAGE_DIMENSION {
+    // Read only the header to check dimensions; a full decode is only needed
+    // when the image actually has to be resized.
+    let (width, height) = ImageReader::with_format(Cursor::new(bytes), format).into_dimensions()?;
+
+    if width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION {
         return Ok((mime, bytes.to_vec()));
     }
 
+    let image = image::load_from_memory_with_format(bytes, format)?;
     let resized = image.resize(
         MAX_IMAGE_DIMENSION,
         MAX_IMAGE_DIMENSION,
@@ -219,7 +223,8 @@ mod tests {
 
     #[test]
     fn downscales_oversized_image() {
-        // 1x8193 forces scaling on the tall side while staying cheap to encode.
+        // One pixel over the bound forces scaling on the tall side while
+        // staying cheap to encode.
         let bytes = png_bytes(1, MAX_IMAGE_DIMENSION + 1);
         let (mime, out) = downscale(&bytes, "image/png").unwrap();
         assert_eq!(mime, "image/png");

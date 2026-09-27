@@ -51,6 +51,10 @@ pub use super::public::{
 
 type SharedState = Arc<RwLock<AppState>>;
 
+/// Maximum number of image attachments accepted on a single chat message.
+/// Bounds the size of the multimodal request sent to the model.
+const MAX_ATTACHMENTS_PER_MESSAGE: usize = 20;
+
 /// Get a single chat session by ID
 async fn chat_session(
     State(state): State<SharedState>,
@@ -293,7 +297,7 @@ async fn chat_handler(
 
     // Only images are sent to the model; the upload API already restricts
     // uploads to image types.
-    let attachment_filenames: Vec<String> = payload
+    let mut attachment_filenames: Vec<String> = payload
         .attachments
         .iter()
         .filter(|a| {
@@ -303,6 +307,14 @@ async fn chat_handler(
         })
         .map(|a| a.filename.clone())
         .collect();
+    if attachment_filenames.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        tracing::warn!(
+            "Truncating {} image attachments to {}",
+            attachment_filenames.len(),
+            MAX_ATTACHMENTS_PER_MESSAGE
+        );
+        attachment_filenames.truncate(MAX_ATTACHMENTS_PER_MESSAGE);
+    }
     let user_msg = user_message_with_attachments(&payload.message, &attachment_filenames);
 
     let db = state.read().expect("Unable to read share state").db.clone();
