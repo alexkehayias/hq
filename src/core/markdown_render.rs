@@ -111,6 +111,9 @@ struct ItemPrefix {
     indent: String,
     marker: String,
     marker_width: usize,
+    /// Set once the marker has been emitted, so a later paragraph in the same
+    /// item lines up under the text instead of repeating the bullet/number.
+    marker_emitted: bool,
 }
 
 struct LinkCtx {
@@ -400,6 +403,7 @@ impl Layout {
             indent: "  ".repeat(self.lists.len().saturating_sub(1)),
             marker_width: UnicodeWidthStr::width(marker.as_str()),
             marker,
+            marker_emitted: false,
         }
     }
 
@@ -407,24 +411,35 @@ impl Layout {
         if self.body.is_empty() {
             return;
         }
+        // Only the item's first paragraph carries the marker; later ones are
+        // continuations, separated by a blank line like any other paragraph.
+        let starts_item = self.markers.last().is_some_and(|item| !item.marker_emitted);
         let (first, cont) = self.prefixes();
         self.items.push(Item::Para {
             first,
             cont,
             body: std::mem::take(&mut self.body),
-            list_item: !self.markers.is_empty(),
+            list_item: starts_item,
         });
     }
 
-    /// Prefixes for the first and continuation lines of a paragraph.
-    fn prefixes(&self) -> (Vec<Span>, Vec<Span>) {
+    /// Prefixes for the first and continuation lines of a paragraph. The item
+    /// marker is emitted once per item; paragraphs after the first indent past
+    /// it, matching the continuation prefix.
+    fn prefixes(&mut self) -> (Vec<Span>, Vec<Span>) {
         let mut first = self.quote_prefix();
         let mut cont = self.quote_prefix();
-        if let Some(item) = self.markers.last() {
+        if let Some(item) = self.markers.last_mut() {
+            let blank = " ".repeat(item.marker_width);
             first.push(Span::plain(item.indent.clone()));
-            first.push(Span::styled(Style::dim(), item.marker.clone()));
             cont.push(Span::plain(item.indent.clone()));
-            cont.push(Span::plain(" ".repeat(item.marker_width)));
+            cont.push(Span::plain(blank.clone()));
+            if item.marker_emitted {
+                first.push(Span::plain(blank));
+            } else {
+                item.marker_emitted = true;
+                first.push(Span::styled(Style::dim(), item.marker.clone()));
+            }
         }
         (first, cont)
     }
@@ -460,13 +475,39 @@ impl Layout {
     }
 }
 
-/// Drop control characters so model output cannot inject terminal escapes.
-/// Newlines and tabs are preserved; `\r` and friends are not.
+/// Drop characters that are invisible or reorder the text around them, so model
+/// output cannot inject terminal escapes or make a line read differently than it
+/// is. Newlines and tabs are preserved; `\r` and friends are not.
 fn sanitize(input: &str) -> String {
     input
         .chars()
-        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .filter(|c| matches!(c, '\n' | '\t') || (!c.is_control() && !is_invisible_format(*c)))
         .collect()
+}
+
+/// Characters that render as nothing, or that reorder the text around them.
+///
+/// Mirrors the reject/strip set in `crate::ai::chat::invisible`, with two
+/// deliberate exceptions: joiners (`U+200C`/`U+200D`) and variation selectors
+/// are kept, because they are legitimate in emoji and complex scripts and
+/// cannot hide meaning. A chat response has to be shown, so anything unwanted
+/// is stripped rather than rejected.
+fn is_invisible_format(c: char) -> bool {
+    let code = c as u32;
+    matches!(
+        code,
+        0x00AD // soft hyphen
+            | 0x034F // combining grapheme joiner
+            | 0x180E // Mongolian vowel separator
+            | 0x200B // zero-width space
+            | 0x200E | 0x200F // left/right-to-left marks
+            | 0x202A..=0x202E // bidi embeddings and overrides
+            | 0x2060 // word joiner
+            | 0x2061..=0x2064 // invisible math operators
+            | 0x2066..=0x2069 // bidi isolates
+            | 0xFEFF // byte order mark
+            | 0x115F | 0x1160 | 0x3164 | 0xFFA0 // Hangul fillers
+    ) || (0xE0000..=0xE007F).contains(&code) // Unicode tag block
 }
 
 fn emit(items: &[Item], width: usize, ansi: bool) -> String {
@@ -961,6 +1002,21 @@ mod tests {
     }
 
     #[test]
+    fn second_paragraph_in_a_list_item_does_not_repeat_the_marker() {
+        let out = lines("- first para\n\n  second para\n\n- other", 40);
+        assert_eq!(
+            out,
+            vec!["• first para", "", "  second para", "", "• other"]
+        );
+    }
+
+    #[test]
+    fn second_paragraph_in_an_ordered_item_does_not_repeat_the_number() {
+        let out = lines("1. one\n\n   two\n\n2. next", 40);
+        assert_eq!(out, vec!["1. one", "", "   two", "", "2. next"]);
+    }
+
+    #[test]
     fn code_block_is_preserved_verbatim() {
         let markdown = "```\nfn main() {\n    let x = 1;\n}\n```";
         let out = lines(markdown, 20);
@@ -1142,6 +1198,25 @@ mod tests {
         assert!(!out.contains('\x1b'), "{out:?}");
         assert!(!out.contains('\x07'), "{out:?}");
         assert_eq!(out.trim_end(), "safe[31mredtext");
+    }
+
+    #[test]
+    fn bidi_and_zero_width_characters_are_stripped() {
+        let out = render("a\u{202e}b \u{200b}c \u{feff}d \u{00ad}e", 40, false);
+        assert_eq!(out.trim_end(), "ab c d e");
+    }
+
+    #[test]
+    fn tag_block_characters_are_stripped() {
+        let out = render("x\u{e0064}\u{e0065}y", 40, false);
+        assert_eq!(out.trim_end(), "xy");
+    }
+
+    #[test]
+    fn joiners_and_variation_selectors_are_preserved() {
+        // 👨‍👩‍👧 (ZWJ sequence) and ❤️ (variation selector) must survive.
+        let emoji = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} \u{2764}\u{fe0f}";
+        assert_eq!(render(emoji, 40, false).trim_end(), emoji);
     }
 
     #[test]
