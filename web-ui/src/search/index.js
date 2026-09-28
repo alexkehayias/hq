@@ -18,7 +18,7 @@ let includeSimilarity = false;
 
 // Recent searches persisted per-device (like the theme override)
 const RECENT_KEY = 'hq-recent-searches';
-const MAX_RECENT = 10;
+const MAX_RECENT = 5;
 
 function getRecentSearches() {
   try {
@@ -42,14 +42,13 @@ function saveRecentSearch(query) {
 }
 
 function renderRecentSearches() {
-  recentList.innerHTML = getRecentSearches()
+  const recents = getRecentSearches();
+  recentSearches.hidden = recents.length === 0;
+  recentList.innerHTML = recents
     .map(
       (q) =>
-        html`<li>
-          <button type="button" data-query="${q}" class="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-sm text-body transition-colors hover:border-teal hover:text-teal-strong">
-            <hq-icon name="search" size="sm"></hq-icon>
-            <span>${q}</span>
-          </button>
+        html`<li class="flex items-center rounded-lg transition-colors hover:bg-mist">
+          <button type="button" data-query="${q}" class="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm text-body">${q}</button>
         </li>`,
     )
     .map((r) => r.value)

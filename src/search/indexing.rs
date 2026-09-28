@@ -863,7 +863,7 @@ pub fn index_chat_message_full_text(
     let role_str = role.as_str();
 
     // Get message content - use empty string if None
-    let msg_content = msg.content.as_deref().unwrap_or("");
+    let msg_content = msg.text().unwrap_or("");
 
     let doc = doc!(
         id => message_id,

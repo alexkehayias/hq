@@ -14,6 +14,17 @@ pub struct ChatSession {
 pub struct ChatRequest {
     pub session_id: String,
     pub message: String,
+    /// Images uploaded to the session workspace that should be attached to
+    /// this message. Files are referenced by their uploaded filename.
+    #[serde(default)]
+    pub attachments: Vec<ChatAttachment>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ChatAttachment {
+    pub filename: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
 }
 
 #[derive(Deserialize)]

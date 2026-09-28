@@ -48,7 +48,7 @@ impl PeriodicJob for DailyAgenda {
         .await;
 
         let last_msg = messages.last().unwrap();
-        let summary = last_msg.content.clone().unwrap();
+        let summary = last_msg.text().unwrap_or_default().to_string();
 
         // Broadcast push notification to all subscribers with a link
         // to the chat session

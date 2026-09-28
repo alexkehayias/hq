@@ -8,7 +8,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, post},
+    routing::{get, post},
 };
 
 use super::public::{FileUploadResponse, UploadedFile};
@@ -21,7 +21,7 @@ type SharedState = Arc<RwLock<AppState>>;
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
 /// File extensions accepted by the upload endpoint.
-const ALLOWED_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "pdf"];
+const ALLOWED_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
 /// A file field buffered from the multipart body, not yet validated.
 struct PendingFile {
@@ -75,12 +75,11 @@ fn content_type_for(ext: &str) -> &'static str {
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
-        "pdf" => "application/pdf",
         _ => "application/octet-stream",
     }
 }
 
-/// Upload one or more images/PDFs into the session workspace `files/` directory.
+/// Upload one or more images into the session workspace `files/` directory.
 async fn upload_files(
     State(state): State<SharedState>,
     mut multipart: Multipart,
@@ -207,6 +206,52 @@ async fn upload_files(
     Ok(Json(FileUploadResponse { files: uploaded }).into_response())
 }
 
+/// Serve a file previously uploaded into the session workspace `files/`
+/// directory. Used by the chat UI to render attachments when replaying a
+/// transcript.
+async fn get_file(
+    State(state): State<SharedState>,
+    AxumPath((session_id, filename)): AxumPath<(String, String)>,
+) -> Result<Response, ApiError> {
+    if !is_valid_session_id(&session_id) {
+        return Ok((StatusCode::BAD_REQUEST, "Invalid session_id").into_response());
+    }
+
+    let Some(filename) = sanitize_filename(&filename) else {
+        return Ok((StatusCode::BAD_REQUEST, "Invalid filename").into_response());
+    };
+
+    let ext = extension_of(&filename).unwrap_or_default();
+    if !ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
+        return Ok((StatusCode::BAD_REQUEST, "Unsupported file type").into_response());
+    }
+
+    let storage_path = state
+        .read()
+        .expect("Unable to read shared state")
+        .config
+        .storage_path
+        .clone();
+
+    let path = PathBuf::from(&storage_path)
+        .join("workspace")
+        .join(&session_id)
+        .join("files")
+        .join(&filename);
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => Ok((
+            [(axum::http::header::CONTENT_TYPE, content_type_for(&ext))],
+            bytes,
+        )
+            .into_response()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok((StatusCode::NOT_FOUND, "File not found").into_response())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Delete a file previously uploaded into the session workspace `files/`
 /// directory. The session ID is part of the path so a delete is always scoped
 /// to a single session and cannot reach another session's uploads.
@@ -248,6 +293,9 @@ async fn delete_file(
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", post(upload_files))
-        .route("/{session_id}/{filename}", delete(delete_file))
+        .route(
+            "/{session_id}/{filename}",
+            get(get_file).delete(delete_file),
+        )
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
 }

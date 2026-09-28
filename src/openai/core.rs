@@ -61,13 +61,81 @@ pub struct FunctionCall {
     pub r#type: String,
 }
 
+/// The content of a chat message. OpenAI accepts either a plain string or an
+/// array of content parts; the array form carries multimodal input such as
+/// images alongside text.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl MessageContent {
+    /// The text of this content, if any. For the parts form, returns the first
+    /// text part, which is where a message's text is stored.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            MessageContent::Text(text) => Some(text.as_str()),
+            MessageContent::Parts(parts) => parts.iter().find_map(|part| match part {
+                ContentPart::Text { text } => Some(text.as_str()),
+                ContentPart::ImageUrl { .. } => None,
+            }),
+        }
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(text: String) -> Self {
+        MessageContent::Text(text)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(text: &str) -> Self {
+        MessageContent::Text(text.to_string())
+    }
+}
+
+/// A single part of a multimodal message.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+impl ContentPart {
+    pub fn text(text: &str) -> Self {
+        ContentPart::Text {
+            text: text.to_string(),
+        }
+    }
+
+    /// An image part. `url` is either a `data:` URL or a workspace-relative
+    /// path (e.g. `/files/photo.png`) that is hydrated into a data URL before
+    /// the message is sent to the model.
+    pub fn image(url: &str) -> Self {
+        ContentPart::ImageUrl {
+            image_url: ImageUrl {
+                url: url.to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ImageUrl {
+    pub url: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Message {
     role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]
     refusal: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<MessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +145,12 @@ pub struct Message {
 impl Message {
     pub fn role(&self) -> &Role {
         &self.role
+    }
+
+    /// The text content of this message, if any. Multimodal messages return
+    /// their text part; messages with only images return `None`.
+    pub fn text(&self) -> Option<&str> {
+        self.content.as_ref().and_then(|content| content.text())
     }
 
     /// Returns the tool call ID this message is responding to, if any.
@@ -90,11 +164,23 @@ impl Message {
         Message {
             role,
             refusal: None,
-            content: Some(content.to_string()),
+            content: Some(MessageContent::Text(content.to_string())),
             tool_call_id: None,
             tool_calls: None,
         }
     }
+
+    /// A message whose content is a list of parts, used for multimodal input.
+    pub fn new_with_parts(role: Role, parts: Vec<ContentPart>) -> Self {
+        Message {
+            role,
+            refusal: None,
+            content: Some(MessageContent::Parts(parts)),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
     pub fn new_tool_call_request(tool_calls: Vec<FunctionCall>) -> Self {
         Message {
             role: Role::Assistant,
@@ -108,7 +194,7 @@ impl Message {
         Message {
             role: Role::Tool,
             refusal: None,
-            content: Some(content.to_string()),
+            content: Some(MessageContent::Text(content.to_string())),
             tool_call_id: Some(tool_call_id.to_string()),
             tool_calls: None,
         }
@@ -577,6 +663,34 @@ mod tests {
             serde_json::to_string(&msg).unwrap(),
             r#"{"role":"assistant","content":"I can help!"}"#
         );
+    }
+
+    #[test]
+    fn test_message_with_parts_serialization() {
+        let msg = Message::new_with_parts(
+            Role::User,
+            vec![
+                ContentPart::text("what is this?"),
+                ContentPart::image("data:image/png;base64,AAAA"),
+            ],
+        );
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}"#
+        );
+    }
+
+    #[test]
+    fn test_message_deserializes_string_content() {
+        let msg: Message = serde_json::from_str(r#"{"role":"user","content":"hello"}"#).unwrap();
+        assert_eq!(msg.text(), Some("hello"));
+    }
+
+    #[test]
+    fn test_message_deserializes_parts_content() {
+        let json = r#"{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"/files/a.png"}}]}"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.text(), Some("hi"));
     }
 
     #[test]

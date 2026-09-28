@@ -91,7 +91,7 @@ pub async fn run(
             Ok(line) => {
                 let user_msg = Message::new(Role::User, line.as_str());
                 let resp = chat.next_msg(user_msg).await?;
-                if let Some(content) = resp.last().and_then(|msg| msg.content.as_deref()) {
+                if let Some(content) = resp.last().and_then(|msg| msg.text()) {
                     print!("{}", markdown_render::render_for_stdout(content));
                 }
             }

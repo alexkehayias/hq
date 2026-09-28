@@ -184,7 +184,7 @@ impl IterateTool {
         match tokio::time::timeout(timeout, chat.next_msg(user)).await {
             Ok(Ok(msgs)) => {
                 let mut text = String::new();
-                for m in msgs.iter().filter_map(|m| m.content.as_ref()) {
+                for m in msgs.iter().filter_map(|m| m.text()) {
                     if !text.is_empty() {
                         text.push('\n');
                     }
