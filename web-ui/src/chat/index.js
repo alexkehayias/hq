@@ -49,15 +49,55 @@ document.addEventListener('DOMContentLoaded', () => {
             const isUser = message.role === 'user';
             const isAssistant = message.role === 'assistant';
             const _isSystem = message.role === 'system';
+
+            // Messages with attachments store content as an array of parts;
+            // older messages store it as a plain string.
+            const parts = Array.isArray(message.content)
+              ? message.content
+              : null;
+            const textContent = parts
+              ? parts
+                  .filter((part) => part.type === 'text')
+                  .map((part) => part.text)
+                  .join('\n')
+              : message.content;
+            const imageParts = parts
+              ? parts.filter((part) => part.type === 'image_url')
+              : [];
+
             const isToolCall =
               message.role === 'tool' || (isAssistant && !message.content);
 
             if (!isToolCall && (isUser || isAssistant)) {
-              const bubble = new MessageBubble();
-              bubble.setAttribute('message', message.content);
-              bubble.setAttribute('is-user-message', isUser.toString());
-              bubble.setAttribute('is-tool-call', isToolCall.toString());
-              document.getElementById('chat-display').prepend(bubble);
+              let anchor = null;
+              if (textContent) {
+                const bubble = new MessageBubble();
+                bubble.setAttribute('message', textContent);
+                bubble.setAttribute('is-user-message', isUser.toString());
+                bubble.setAttribute('is-tool-call', isToolCall.toString());
+                document.getElementById('chat-display').prepend(bubble);
+                anchor = bubble;
+              }
+              if (isUser && imageParts.length > 0) {
+                const files = imageParts.map((part) => {
+                  const url = part.image_url?.url || '';
+                  const filename = url.split('/').pop() || 'image';
+                  return {
+                    filename,
+                    content_type: 'image/*',
+                    url: `/api/files/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}`,
+                  };
+                });
+                const attachmentBubble = new AttachmentBubble();
+                attachmentBubble.setAttribute('files', JSON.stringify(files));
+                if (anchor) {
+                  anchor.after(attachmentBubble);
+                } else {
+                  document
+                    .getElementById('chat-display')
+                    .prepend(attachmentBubble);
+                }
+              }
             }
             if (isAssistant && isToolCall) {
               const bubble = new MessageBubble();
@@ -124,7 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Types the upload API accepts, plus image extensions it doesn't (iPhone
   // photos are HEIC) which we re-encode to JPEG before uploading.
-  const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'];
+  const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
   const IMAGE_EXTENSIONS = [
     'png',
     'jpg',
@@ -415,6 +455,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const readyAttachments = pendingAttachments.filter(
       (attachment) => attachment.status === 'done',
     );
+    const attachments = readyAttachments.map((attachment) => ({
+      filename: attachment.data.filename,
+      content_type: attachment.data.content_type,
+    }));
     if (readyAttachments.length > 0) {
       const files = readyAttachments.map((attachment) => ({
         filename: attachment.data.filename,
@@ -436,6 +480,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatRequest = {
       session_id: sessionId,
       message: message,
+      attachments: attachments,
     };
 
     fetch('/api/chat', {

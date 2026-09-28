@@ -1,3 +1,5 @@
+pub mod attachments;
+pub use attachments::{hydrate_images, user_message_with_attachments};
 pub mod commands;
 pub mod db;
 pub use db::*;

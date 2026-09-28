@@ -65,6 +65,14 @@ mod tests {
             .unwrap()
     }
 
+    fn get_request(session_id: &str, filename: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(format!("/api/files/{session_id}/{filename}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
     fn files_dir(storage: &str, session_id: &str) -> PathBuf {
         Path::new(storage)
             .join("workspace")
@@ -103,10 +111,65 @@ mod tests {
         assert_eq!(file["size"], PNG_BYTES.len());
     }
 
-    /// A PDF upload is accepted too.
+    /// An uploaded file can be fetched back with its content type.
     #[tokio::test]
     #[serial]
-    async fn it_stores_uploaded_pdf() {
+    async fn it_serves_uploaded_file() {
+        let (app, _state) = test_app_with_state().await;
+        let session_id = "session-serve";
+
+        let body = multipart_body(&[
+            ("session_id", None, session_id.as_bytes()),
+            ("file", Some("screenshot.png"), PNG_BYTES),
+        ]);
+        let response = app.clone().oneshot(upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(get_request(session_id, "screenshot.png"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), PNG_BYTES);
+    }
+
+    /// Fetching a file that isn't there is a 404.
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_not_found_when_serving_missing_file() {
+        let (app, _state) = test_app_with_state().await;
+
+        let response = app
+            .oneshot(get_request("session-missing", "nope.png"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Fetching a file with an unsupported extension is rejected.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_unsupported_type_on_serve() {
+        let (app, _state) = test_app_with_state().await;
+
+        let response = app
+            .oneshot(get_request("session-serve-bad", "notes.txt"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// PDFs are not accepted; only images are.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_pdf_upload() {
         let (app, state) = test_app_with_state().await;
         let storage = state.config.storage_path.clone();
         let session_id = "session-pdf";
@@ -117,12 +180,8 @@ mod tests {
         ]);
 
         let response = app.oneshot(upload_request(body)).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let json: serde_json::Value =
-            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
-        assert_eq!(json["files"][0]["content_type"], "application/pdf");
-        assert!(files_dir(&storage, session_id).join("doc.PDF").exists());
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!files_dir(&storage, session_id).join("doc.PDF").exists());
     }
 
     /// Unsupported file types are rejected and nothing is written.

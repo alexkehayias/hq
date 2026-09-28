@@ -56,7 +56,8 @@ class AttachmentBubble extends HTMLElement {
     const filename = escapeHtml(file.filename);
 
     if (file.content_type?.startsWith('image/')) {
-      return `<img src="${file.objectUrl}" alt="${filename}" class="max-h-64 max-w-full rounded-xl border border-blue-200 dark:border-blue-700">`;
+      const src = file.objectUrl || file.url;
+      return `<img src="${src}" alt="${filename}" class="max-h-64 max-w-full rounded-xl border border-blue-200 dark:border-blue-700">`;
     }
 
     return `

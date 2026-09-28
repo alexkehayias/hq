@@ -27,6 +27,7 @@ use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
     find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
+    user_message_with_attachments,
 };
 use crate::ai::tools::{
     BashTool, CalendarTool, DateTimeTool, EmailSearchTool, EmailUnreadTool, IterateTool,
@@ -49,6 +50,10 @@ pub use super::public::{
 };
 
 type SharedState = Arc<RwLock<AppState>>;
+
+/// Maximum number of image attachments accepted on a single chat message.
+/// Bounds the size of the multimodal request sent to the model.
+const MAX_ATTACHMENTS_PER_MESSAGE: usize = 20;
 
 /// Get a single chat session by ID
 async fn chat_session(
@@ -117,9 +122,9 @@ async fn handle_agent_mode(
 
     // Start the agent conversation
     let mut events = if resume {
-        claude_session.resume(user_msg.content.as_deref().unwrap_or(""))
+        claude_session.resume(user_msg.text().unwrap_or(""))
     } else {
-        claude_session.start(user_msg.content.as_deref().unwrap_or(""))
+        claude_session.start(user_msg.text().unwrap_or(""))
     };
 
     let (sse_tx, sse_rx) = mpsc::unbounded_channel::<String>();
@@ -289,7 +294,28 @@ async fn chat_handler(
     ];
 
     let tools = all_tools;
-    let user_msg = Message::new(Role::User, &payload.message);
+
+    // Only images are sent to the model; the upload API already restricts
+    // uploads to image types.
+    let mut attachment_filenames: Vec<String> = payload
+        .attachments
+        .iter()
+        .filter(|a| {
+            a.content_type
+                .as_deref()
+                .is_none_or(|content_type| content_type.starts_with("image/"))
+        })
+        .map(|a| a.filename.clone())
+        .collect();
+    if attachment_filenames.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        tracing::warn!(
+            "Truncating {} image attachments to {}",
+            attachment_filenames.len(),
+            MAX_ATTACHMENTS_PER_MESSAGE
+        );
+        attachment_filenames.truncate(MAX_ATTACHMENTS_PER_MESSAGE);
+    }
+    let user_msg = user_message_with_attachments(&payload.message, &attachment_filenames);
 
     let db = state.read().expect("Unable to read share state").db.clone();
 
@@ -617,9 +643,12 @@ async fn chat_handler(
         transcript.push(system_msg);
     }
 
+    let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
+
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
         .database(&db, Some(&session_id), None)
         .transcript(transcript)
+        .workspace_path(&workspace_path)
         .tools(tools)
         .streaming(tx.clone())
         .middleware(vec![

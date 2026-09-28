@@ -2117,6 +2117,7 @@ dependencies = [
  "hmac 0.13.0",
  "htmd",
  "http 1.4.2",
+ "image",
  "include_dir",
  "itertools 0.15.0",
  "libc",

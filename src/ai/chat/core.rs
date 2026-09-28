@@ -1,11 +1,13 @@
 use anyhow::{Error, Result, anyhow, bail};
 use futures_util::future::try_join_all;
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
+use super::attachments::hydrate_images;
 use super::db::{get_or_create_session, insert_chat_message};
 use super::models::{SessionMode, Transcript};
 use crate::ai::chat::middleware::{MiddlewareAction, ToolCallMiddleware};
@@ -41,6 +43,9 @@ pub struct Chat {
     pub session_id: Option<String>,
     tags: Option<Vec<String>>,
     middleware: Vec<Box<dyn ToolCallMiddleware>>,
+    // Directory holding the session workspace, used to resolve image
+    // attachment references before sending them to the model.
+    workspace_path: Option<PathBuf>,
     // TODO: Skills
     // TODO: MCP
     // TODO: Permissions
@@ -116,6 +121,13 @@ impl Chat {
     pub async fn next_msg(&mut self, msg: Message) -> Result<Vec<Message>, Error> {
         self.transcript.push(msg.clone());
 
+        // Expand image attachment references into data URLs on a copy of the
+        // transcript. The stored transcript keeps the small references so the
+        // database doesn't accumulate base64 image data.
+        let mut outbound_messages = self.transcript.messages();
+        hydrate_images(self.workspace_path.as_deref(), &mut outbound_messages).await;
+        let outbound = Transcript::new_with_messages(outbound_messages);
+
         let messages = if self.streaming {
             // ChatBuilder enforces that `streaming` and `tx` are
             // always set together
@@ -123,7 +135,7 @@ impl Chat {
             Self::chat_stream(
                 tx.clone(),
                 &self.tools,
-                &self.transcript,
+                &outbound,
                 &self.api_hostname,
                 &self.api_key,
                 &self.model,
@@ -133,7 +145,7 @@ impl Chat {
         } else {
             Self::chat(
                 &self.tools,
-                &self.transcript,
+                &outbound,
                 &self.api_hostname,
                 &self.api_key,
                 &self.model,
@@ -421,6 +433,7 @@ pub struct ChatBuilder {
     tx: Option<mpsc::UnboundedSender<String>>,
     tags: Option<Vec<String>>,
     middleware: Vec<Box<dyn ToolCallMiddleware>>,
+    workspace_path: Option<PathBuf>,
 }
 
 impl ChatBuilder {
@@ -439,6 +452,7 @@ impl ChatBuilder {
             streaming: false,
             tags: None,
             middleware: Vec::new(),
+            workspace_path: None,
         }
     }
 
@@ -455,6 +469,7 @@ impl ChatBuilder {
             session_id: self.session_id,
             tags: self.tags,
             middleware: self.middleware,
+            workspace_path: self.workspace_path,
         }
     }
 
@@ -481,6 +496,13 @@ impl ChatBuilder {
 
     pub fn transcript(mut self, messages: Vec<Message>) -> Self {
         self.transcript = Transcript::new_with_messages(messages);
+        self
+    }
+
+    /// Set the session workspace directory used to resolve image attachment
+    /// references before sending them to the model.
+    pub fn workspace_path(mut self, path: &Path) -> Self {
+        self.workspace_path = Some(path.to_path_buf());
         self
     }
 
@@ -888,7 +910,7 @@ Test skill body content."#;
         let messages = result.unwrap();
         // Should return the assistant's response
         assert_eq!(messages.len(), 1);
-        let content = messages[0].content.as_ref().expect("Should have content");
+        let content = messages[0].text().expect("Should have content");
         assert_eq!(content, "Hello! How can I help you today?");
     }
 
@@ -1025,7 +1047,7 @@ data: [DONE]
         // The last chunk carries content alongside finish_reason="stop", and its
         // content is included too.
         assert_eq!(messages.len(), 1);
-        let content = messages[0].content.as_ref().expect("Should have content");
+        let content = messages[0].text().expect("Should have content");
         assert_eq!(content, "Hello World!");
 
         // Verify the raw chunks were also sent to the streaming channel
@@ -1214,7 +1236,7 @@ data: [DONE]
         let tool_response = &messages[1];
         assert_eq!(*tool_response.role(), crate::openai::Role::Tool);
         assert_eq!(
-            tool_response.content.as_ref().unwrap(),
+            tool_response.text().unwrap(),
             "Website is temporarily unavailable (HTTP 503). Try again later."
         );
     }
@@ -1286,7 +1308,7 @@ data: [DONE]
         assert!(result.is_ok());
         let messages = result.unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content.as_ref().unwrap(), "Hello!");
+        assert_eq!(messages[0].text().unwrap(), "Hello!");
     }
 
     #[tokio::test]
@@ -1527,12 +1549,11 @@ data: [DONE]
         assert_eq!(*rejection.role(), crate::openai::Role::Tool);
         assert!(
             rejection
-                .content
-                .as_ref()
+                .text()
                 .unwrap()
                 .contains("Tool call rejected due to infinite loop"),
             "Expected rejection message, got: {:?}",
-            rejection.content
+            rejection.text()
         );
     }
 
@@ -1681,7 +1702,7 @@ data: [DONE]
         // NOT the dirty content with zero-width space.
         let tool_result = &messages[1];
         assert_eq!(*tool_result.role(), crate::openai::Role::Tool);
-        let content = tool_result.content.as_ref().expect("missing content");
+        let content = tool_result.text().expect("missing content");
         assert!(
             !content.contains('\u{200B}'),
             "zero-width space should be filtered out, got: {content:?}",
@@ -1764,7 +1785,7 @@ data: [DONE]
 
         let tool_result = &messages[1];
         assert_eq!(*tool_result.role(), crate::openai::Role::Tool);
-        let content = tool_result.content.as_ref().expect("missing content");
+        let content = tool_result.text().expect("missing content");
         assert!(
             !content.contains('\u{FEFF}'),
             "BOM should be filtered out, got: {content:?}",
@@ -1881,7 +1902,7 @@ data: [DONE]
         // NOT the original email containing tag block smuggling payload.
         let tool_result = &messages[1];
         assert_eq!(*tool_result.role(), crate::openai::Role::Tool);
-        let content = tool_result.content.as_ref().expect("missing content");
+        let content = tool_result.text().expect("missing content");
         // No tag block chars should leak through
         for c in content.chars() {
             let code = c as u32;

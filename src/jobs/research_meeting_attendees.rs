@@ -104,8 +104,8 @@ Frank is the VP of People at Acme. He was previously HR Manager at Acme and befo
         // Get the final response from the chat
         let summary = if let Some(last_msg) = messages.last() {
             last_msg
-                .content
-                .clone()
+                .text()
+                .map(str::to_string)
                 .unwrap_or_else(|| "No summary available".to_string())
         } else {
             "No response from chat".to_string()

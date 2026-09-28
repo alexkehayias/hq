@@ -29,9 +29,9 @@ pub async fn generate_and_update_session_info(
 
     let response = chat.next_msg(Message::new(Role::User, &prompt)).await?;
     let last_msg = response.last().expect("No messages").to_owned();
-    let content = last_msg.content.expect("No content");
+    let content = last_msg.text().expect("No content");
 
-    match serde_json::from_str::<serde_json::Value>(&content) {
+    match serde_json::from_str::<serde_json::Value>(content) {
         Ok(json_response) => {
             if let (Some(title), Some(summary)) = (
                 json_response["title"].as_str(),
@@ -76,7 +76,7 @@ fn create_session_prompt(transcript: &[Message]) -> String {
         if message.role() == &Role::System {
             continue;
         }
-        if let Some(content) = &message.content {
+        if let Some(content) = message.text() {
             conversation.push_str(&format!("{}\n", content));
         }
     }
