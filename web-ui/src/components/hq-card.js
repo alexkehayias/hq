@@ -20,8 +20,8 @@ class HqCard extends HTMLElement {
     while (this.firstChild) fragment.appendChild(this.firstChild);
 
     this.innerHTML = `
-      <section class="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
-        <div data-hq-header class="hidden px-6 py-8 border-b border-gray-100 dark:border-gray-700"></div>
+      <section class="max-w-4xl mx-auto bg-card border border-line rounded-card shadow-sm overflow-hidden">
+        <div data-hq-header class="hidden px-6 py-8 border-b border-line"></div>
         <div data-hq-body class="px-6 py-8"></div>
       </section>
     `;
@@ -55,7 +55,7 @@ class HqCard extends HTMLElement {
         '6xl': 'max-w-6xl',
         full: 'max-w-full',
       };
-      section.className = `${widths[mw] || widths['4xl']} mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden`;
+      section.className = `${widths[mw] || widths['4xl']} mx-auto bg-card border border-line rounded-card shadow-sm overflow-hidden`;
     }
   }
 }

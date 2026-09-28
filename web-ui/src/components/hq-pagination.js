@@ -7,7 +7,7 @@
  * @fires page-change - dispatched with { detail: { page } } when a page is clicked (bubbles)
  *
  * Renders prev button, 5-page window around current page, next button.
- * Active page styled as bg-blue-500 text-white. Replaces the inline
+ * Active page styled as bg-teal-strong text-white. Replaces the inline
  * onclick="loadSessions(N)" globals in chat/sessions/index.js.
  */
 class HqPagination extends HTMLElement {
@@ -33,19 +33,19 @@ class HqPagination extends HTMLElement {
       '<nav class="flex flex-wrap justify-center items-center gap-x-2 gap-y-1 mt-4">';
 
     if (page > 1) {
-      html += `<button data-page="${page - 1}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Previous</button>`;
+      html += `<button data-page="${page - 1}" class="px-3 py-1 border border-line rounded-[10px] text-body hover:bg-mist text-sm">Previous</button>`;
     }
 
     for (let i = start; i <= end; i++) {
       if (i === page) {
-        html += `<span class="px-3 py-1 border rounded bg-blue-600 text-white text-sm font-medium">${i}</span>`;
+        html += `<span class="px-3 py-1 border border-teal-strong rounded-[10px] bg-teal-strong text-white text-sm font-medium">${i}</span>`;
       } else {
-        html += `<button data-page="${i}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">${i}</button>`;
+        html += `<button data-page="${i}" class="px-3 py-1 border border-line rounded-[10px] text-body hover:bg-mist text-sm">${i}</button>`;
       }
     }
 
     if (page < totalPages) {
-      html += `<button data-page="${page + 1}" class="px-3 py-1 border rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm">Next</button>`;
+      html += `<button data-page="${page + 1}" class="px-3 py-1 border border-line rounded-[10px] text-body hover:bg-mist text-sm">Next</button>`;
     }
 
     html += '</nav>';

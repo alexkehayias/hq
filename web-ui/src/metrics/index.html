@@ -5,18 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+  <meta name="theme-color" content="#FAFBF8">
   <link href="/output.css" rel="stylesheet">
   <title>Metrics</title>
   <script src="/theme-init.js"></script>
 </head>
-<body>
+<body class="bg-canvas text-ink">
   <hq-page-shell meta-title="Metrics" back-href="/" back-label="Home">
     <hq-card max-width="4xl">
       <div slot="header">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Metrics</h1>
-        <p class="mt-2 text-gray-600 dark:text-gray-400">View usage statistics and trends</p>
+        <h1 class="text-3xl font-bold text-ink">Metrics</h1>
+        <p class="mt-2 text-muted">View usage statistics and trends</p>
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -33,7 +32,7 @@
         </hq-select>
       </div>
 
-      <h2 class="text-lg font-semibold text-gray-900 dark:text-white mt-8 mb-4">Summary</h2>
+      <h2 class="text-lg font-semibold text-ink mt-8 mb-4">Summary</h2>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <hq-stat-card id="totalTokensCard" label="Total Tokens" value="--"></hq-stat-card>
         <hq-stat-card id="avgTokensPerDayCard" label="Avg Tokens/Day" value="--"></hq-stat-card>

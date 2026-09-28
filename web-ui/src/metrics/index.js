@@ -32,14 +32,22 @@ const COST_PER_MILLION = {
   reasoning: 25.0,
 };
 
-// Bucket labels + colors for the stacked chart (in display order).
+// Bucket labels + theme tokens for the stacked chart (in display order). The
+// color is resolved from the CSS variable at render time so the chart follows
+// the Riverstone palette instead of hard-coding hex.
 const BUCKETS = [
-  { key: 'input', label: 'Input', color: '#3b82f6' },
-  { key: 'cache_read', label: 'Cache Read', color: '#10b981' },
-  { key: 'cache_write', label: 'Cache Write', color: '#f59e0b' },
-  { key: 'output', label: 'Output', color: '#ef4444' },
-  { key: 'reasoning', label: 'Reasoning', color: '#8b5cf6' },
+  { key: 'input', label: 'Input', colorVar: '--color-teal' },
+  { key: 'cache_read', label: 'Cache Read', colorVar: '--color-moss' },
+  { key: 'cache_write', label: 'Cache Write', colorVar: '--color-amber' },
+  { key: 'output', label: 'Output', colorVar: '--color-rust' },
+  { key: 'reasoning', label: 'Reasoning', colorVar: '--color-mauve' },
 ];
+
+function cssColor(name) {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+}
 
 let chartInstance = null;
 
@@ -124,9 +132,9 @@ function renderChart(events) {
     name: bucket.label,
     type: 'line',
     stack: 'tokens',
-    areaStyle: { color: bucket.color },
-    lineStyle: { width: 1, color: bucket.color },
-    itemStyle: { color: bucket.color },
+    areaStyle: { color: cssColor(bucket.colorVar) },
+    lineStyle: { width: 1, color: cssColor(bucket.colorVar) },
+    itemStyle: { color: cssColor(bucket.colorVar) },
     smooth: true,
     connectNulls: false,
     data: timeline.map((ts) => {
@@ -228,7 +236,7 @@ function renderSessionsChart(events) {
         name: 'Sessions',
         type: 'bar',
         data,
-        itemStyle: { color: '#3b82f6' },
+        itemStyle: { color: cssColor('--color-mauve') },
         smooth: false,
       },
     ],

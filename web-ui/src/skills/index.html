@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+    <meta name="theme-color" content="#FAFBF8">
     <link href="/output.css" rel="stylesheet">
     <link href="/vendor/codemirror/codemirror.min.css" rel="stylesheet">
     <link href="/vendor/codemirror/theme/dracula.min.css" rel="stylesheet" id="cm-theme">
@@ -14,16 +13,16 @@
     <script src="/theme-init.js"></script>
     <script type="module" src="/components/index.js"></script>
   </head>
-  <body>
-    <hq-page-shell id="page-shell" meta-title="Skills" back-href="/" back-label="Home">
+  <body class="bg-canvas text-ink">
+    <hq-page-shell id="page-shell" meta-title="Skills" nav-rail="skills" back-href="/" back-label="Home">
 
       <!-- ===== List View (no ?name=) ===== -->
       <div id="list-view">
-        <hq-card max-width="4xl">
-          <div slot="header">
-            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Skills</h1>
-            <p class="mt-2 text-gray-600 dark:text-gray-400">Browse and edit available skills</p>
-          </div>
+        <div class="mx-auto w-full max-w-[1000px]">
+          <header class="mb-6">
+            <h1 class="text-3xl font-bold text-ink">Skills</h1>
+            <p class="mt-2 text-muted">Browse and edit available skills</p>
+          </header>
 
           <hq-state-view id="list-view-state" state="loading">
             <div slot="empty">
@@ -38,11 +37,10 @@
               </hq-empty-state>
             </div>
             <div slot="content">
-              <div id="skill-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+              <div id="skill-grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3"></div>
             </div>
           </hq-state-view>
-
-        </hq-card>
+        </div>
       </div>
 
       <!-- ===== Detail View (?name=xxx) ===== -->
@@ -58,8 +56,8 @@
               <div slot="header">
                 <div class="flex items-start justify-between flex-wrap gap-4">
                   <div>
-                    <h1 id="skill-name" class="text-2xl font-bold text-gray-900 dark:text-white"></h1>
-                    <p id="skill-description" class="mt-1 text-gray-600 dark:text-gray-400"></p>
+                    <h1 id="skill-name" class="text-2xl font-bold text-ink"></h1>
+                    <p id="skill-description" class="mt-1 text-muted"></p>
                   </div>
                   <div id="skill-badges" class="flex flex-wrap gap-2"></div>
                 </div>
@@ -67,16 +65,16 @@
               <div id="detail-body" class="flex flex-col">
                 <div class="flex flex-col lg:flex-row -mx-6">
                   <!-- File Tree Sidebar -->
-                  <div class="w-full lg:w-64 bg-gray-50 dark:bg-gray-700 lg:border-r border-gray-200 dark:border-gray-600 overflow-y-auto">
-                    <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-600">
-                      <h2 class="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Files</h2>
+                  <div class="w-full lg:w-64 bg-mist lg:border-r border-line overflow-y-auto">
+                    <div class="px-4 py-3 border-b border-line">
+                      <h2 class="text-sm font-semibold text-body uppercase tracking-wider">Files</h2>
                     </div>
                     <div class="p-2">
                       <hq-file-tree id="file-tree"></hq-file-tree>
                     </div>
                   </div>
                   <!-- Editor -->
-                  <div class="flex-1 flex flex-col min-w-0 border-t lg:border-t-0 border-gray-200 dark:border-gray-600">
+                  <div class="flex-1 flex flex-col min-w-0 border-t lg:border-t-0 border-line">
                     <hq-code-editor id="code-editor"></hq-code-editor>
                   </div>
                 </div>

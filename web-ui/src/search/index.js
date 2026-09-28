@@ -46,7 +46,7 @@ function renderRecentSearches() {
     .map(
       (q) =>
         html`<li>
-          <button type="button" data-query="${q}" class="inline-flex items-center gap-1.5 rounded-full border border-gray-300 dark:border-gray-600 px-3 py-1 text-sm text-gray-700 dark:text-gray-300 transition-colors hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400">
+          <button type="button" data-query="${q}" class="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-sm text-body transition-colors hover:border-teal hover:text-teal-strong">
             <hq-icon name="search" size="sm"></hq-icon>
             <span>${q}</span>
           </button>

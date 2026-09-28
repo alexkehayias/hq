@@ -24,7 +24,7 @@ class HqModal extends HTMLElement {
 
     this.innerHTML = `
       <div data-hq-backdrop class="fixed inset-0 bg-black/85 z-[10000] flex items-start sm:items-center justify-center p-4 sm:p-6 overflow-y-auto" style="display:none">
-        <div data-hq-card class="max-w-2xl w-full bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-5 my-8">
+        <div data-hq-card class="max-w-2xl w-full bg-card border border-line rounded-card shadow-2xl p-5 my-8">
         </div>
       </div>
     `;

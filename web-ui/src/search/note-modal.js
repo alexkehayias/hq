@@ -33,24 +33,20 @@ const CHIP_GROUP = {
   SOMEDAY: 'done',
 };
 
+const CHIP_INACTIVE = 'border-line bg-card text-muted';
+
 const CHIP_COLOR = {
   todo: {
-    active:
-      'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
-    inactive:
-      'border-gray-200 bg-white text-gray-500 dark:border-gray-600 dark:bg-transparent dark:text-gray-400',
+    active: 'border-teal-tint bg-teal-tint text-teal-strong',
+    inactive: CHIP_INACTIVE,
   },
   waiting: {
-    active:
-      'border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
-    inactive:
-      'border-gray-200 bg-white text-gray-500 dark:border-gray-600 dark:bg-transparent dark:text-gray-400',
+    active: 'border-amber-tint bg-amber-tint text-amber-ink',
+    inactive: CHIP_INACTIVE,
   },
   done: {
-    active:
-      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
-    inactive:
-      'border-gray-200 bg-white text-gray-500 dark:border-gray-600 dark:bg-transparent dark:text-gray-400',
+    active: 'border-moss-tint bg-moss-tint text-moss',
+    inactive: CHIP_INACTIVE,
   },
 };
 
@@ -75,7 +71,7 @@ class HqNoteModal extends HTMLElement {
     this.#initialized = true;
 
     this.innerHTML =
-      '<hq-modal><div data-hq-content class="text-gray-900 dark:text-gray-100"></div></hq-modal>';
+      '<hq-modal><div data-hq-content class="text-ink"></div></hq-modal>';
     this.#modal = this.querySelector('hq-modal');
     this.#content = this.querySelector('[data-hq-content]');
 
@@ -91,7 +87,7 @@ class HqNoteModal extends HTMLElement {
   async open(id) {
     this.#modal.setAttribute('open', '');
     this.#content.innerHTML =
-      '<div class="text-center text-gray-500 dark:text-gray-400 py-8">Loading...</div>';
+      '<div class="text-center text-muted py-8">Loading...</div>';
     try {
       const resp = await fetch(`/api/notes/${id}/view`, {
         headers: { Accept: 'application/json' },
@@ -101,7 +97,7 @@ class HqNoteModal extends HTMLElement {
       this.#noteData = data;
       this.#render(data);
     } catch (err) {
-      this.#content.innerHTML = `<div class="text-center text-red-600 dark:text-red-400 py-8">Failed to load note: ${esc(err.message)}</div>`;
+      this.#content.innerHTML = `<div class="text-center text-rust py-8">Failed to load note: ${esc(err.message)}</div>`;
     }
   }
 
@@ -117,17 +113,17 @@ class HqNoteModal extends HTMLElement {
     // Header: task badge + close button
     html += '<div class="flex items-start justify-between mb-3.5">';
     html += isTask
-      ? `<span class="inline-flex items-center gap-1.5 rounded-md bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 text-xs font-medium text-blue-700 dark:text-blue-300">${CHECK_SVG} Task</span>`
+      ? `<span class="inline-flex items-center gap-1.5 rounded-md bg-teal-tint px-2.5 py-1 text-xs font-medium text-teal-strong">${CHECK_SVG} Task</span>`
       : '<span></span>';
-    html += `<button id="modal-close-btn" type="button" aria-label="Close" class="flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300">${CLOSE_SVG}</button>`;
+    html += `<button id="modal-close-btn" type="button" aria-label="Close" class="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-mist hover:text-ink focus:outline-none focus:ring-2 focus:ring-line">${CLOSE_SVG}</button>`;
     html += '</div>';
 
     // Title
-    html += `<h2 class="text-lg font-medium leading-snug text-gray-900 dark:text-gray-100">${esc(noteData.title || '')}</h2>`;
+    html += `<h2 class="text-lg font-medium leading-snug text-ink">${esc(noteData.title || '')}</h2>`;
 
     // Status chips with dropdowns (tasks only)
     if (isTask) {
-      html += '<p class="mb-1.5 mt-4 text-xs text-gray-500">Status</p>';
+      html += '<p class="mb-1.5 mt-4 text-xs text-muted">Status</p>';
       html += '<div class="flex gap-1.5">';
       const chips = [
         {
@@ -153,16 +149,16 @@ class HqNoteModal extends HTMLElement {
       chips.forEach((chip) => {
         const active = currentChip === chip.key;
         const c = CHIP_COLOR[chip.key];
-        const chipClasses = `flex-1 rounded-md border py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${active ? c.active : `${c.inactive} hover:bg-gray-50 dark:hover:bg-gray-800`}`;
+        const chipClasses = `flex-1 rounded-md border py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal ${active ? c.active : `${c.inactive} hover:bg-mist`}`;
         if (chip.dropdown.length > 0) {
           html += `<div class="relative flex-1">
             <div class="flex rounded-md border overflow-hidden ${active ? c.active : c.inactive}">
-              <button type="button" data-status="${chip.key === 'todo' ? 'TODO' : 'DONE'}" class="flex-1 py-1.5 px-2 text-xs font-medium ${active ? c.active : c.inactive} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/40">${chip.label}</button>
-              <button type="button" data-dropdown="${chip.key}" class="py-1.5 px-1 text-xs border-l ${active ? 'border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300' : 'border-gray-200 dark:border-gray-600 text-gray-400 dark:text-gray-500'} hover:bg-gray-50 dark:hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/40">
+              <button type="button" data-status="${chip.key === 'todo' ? 'TODO' : 'DONE'}" class="flex-1 py-1.5 px-2 text-xs font-medium ${active ? c.active : c.inactive} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal">${chip.label}</button>
+              <button type="button" data-dropdown="${chip.key}" class="py-1.5 px-1 text-xs border-l ${active ? 'border-teal-tint text-teal-strong' : 'border-line text-muted'} hover:bg-mist focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal">
                 <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
               </button>
             </div>
-            <div id="dropdown-${chip.key}" class="hidden absolute z-20 mt-1 w-full rounded-md bg-white dark:bg-gray-700 shadow-lg ring-1 ring-black ring-opacity-5 overflow-hidden">${chip.dropdown.map((item) => `<button type="button" data-status="${item.status}" class="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600">${item.label}</button>`).join('')}</div>
+            <div id="dropdown-${chip.key}" class="hidden absolute z-20 mt-1 w-full rounded-md bg-card shadow-lg ring-1 ring-line overflow-hidden">${chip.dropdown.map((item) => `<button type="button" data-status="${item.status}" class="flex w-full items-center gap-2 px-3 py-2 text-xs text-body hover:bg-mist">${item.label}</button>`).join('')}</div>
           </div>`;
         } else {
           html += `<button type="button" data-status="WAITING" class="${chipClasses}">${chip.label}</button>`;
@@ -174,9 +170,9 @@ class HqNoteModal extends HTMLElement {
     // Source
     if (noteData.file_name) {
       html += '<div class="mt-4 flex gap-2.5">';
-      html += `<div class="flex-1 rounded-md bg-gray-50 dark:bg-gray-700/50 px-2.5 py-2">
-        <p class="text-xs text-gray-400">Source</p>
-        <p class="text-sm font-medium text-gray-900 dark:text-gray-100">${esc(noteData.file_name)}</p>
+      html += `<div class="flex-1 rounded-md bg-mist px-2.5 py-2">
+        <p class="text-xs text-muted">Source</p>
+        <p class="text-sm font-medium text-ink">${esc(noteData.file_name)}</p>
       </div>`;
       html += '</div>';
     }
@@ -187,7 +183,7 @@ class HqNoteModal extends HTMLElement {
         .split(',')
         .map(
           (t) =>
-            `<span class="inline-block mr-1.5 mb-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 text-xs px-2 py-0.5 rounded-full">#${esc(t)}</span>`,
+            `<span class="inline-block mr-1.5 mb-1 bg-mist text-muted text-xs px-2 py-0.5 rounded-full">#${esc(t)}</span>`,
         )
         .join('')}</div>`;
     }
@@ -205,22 +201,21 @@ class HqNoteModal extends HTMLElement {
           .trim()
       : '';
     const messageHtml = marked.parse(bodyWithoutTitle, { breaks: true });
-    html += '<p class="mb-1.5 mt-4 text-xs text-gray-500">Note</p>';
-    html += `<div class="rounded-md bg-gray-50 dark:bg-gray-700/50 px-3 py-2.5 text-sm text-gray-600 dark:text-gray-300 markdown">${bodyWithoutTitle ? messageHtml : '<span class="italic text-gray-400 dark:text-gray-500">No additional content</span>'}</div>`;
+    html += '<p class="mb-1.5 mt-4 text-xs text-muted">Note</p>';
+    html += `<div class="rounded-md bg-mist px-3 py-2.5 text-sm text-body markdown">${bodyWithoutTitle ? messageHtml : '<span class="italic text-muted">No additional content</span>'}</div>`;
 
     // Done confirmation strip
     if (isTask) {
-      html += `<div id="done-hint" class="mt-4 flex items-center gap-1.5 rounded-md bg-emerald-50 dark:bg-emerald-900/30 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300 ${isDone ? '' : 'hidden'}">
+      html += `<div id="done-hint" class="mt-4 flex items-center gap-1.5 rounded-md bg-moss-tint px-3 py-2 text-xs text-moss ${isDone ? '' : 'hidden'}">
         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
         Marked done
       </div>`;
     }
 
     // Actions
-    html +=
-      '<div class="mt-4 flex gap-2 border-t border-gray-100 dark:border-gray-700 pt-4">';
-    html += `<button type="button" class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-600 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-300">${EDIT_SVG} Edit</button>`;
-    html += `<button type="button" class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-600 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 focus:outline-none focus:ring-2 focus:ring-red-400/40">${DELETE_SVG} Delete</button>`;
+    html += '<div class="mt-4 flex gap-2 border-t border-line pt-4">';
+    html += `<button type="button" class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-line py-1.5 text-xs font-medium text-body hover:bg-mist focus:outline-none focus:ring-2 focus:ring-line">${EDIT_SVG} Edit</button>`;
+    html += `<button type="button" class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-line py-1.5 text-xs font-medium text-rust hover:bg-rust-tint focus:outline-none focus:ring-2 focus:ring-rust">${DELETE_SVG} Delete</button>`;
     html += '</div>';
 
     this.#content.innerHTML = html;
@@ -298,18 +293,18 @@ class HqNoteModal extends HTMLElement {
       const active = newChip === 'todo';
       const c = CHIP_COLOR.todo;
       outer.className = `flex rounded-md border overflow-hidden ${active ? c.active : c.inactive}`;
-      labelBtn.className = `flex-1 py-1.5 px-2 text-xs font-medium ${active ? c.active : c.inactive} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/40`;
+      labelBtn.className = `flex-1 py-1.5 px-2 text-xs font-medium ${active ? c.active : c.inactive} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal`;
       labelBtn.textContent =
         CHIP_LABEL[newStatus] === 'Next' ? 'Next' : 'To do';
       labelBtn.dataset.status = newStatus === 'NEXT' ? 'NEXT' : 'TODO';
-      chevronBtn.className = `py-1.5 px-1 text-xs border-l ${active ? 'border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300' : 'border-gray-200 dark:border-gray-600 text-gray-400 dark:text-gray-500'} hover:bg-gray-50 dark:hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/40`;
+      chevronBtn.className = `py-1.5 px-1 text-xs border-l ${active ? 'border-teal-tint text-teal-strong' : 'border-line text-muted'} hover:bg-mist focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal`;
     }
 
     // Update waiting chip
     if (waitingBtn) {
       const active = newChip === 'waiting';
       const c = CHIP_COLOR.waiting;
-      waitingBtn.className = `flex-1 rounded-md border py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${active ? c.active : `${c.inactive} hover:bg-gray-50 dark:hover:bg-gray-800`}`;
+      waitingBtn.className = `flex-1 rounded-md border py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal ${active ? c.active : `${c.inactive} hover:bg-mist`}`;
     }
 
     // Update done chip
@@ -320,7 +315,7 @@ class HqNoteModal extends HTMLElement {
       const active = newChip === 'done';
       const c = CHIP_COLOR.done;
       outer.className = `flex rounded-md border overflow-hidden ${active ? c.active : c.inactive}`;
-      labelBtn.className = `flex-1 py-1.5 px-2 text-xs font-medium ${active ? c.active : c.inactive} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/40`;
+      labelBtn.className = `flex-1 py-1.5 px-2 text-xs font-medium ${active ? c.active : c.inactive} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal`;
       labelBtn.textContent =
         newStatus === 'CANCELED'
           ? 'Canceled'
@@ -331,7 +326,7 @@ class HqNoteModal extends HTMLElement {
         newStatus === 'CANCELED' || newStatus === 'SOMEDAY'
           ? newStatus
           : 'DONE';
-      chevronBtn.className = `py-1.5 px-1 text-xs border-l ${active ? 'border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300' : 'border-gray-200 dark:border-gray-600 text-gray-400 dark:text-gray-500'} hover:bg-gray-50 dark:hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/40`;
+      chevronBtn.className = `py-1.5 px-1 text-xs border-l ${active ? 'border-moss-tint text-moss' : 'border-line text-muted'} hover:bg-mist focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal`;
     }
 
     if (doneHint) doneHint.classList.toggle('hidden', !newIsDone);
@@ -347,7 +342,7 @@ class HqNoteModal extends HTMLElement {
       noteData.status = updated.status ? updated.status.toUpperCase() : null;
     } catch (_err) {
       content.innerHTML =
-        '<div class="text-center text-red-700 p-4 text-sm">Failed to update status. Please close and reopen the note.</div>';
+        '<div class="text-center text-rust p-4 text-sm">Failed to update status. Please close and reopen the note.</div>';
     }
   }
 }

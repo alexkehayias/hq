@@ -12,14 +12,25 @@ class HqBadge extends HTMLElement {
 
   #update() {
     const tone = this.getAttribute('tone') || 'gray';
+    const teal = 'bg-teal-tint text-teal-strong';
+    const moss = 'bg-moss-tint text-moss';
+    const amber = 'bg-amber-tint text-amber-ink';
+    const rust = 'bg-rust-tint text-rust';
+    const mauve = 'bg-mauve-tint text-mauve';
+    const gray = 'bg-mist text-muted';
+    // Legacy tone names map onto the Riverstone accents so existing callers
+    // keep working.
     const tones = {
-      blue: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
-      green:
-        'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
-      yellow:
-        'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300',
-      red: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300',
-      gray: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
+      teal,
+      moss,
+      amber,
+      rust,
+      mauve,
+      blue: teal,
+      green: moss,
+      yellow: amber,
+      red: rust,
+      gray,
     };
     this.className = [
       'px-2.5 py-0.5 rounded-full text-xs font-medium',

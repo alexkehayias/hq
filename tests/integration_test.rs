@@ -33,7 +33,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = body_to_string(response.into_body()).await;
-        assert!(body.contains("Welcome Alex"));
+        assert!(body.contains("Welcome back, Alex"));
     }
 
     #[tokio::test]

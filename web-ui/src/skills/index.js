@@ -69,9 +69,9 @@ async function loadSkills() {
       .map(
         (skill) => html`
           <a href="/skills/?name=${encodeURIComponent(skill.name)}"
-             class="block p-5 bg-gray-50 dark:bg-gray-700 hover:bg-blue-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200 border border-transparent hover:border-blue-200 dark:hover:border-blue-800">
-            <h3 class="font-semibold text-gray-900 dark:text-white truncate">${skill.name}</h3>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400 line-clamp-2">${skill.description}</p>
+             class="block rounded-card border border-line bg-card p-4 transition-shadow hover:shadow-lg/5 md:p-[22px]">
+            <h3 class="font-semibold text-ink truncate">${skill.name}</h3>
+            <p class="mt-1 text-sm text-muted line-clamp-2">${skill.description}</p>
           </a>
         `,
       )
@@ -115,10 +115,10 @@ async function showDetailView(name) {
 
     skillBadgesEl.innerHTML = '';
     if (currentSkill.license) {
-      skillBadgesEl.appendChild(badge(currentSkill.license, 'blue'));
+      skillBadgesEl.appendChild(badge(currentSkill.license, 'teal'));
     }
     if (currentSkill.compatibility) {
-      skillBadgesEl.appendChild(badge(currentSkill.compatibility, 'green'));
+      skillBadgesEl.appendChild(badge(currentSkill.compatibility, 'moss'));
     }
 
     // Render file tree

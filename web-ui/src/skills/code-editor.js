@@ -40,8 +40,8 @@ class HqCodeEditor extends HTMLElement {
     this.style.minHeight = '0';
 
     this.innerHTML = `
-      <div class="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
-        <span data-hq-filename class="text-sm font-medium text-gray-700 dark:text-gray-300 truncate"></span>
+      <div class="flex items-center justify-between px-4 py-2 bg-mist border-b border-line">
+        <span data-hq-filename class="text-sm font-medium text-body truncate"></span>
         <hq-button data-hq-save variant="primary" disabled><span data-hq-save-label>Save</span></hq-button>
       </div>
       <div data-hq-container class="flex-1 min-h-[400px]"></div>
