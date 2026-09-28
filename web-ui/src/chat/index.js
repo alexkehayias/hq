@@ -1,3 +1,4 @@
+import '/components/hq-nav-rail.js';
 import AttachmentBubble from './attachment-bubble.js';
 import MessageBubble from './message-bubble.js';
 
@@ -224,13 +225,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const isError = attachment.status === 'error';
     const chip = document.createElement('div');
     chip.className = isError
-      ? 'flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 max-w-[22rem]'
-      : 'flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 max-w-[16rem]';
+      ? 'flex items-center gap-2 pl-1 pr-2 py-1 rounded-[12px] border border-rust-tint bg-rust-tint max-w-[22rem]'
+      : 'flex items-center gap-2 pl-1 pr-2 py-1 rounded-[12px] border border-line bg-card max-w-[16rem]';
 
     if (isError) {
       const icon = document.createElement('span');
       icon.className =
-        'w-8 h-8 flex items-center justify-center shrink-0 text-red-500';
+        'w-8 h-8 flex items-center justify-center shrink-0 text-rust';
       icon.textContent = '⚠️';
       chip.appendChild(icon);
     } else if (attachment.objectUrl) {
@@ -242,18 +243,17 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       const icon = document.createElement('span');
       icon.className =
-        'w-8 h-8 flex items-center justify-center shrink-0 text-gray-400';
+        'w-8 h-8 flex items-center justify-center shrink-0 text-muted';
       icon.textContent = '📄';
       chip.appendChild(icon);
     }
 
     const label = document.createElement('span');
     if (isError) {
-      label.className =
-        'text-xs text-red-700 dark:text-red-300 break-words min-w-0';
+      label.className = 'text-xs text-rust break-words min-w-0';
       label.textContent = attachment.error || 'Upload failed';
     } else {
-      label.className = 'text-xs text-gray-700 dark:text-gray-200 truncate';
+      label.className = 'text-xs text-body truncate';
       label.textContent =
         attachment.status === 'uploading' ? 'Uploading…' : attachment.file.name;
     }
@@ -265,8 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'aria-label',
       isError ? 'Dismiss error' : 'Remove attachment',
     );
-    removeButton.className =
-      'shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200';
+    removeButton.className = 'shrink-0 text-muted hover:text-ink';
     removeButton.textContent = '×';
     removeButton.addEventListener('click', () => removeAttachment(attachment));
     chip.appendChild(removeButton);
@@ -501,6 +500,7 @@ document.addEventListener('DOMContentLoaded', () => {
           .read()
           .then(({ done, value }) => {
             if (done) {
+              assistantBubble.finishReasoning();
               console.log('Stream complete');
               return;
             }
@@ -560,6 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
             read();
           })
           .catch((error) => {
+            assistantBubble.finishReasoning();
             console.error('Read error:', error);
           });
       }

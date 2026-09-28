@@ -5,8 +5,39 @@
 /* biome-ignore lint/suspicious: will fix with tailwind v4 */
 @tailwind utilities;
 
+/* Riverstone theme. Tailwind color/radius tokens in tailwind.config.js resolve
+   to these variables, so a future dark theme can override them under `.dark`
+   without changing any component markup. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+
+  --color-teal: #1e8c82;
+  --color-teal-strong: #197a71;
+  --color-teal-bright: #3aa79a;
+  --color-teal-tint: #dcefec;
+  --color-amber: #c88a2e;
+  --color-amber-ink: #b07e1e;
+  --color-amber-tint: #f6e9ce;
+  --color-rust: #b5623a;
+  --color-rust-tint: #f2e0d6;
+  --color-moss: #5e8c3e;
+  --color-moss-tint: #e4edd6;
+  --color-mauve: #b0587e;
+  --color-mauve-tint: #f1dee7;
+
+  --color-card: #ffffff;
+  --color-canvas: #fafbf8;
+  --color-mist: #f4f7f2;
+  --color-line: #e6ebe4;
+  --color-muted: #66756a;
+  --color-ink: #223028;
+  --color-body: #33413a;
+  --color-code: #182420;
+
+  --color-code-fg: #5ecfc2;
+  --color-code-string: #e8b860;
+  --color-code-comment: #6e8076;
+  --color-code-keyword: #d98bb0;
 }
 
 /* Prevent FOUC (Flash Of Unstyled Custom Elements): hq-* components only
@@ -28,17 +59,17 @@
   }
 
   hr {
-    @apply my-10 border-b border-gray-300 dark:border-gray-600;
+    @apply my-10 border-b border-line;
   }
   h1 {
-    @apply text-4xl font-bold leading-tight text-gray-900 dark:text-gray-100;
+    @apply text-4xl font-bold leading-tight text-ink;
   }
   h2 {
-    @apply text-2xl font-bold leading-tight text-gray-800 dark:text-gray-100;
+    @apply text-2xl font-bold leading-tight text-ink;
   }
   h3,
   h4 {
-    @apply mt-10 font-semibold leading-tight text-gray-700 dark:text-gray-200;
+    @apply mt-10 font-semibold leading-tight text-ink;
   }
   h3 {
     @apply text-xl;
@@ -48,58 +79,59 @@
   }
   h3 code,
   h4 code {
-    @apply bg-gray-200 dark:bg-gray-800 text-base font-bold tracking-tighter text-gray-700 dark:text-gray-300 rounded;
+    @apply bg-teal-tint text-base font-bold tracking-tighter text-teal-strong rounded font-mono;
   }
+  /* Body copy inherits the bubble's color so the same markdown works on the
+     dark user bubble and the light assistant bubble. */
   p {
-    @apply text-gray-700 dark:text-gray-300 leading-relaxed;
+    @apply leading-relaxed;
   }
   p code,
   ul code,
   ol code {
-    @apply text-sm font-semibold rounded px-1 py-[2px] text-red-700 dark:text-red-200 bg-gray-200 dark:bg-gray-800 text-wrap;
+    @apply text-sm font-semibold rounded px-1 py-[2px] text-teal-strong bg-teal-tint text-wrap font-mono;
   }
   pre {
-    @apply overflow-auto text-xs bg-white dark:bg-gray-900 rounded-lg p-4;
+    @apply overflow-auto rounded-[14px] bg-code p-4 font-mono text-[12.5px] leading-relaxed;
   }
   pre code {
-    @apply text-sm font-bold text-gray-700 dark:text-gray-300;
+    @apply font-mono text-[12.5px];
   }
   ul li {
-    @apply list-disc list-outside ml-4 pl-1 mt-2 text-gray-700 dark:text-gray-300;
+    @apply list-disc list-outside ml-4 pl-1 mt-2;
   }
   ol li {
-    @apply list-decimal list-outside ml-4 pl-1 mt-2 text-gray-700 dark:text-gray-300;
+    @apply list-decimal list-outside ml-4 pl-1 mt-2;
   }
   a {
-    @apply text-blue-600 dark:text-blue-400 underline;
+    @apply text-teal-strong underline;
   }
   a:hover {
-    @apply text-blue-800 dark:text-blue-300;
+    @apply text-teal;
   }
   blockquote {
-    @apply border-l-4 border-gray-300 dark:border-gray-600 pl-4 py-1 my-6 text-gray-600 dark:text-gray-400 italic bg-gray-50 dark:bg-gray-800/50 rounded-r;
+    @apply border-l-4 border-line pl-4 py-1 my-6 text-muted italic bg-mist rounded-r;
   }
   table {
-    @apply w-full border-collapse overflow-x-auto block rounded-lg bg-white dark:bg-gray-900;
+    @apply w-full border-collapse overflow-x-auto block rounded-lg bg-card;
   }
   table thead {
-    @apply bg-gray-800 text-white dark:bg-gray-700;
+    @apply bg-ink text-white;
   }
   table th {
     @apply px-4 py-2 text-left font-semibold text-sm text-white;
   }
   table tbody tr:nth-child(even) {
-    @apply bg-gray-50 dark:bg-gray-800;
+    @apply bg-mist;
   }
   table td {
-    @apply px-4 py-2 border-t border-gray-200 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200 align-top;
+    @apply px-4 py-2 border-t border-line text-sm text-body align-top;
   }
   table caption {
-    @apply mt-2 text-sm text-gray-500 dark:text-gray-400;
+    @apply mt-2 text-sm text-muted;
   }
 
-  /* Highlight JS code syntax highlighting theme */
-  /* Based on the Ayu color theme */
+  /* Highlight JS syntax highlighting — Riverstone code palette */
   pre code.hljs {
     display: block;
     overflow-x: auto;
@@ -109,53 +141,49 @@
     padding: 3px 5px;
   }
   .hljs {
-    @apply text-gray-500 dark:text-gray-50;
+    color: var(--color-code-fg);
   }
-  .hljs-comment {
-    @apply text-gray-400 dark:text-gray-500;
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--color-code-comment);
   }
   .hljs-punctuation,
   .hljs-operator {
-    color: #f2a191;
+    color: var(--color-code-fg);
   }
   .hljs-tag,
   .hljs-attribute,
   .hljs-tag .hljs-name,
   .hljs-tag .hljs-attr {
-    color: #55b4d4;
+    color: var(--color-code-fg);
   }
   .hljs-name,
   .hljs-selector-tag {
-    color: #f07171;
+    color: var(--color-code-fg);
   }
   .hljs-keyword,
-  .hljs-meta .hljs-keyword {
-    color: #fa8532;
-    font-weight: 700;
-  }
+  .hljs-meta .hljs-keyword,
   .hljs-literal,
   .hljs-number,
   .hljs-constant {
-    color: #a37acc;
+    color: var(--color-code-keyword);
   }
   .hljs-string,
-  .hljs-meta .hljs-string {
-    color: #94978d;
-  }
+  .hljs-meta .hljs-string,
   .hljs-regexp {
-    color: #4cbf99;
+    color: var(--color-code-string);
   }
   .hljs-built_in,
   .hljs-type,
   .hljs-title,
   .hljs-section {
-    color: #eba400;
+    color: var(--color-code-fg);
     font-weight: 700;
   }
   .hljs-variable,
   .hljs-template-variable,
   .hljs-symbol {
-    color: #22a4e6;
+    color: var(--color-code-fg);
   }
   .hljs-meta,
   .hljs-doctag,
@@ -164,7 +192,7 @@
   .hljs-addition,
   .hljs-bullet,
   .hljs-code {
-    color: #e59645;
+    color: var(--color-code-string);
   }
   .hljs-emphasis {
     font-style: italic;
@@ -179,26 +207,16 @@
     padding: 1em;
     background-color: transparent;
   }
-  pre code.hljs,
-  .hljs {
-    display: block;
-    overflow-x: auto;
-    padding: 1em;
-    background-color: transparent;
-  }
 }
 
 .animate-bounce-dog1 {
   animation: bounce 1s infinite 0.2s;
-  @apply filter invert-0 dark:invert;
 }
 .animate-bounce-dog2 {
   animation: bounce 1s infinite 0.4s;
-  @apply filter invert-0 dark:invert;
 }
 .animate-bounce-dog3 {
   animation: bounce 1s infinite 0.6s;
-  @apply filter invert-0 dark:invert;
 }
 
 @keyframes bounce {

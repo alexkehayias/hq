@@ -47,8 +47,8 @@ function renderRecentSearches() {
   recentList.innerHTML = recents
     .map(
       (q) =>
-        html`<li class="flex items-center rounded-lg transition-colors hover:bg-gray-100 dark:hover:bg-gray-700/50">
-          <button type="button" data-query="${q}" class="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300">${q}</button>
+        html`<li class="flex items-center rounded-lg transition-colors hover:bg-mist">
+          <button type="button" data-query="${q}" class="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm text-body">${q}</button>
         </li>`,
     )
     .map((r) => r.value)

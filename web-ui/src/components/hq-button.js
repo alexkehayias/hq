@@ -40,17 +40,13 @@ class HqButton extends HTMLElement {
     const disabled = this.hasAttribute('disabled');
     btn.disabled = disabled;
     const variants = {
-      primary:
-        'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600',
-      secondary:
-        'bg-gray-200 text-gray-900 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600',
-      ghost:
-        'bg-transparent text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-gray-700',
-      danger:
-        'bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600',
+      primary: 'bg-teal-strong text-white hover:bg-teal',
+      secondary: 'bg-mist text-ink hover:bg-line',
+      ghost: 'bg-transparent text-teal-strong hover:bg-teal-tint',
+      danger: 'bg-rust text-white hover:brightness-95',
     };
     btn.className = [
-      'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors',
+      'inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-sm font-medium transition-colors',
       variants[variant] || variants.primary,
       disabled ? 'opacity-50 cursor-not-allowed' : '',
     ]

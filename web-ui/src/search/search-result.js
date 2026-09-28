@@ -46,12 +46,12 @@ class HqSearchResult extends HTMLElement {
       .filter(Boolean)
       .map(
         (t) =>
-          html`<span class="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs px-2 py-0.5 rounded-full mr-2">#${t}</span>`,
+          html`<span class="text-xs px-2 py-0.5 rounded-full mr-2 ${selected ? 'bg-teal text-white' : 'bg-mist text-muted'}">#${t}</span>`,
       );
 
-    const markup = html`<li class="group flex justify-between cursor-default select-none items-center rounded-md px-3 py-2 hover:cursor-pointer ${selected ? 'bg-blue-700 text-white' : ''}">
+    const markup = html`<li class="group flex justify-between cursor-default select-none items-center px-3 py-2 hover:cursor-pointer ${selected ? 'bg-teal-strong text-white' : 'hover:bg-mist'}">
       <div class="flex space-x-2">
-        ${icon ? html`<span class="py-0.5 text-gray-800 text-xs rounded-full">${icon}</span>` : null}
+        ${icon ? html`<span class="py-0.5 text-xs rounded-full ${selected ? '' : 'text-muted'}">${icon}</span>` : null}
         <span class="line-clamp-1">${this.#result.title}</span>
       </div>
       ${tags.length ? html`<div class="flex flex-row">${tags}</div>` : null}

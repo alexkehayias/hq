@@ -1,4 +1,5 @@
 import './hq-page-shell.js';
+import './hq-nav-rail.js';
 import './hq-card.js';
 import './hq-button.js';
 import './hq-badge.js';

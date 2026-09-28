@@ -31,10 +31,10 @@ class HqStatCard extends HTMLElement {
     // Clear and build
     this.innerHTML = '';
     const div = document.createElement('div');
-    div.className = 'bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm';
+    div.className = 'bg-mist border border-line rounded-card p-4';
     div.innerHTML = `
-      <p class="text-sm text-gray-500 dark:text-gray-400"></p>
-      <p class="text-2xl font-semibold text-gray-900 dark:text-white mt-1"></p>
+      <p class="text-sm text-muted"></p>
+      <p class="text-2xl font-semibold text-ink mt-1"></p>
     `;
     this.appendChild(div);
     this.#update();

@@ -58,29 +58,29 @@ function renderNode(node, openPaths, selectedPath) {
     const isOpen = openPaths.has(node.path);
     return html`<li class="block">
       <button
-        class="flex items-center gap-1 w-full px-2 py-1 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-left ${isOpen ? 'font-semibold' : ''}"
+        class="flex items-center gap-1 w-full px-2 py-1 text-sm rounded-[10px] hover:bg-mist text-left ${isOpen ? 'font-semibold' : ''}"
         data-path=${node.path}
         data-kind="dir"
       >
-        <span class="text-xs w-3">${isOpen ? '▼' : '▶'}</span>
-        <span><hq-icon name="folder" size="sm"></hq-icon></span>
+        <span class="text-xs w-3 text-muted">${isOpen ? '▼' : '▶'}</span>
+        <span class="text-muted"><hq-icon name="folder" size="sm"></hq-icon></span>
         <span>${node.name}</span>
       </button>
       ${
         isOpen && node.children.length
-          ? html`<ul class="ml-3 border-l border-gray-200 dark:border-gray-700">${sortChildren(node.children).map((c) => renderNode(c, openPaths, selectedPath))}</ul>`
+          ? html`<ul class="ml-3 border-l border-line">${sortChildren(node.children).map((c) => renderNode(c, openPaths, selectedPath))}</ul>`
           : null
       }
     </li>`;
   }
   return html`<li class="block">
     <button
-      class="flex items-center gap-1 w-full px-2 py-1 text-sm rounded ${isSelected ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 font-medium' : 'hover:bg-gray-100 dark:hover:bg-gray-700'} text-left"
+      class="flex items-center gap-1 w-full px-2 py-1 text-sm rounded-[10px] ${isSelected ? 'bg-moss-tint text-moss font-medium' : 'hover:bg-mist'} text-left"
       data-path=${node.path}
       data-kind="file"
     >
       <span class="text-xs w-3"></span>
-      <span><hq-icon name="file" size="sm"></hq-icon></span>
+      <span class="text-muted"><hq-icon name="file" size="sm"></hq-icon></span>
       <span>${node.name}</span>
     </button>
   </li>`;
@@ -143,11 +143,11 @@ class HqFileTree extends HTMLElement {
     const tree = this.#getTree();
     if (!tree.children.length) {
       this.innerHTML =
-        '<div class="px-2 py-4 text-sm text-gray-400">No files</div>';
+        '<div class="px-2 py-4 text-sm text-muted">No files</div>';
       return;
     }
     const selected = this.getAttribute('selected') || '';
-    const result = html`<ul class="text-gray-700 dark:text-gray-300 text-sm select-none">${sortChildren(tree.children).map((c) => renderNode(c, this.#openPaths, selected))}</ul>`;
+    const result = html`<ul class="text-body text-sm select-none">${sortChildren(tree.children).map((c) => renderNode(c, this.#openPaths, selected))}</ul>`;
     this.innerHTML = result.value;
   }
 }

@@ -5,22 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+  <meta name="theme-color" content="#FAFBF8">
   <link href="/output.css" rel="stylesheet">
   <title>Search</title>
   <script src="/theme-init.js"></script>
   <script type="module" src="/components/index.js"></script>
 </head>
-<body>
+<body class="bg-canvas text-ink">
   <hq-page-shell meta-title="Search" back-href="/" back-label="Home">
     <hq-card max-width="2xl">
       <div class="relative mb-4">
-        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400 dark:text-gray-500">
+        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-muted">
           <hq-icon name="search" size="md"></hq-icon>
         </div>
         <input id="search" type="text" autofocus autocapitalize="none" autocomplete="off"
-          class="h-12 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-transparent pl-10 pr-4 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:ring-2 focus:ring-blue-500 sm:text-sm"
+          class="h-12 w-full rounded-[12px] border border-line bg-mist pl-10 pr-4 text-ink placeholder:text-muted focus:ring-2 focus:ring-teal sm:text-sm"
           placeholder="Search...">
       </div>
 
@@ -28,7 +27,7 @@
         <div slot="empty">
           <hq-empty-state id="empty-state" icon="book" title="Search your notes">
             <div id="recent-searches" slot="content" class="text-left">
-              <p class="mb-1 px-3 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Recent</p>
+              <p class="mb-1 px-3 text-xs font-medium uppercase tracking-wide text-muted">Recent</p>
               <ul class="flex flex-col"></ul>
             </div>
           </hq-empty-state>
@@ -40,7 +39,7 @@
           </hq-empty-state>
         </div>
         <div slot="content">
-          <ul id="results" class="divide-y divide-gray-100 dark:divide-gray-700"></ul>
+          <ul id="results" class="divide-y divide-line"></ul>
         </div>
       </hq-state-view>
     </hq-card>

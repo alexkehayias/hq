@@ -5,15 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+  <meta name="theme-color" content="#FAFBF8">
   <link href="/output.css" rel="stylesheet">
   <title>Chat Sessions</title>
   <script src="/theme-init.js"></script>
 </head>
-<body>
+<body class="bg-canvas text-ink">
   <hq-page-shell meta-title="Chat Sessions" back-href="/" back-label="Home">
-    <h1 class="text-2xl font-bold mb-6 text-gray-900 dark:text-white">Chat Sessions</h1>
+    <h1 class="text-2xl font-bold mb-6 text-ink">Chat Sessions</h1>
 
     <hq-state-view id="sessions-view" state="loading">
       <div slot="empty">

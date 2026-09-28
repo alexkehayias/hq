@@ -5,123 +5,75 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>HQ - Welcome</title>
+    <title>HQ</title>
     <link href="/output.css" rel="stylesheet">
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#ffffff">
+    <meta name="theme-color" content="#FAFBF8">
     <link rel="apple-touch-icon" href="/icon512_maskable.png">
     <script src="/theme-init.js"></script>
+    <script type="module" src="/components/index.js"></script>
   </head>
-  <body class="min-h-dvh bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-    <!-- Fixed full-screen background so the gradient always covers the viewport in PWA mode -->
-    <div aria-hidden="true" class="fixed inset-0 bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900" style="z-index: -10;"></div>
-    <div class="min-h-dvh flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 py-12">
-      <!-- Welcome Card -->
-      <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
-        <!-- Header -->
-        <div class="px-6 pt-12 sm:px-8">
-          <h1 class="text-center text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
-            <!-- Add an extra space here so it's visually centered horizontally -->
-            👋 Welcome Alex! &nbsp;
-          </h1>
-        </div>
+  <body class="min-h-dvh bg-canvas font-sans text-ink">
+    <main class="mx-auto flex min-h-dvh w-full max-w-[920px] flex-col justify-center px-6 py-10">
+      <header class="mb-8 flex items-center gap-4">
+        <span class="flex size-11 shrink-0 items-center justify-center rounded-[14px] bg-gradient-to-br from-teal to-teal-bright text-white">
+          <hq-icon name="home" size="lg"></hq-icon>
+        </span>
+        <h1 class="text-3xl font-bold tracking-tight text-ink md:text-[44px] md:leading-[1.05]">Welcome back, Alex</h1>
+      </header>
 
-        <!-- Actions -->
-        <div class="px-6 py-8 sm:px-8 space-y-4">
-          <a href="/search/" class="group flex items-center justify-between w-full px-5 py-4 bg-gray-50 dark:bg-gray-700 hover:bg-blue-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200">
-            <div class="flex items-center space-x-4">
-              <div class="bg-blue-100 dark:bg-blue-900 p-3 rounded-lg group-hover:scale-110 transition-transform">
-                <svg class="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-                </svg>
-              </div>
-              <div class="text-left">
-                <h2 class="font-semibold text-gray-900 dark:text-white">Search</h2>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Find notes and tasks</p>
-              </div>
-            </div>
-            <svg class="h-5 w-5 text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
-          </a>
+      <nav class="grid grid-cols-2 gap-4 md:grid-cols-5">
+        <a href="/search/" class="group flex flex-col gap-3 rounded-tile bg-mist p-4 transition-shadow hover:shadow-lg/5">
+          <span class="flex size-10 items-center justify-center rounded-icon bg-teal-tint text-teal">
+            <hq-icon name="search" size="lg"></hq-icon>
+          </span>
+          <span>
+            <span class="block font-semibold text-ink">Search</span>
+            <span class="mt-0.5 block text-sm text-muted">Find notes and tasks</span>
+          </span>
+        </a>
 
-          <a href="/chat/" class="group flex items-center justify-between w-full px-5 py-4 bg-gray-50 dark:bg-gray-700 hover:bg-purple-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200">
-            <div class="flex items-center space-x-4">
-              <div class="bg-purple-100 dark:bg-purple-900 p-3 rounded-lg group-hover:scale-110 transition-transform">
-                <svg class="h-6 w-6 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
-                </svg>
-              </div>
-              <div class="text-left">
-                <h2 class="font-semibold text-gray-900 dark:text-white">Chat</h2>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Ask questions with AI</p>
-              </div>
-            </div>
-            <svg class="h-5 w-5 text-gray-400 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
-          </a>
+        <a href="/chat/" class="group flex flex-col gap-3 rounded-tile bg-mist p-4 transition-shadow hover:shadow-lg/5">
+          <span class="flex size-10 items-center justify-center rounded-icon bg-amber-tint text-amber">
+            <hq-icon name="chat" size="lg"></hq-icon>
+          </span>
+          <span>
+            <span class="block font-semibold text-ink">Chat</span>
+            <span class="mt-0.5 block text-sm text-muted">Ask questions with AI</span>
+          </span>
+        </a>
 
-          <a href="/chat/sessions/" class="group flex items-center justify-between w-full px-5 py-4 bg-gray-50 dark:bg-gray-700 hover:bg-green-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200">
-            <div class="flex items-center space-x-4">
-              <div class="bg-green-100 dark:bg-green-900 p-3 rounded-lg group-hover:scale-110 transition-transform">
-                <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                </svg>
-              </div>
-              <div class="text-left">
-                <h2 class="font-semibold text-gray-900 dark:text-white">Sessions</h2>
-                <p class="text-sm text-gray-500 dark:text-gray-400">View chat history</p>
-              </div>
-            </div>
-            <svg class="h-5 w-5 text-gray-400 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
-          </a>
+        <a href="/chat/sessions/" class="group flex flex-col gap-3 rounded-tile bg-mist p-4 transition-shadow hover:shadow-lg/5">
+          <span class="flex size-10 items-center justify-center rounded-icon bg-rust-tint text-rust">
+            <hq-icon name="sessions" size="lg"></hq-icon>
+          </span>
+          <span>
+            <span class="block font-semibold text-ink">Sessions</span>
+            <span class="mt-0.5 block text-sm text-muted">View chat history</span>
+          </span>
+        </a>
 
-          <a href="/skills/" class="group flex items-center justify-between w-full px-5 py-4 bg-gray-50 dark:bg-gray-700 hover:bg-teal-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200">
-            <div class="flex items-center space-x-4">
-              <div class="bg-teal-100 dark:bg-teal-900 p-3 rounded-lg group-hover:scale-110 transition-transform">
-                <svg class="h-6 w-6 text-teal-600 dark:text-teal-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
-                </svg>
-              </div>
-              <div class="text-left">
-                <h2 class="font-semibold text-gray-900 dark:text-white">Skills</h2>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Browse and edit skills</p>
-              </div>
-            </div>
-            <svg class="h-5 w-5 text-gray-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
-          </a>
+        <a href="/skills/" class="group flex flex-col gap-3 rounded-tile bg-mist p-4 transition-shadow hover:shadow-lg/5">
+          <span class="flex size-10 items-center justify-center rounded-icon bg-moss-tint text-moss">
+            <hq-icon name="skills" size="lg"></hq-icon>
+          </span>
+          <span>
+            <span class="block font-semibold text-ink">Skills</span>
+            <span class="mt-0.5 block text-sm text-muted">Browse and edit skills</span>
+          </span>
+        </a>
 
-          <a href="/metrics/" class="group flex items-center justify-between w-full px-5 py-4 bg-gray-50 dark:bg-gray-700 hover:bg-orange-50 dark:hover:bg-gray-600 rounded-xl transition-all duration-200">
-            <div class="flex items-center space-x-4">
-              <div class="bg-orange-100 dark:bg-orange-900 p-3 rounded-lg group-hover:scale-110 transition-transform">
-                <svg class="h-6 w-6 text-orange-600 dark:text-orange-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
-                </svg>
-              </div>
-              <div class="text-left">
-                <h2 class="font-semibold text-gray-900 dark:text-white">Metrics</h2>
-                <p class="text-sm text-gray-500 dark:text-gray-400">View usage analytics</p>
-              </div>
-            </div>
-            <svg class="h-5 w-5 text-gray-400 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
-          </a>
-        </div>
-
-        <!-- Footer -->
-        <div class="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-100 dark:border-gray-600">
-          <p class="text-center text-xs text-gray-500 dark:text-gray-400">
-            © Alex Kehayias
-          </p>
-        </div>
-      </div>
-    </div>
+        <a href="/metrics/" class="group col-span-2 flex items-center gap-3 rounded-tile bg-mist p-4 transition-shadow hover:shadow-lg/5 md:col-span-1 md:flex-col md:items-start md:gap-3">
+          <span class="flex size-10 items-center justify-center rounded-icon bg-mauve-tint text-mauve">
+            <hq-icon name="metrics" size="lg"></hq-icon>
+          </span>
+          <span>
+            <span class="block font-semibold text-ink">Metrics</span>
+            <span class="mt-0.5 block text-sm text-muted">View usage analytics</span>
+          </span>
+        </a>
+      </nav>
+    </main>
     <script src="/register-sw.js"></script>
   </body>
 </html>

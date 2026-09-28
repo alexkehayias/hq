@@ -58,17 +58,17 @@ class HqEmptyState extends HTMLElement {
     const result = html`<div class="text-center py-8">
       ${
         !showContent && icon
-          ? html`<div class="flex justify-center mb-4 text-gray-400"><hq-icon name="${icon}" size="lg"></hq-icon></div>`
+          ? html`<div class="flex justify-center mb-4 text-muted"><hq-icon name="${icon}" size="lg"></hq-icon></div>`
           : null
       }
       ${
         !showContent && title
-          ? html`<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">${title}</h3>`
+          ? html`<h3 class="text-lg font-semibold text-ink mb-2">${title}</h3>`
           : null
       }
       ${
         !showContent && this.#loose.length
-          ? html`<p class="text-sm text-gray-600 dark:text-gray-400 mb-4">${this.#loose.map((el) => el.textContent || '').join(' ')}</p>`
+          ? html`<p class="text-sm text-muted mb-4">${this.#loose.map((el) => el.textContent || '').join(' ')}</p>`
           : null
       }
       ${this.#content ? html`<div data-hq-content hidden=${!showContent}></div>` : null}

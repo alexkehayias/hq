@@ -29,11 +29,11 @@ class HqSelect extends HTMLElement {
     while (this.firstChild) fragment.appendChild(this.firstChild);
 
     this.innerHTML = `
-      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+      <label class="block text-sm font-medium text-body">
         <span class="hq-select-label mb-1 block"></span>
         <span class="relative block">
-          <select class="w-full appearance-none rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 pr-9 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"></select>
-          <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 dark:text-gray-500"><hq-icon name="chevron-down" size="sm"></hq-icon></span>
+          <select class="w-full appearance-none rounded-[12px] border border-line bg-card px-3 py-2 pr-9 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-teal"></select>
+          <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-muted"><hq-icon name="chevron-down" size="sm"></hq-icon></span>
         </span>
       </label>
     `;

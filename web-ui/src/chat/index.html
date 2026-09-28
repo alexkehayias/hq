@@ -2,60 +2,56 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color"
-        media="(prefers-color-scheme: light)"
-        content="#FFFFFF">
-  <meta name="theme-color"
-        media="(prefers-color-scheme: dark)"
-        content="#000000">
+  <meta name="theme-color" content="#FAFBF8">
   <link href="/output.css" rel="stylesheet">
   <title>Chat</title>
   <script src="/theme-init.js"></script>
 </head>
-<body style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
-  <div style="height: 100dvh;" class="bg-white dark:bg-black mx-auto flex flex-col items-center">
-    <div id="chat-container" class="grow overflow-y-auto w-full flex flex-col items-center scrollbar-none">
-      <div id="chat-display" class="p-4 grow flex flex-col-reverse w-full lg:max-w-2xl"></div>
-    </div>
-    <div class="relative bg-transparent w-full px-4 lg:max-w-2xl pb-8 sm:pb-0" style="margin-top: -2px;">
-      <div class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl">
-        <div id="attachment-chips" class="flex flex-wrap gap-2 empty:hidden px-4 pt-4"></div>
-        <textarea id="chat-input"
-                  type="text"
-                  class="block w-full p-4 bg-transparent highlight-none text-gray-900 dark:text-gray-100 resize-none overflow-auto outline-none"
-                  placeholder="Type a message..."
-                  rows="1"
-                  style="min-height: 3rem; max-height: 11.5rem;"
-                  autofocus></textarea>
-        <div class="flex items-center justify-between gap-2 px-2 pb-2">
-          <button id="attach-button"
-                  type="button"
-                  title="Attach files"
-                  aria-label="Attach files"
-                  class="flex items-center justify-center w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
-            </svg>
-          </button>
-          <button id="send-button"
-                  type="button"
-                  aria-label="Send message"
-                  disabled
-                  class="flex items-center justify-center w-9 h-9 rounded-full bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-500">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
-            </svg>
-          </button>
-        </div>
+<body class="bg-canvas text-ink" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
+  <div class="flex h-dvh bg-canvas">
+    <hq-nav-rail active="chat"></hq-nav-rail>
+    <div class="flex min-w-0 flex-1 flex-col">
+      <div id="chat-container" class="grow overflow-y-auto scrollbar-none">
+        <div id="chat-display" class="mx-auto flex w-full max-w-[720px] flex-col-reverse px-6 py-6"></div>
       </div>
-      <input type="file"
-             id="file-input"
-             class="hidden"
-             multiple
-             accept="image/*">
+      <div class="mx-auto w-full max-w-[720px] px-6 pb-6">
+        <div class="rounded-[18px] border border-line bg-mist p-1.5 md:bg-card">
+          <div id="attachment-chips" class="flex flex-wrap gap-2 empty:hidden px-2.5 pt-1.5"></div>
+          <textarea id="chat-input"
+                    class="block max-h-[11.5rem] min-h-12 w-full resize-none overflow-auto bg-transparent px-2.5 py-1.5 text-ink placeholder:text-muted outline-none"
+                    placeholder="Type a message..."
+                    rows="1"
+                    autofocus></textarea>
+          <div class="flex items-center justify-between gap-2 px-1 pb-1">
+            <button id="attach-button"
+                    type="button"
+                    title="Attach files"
+                    aria-label="Attach files"
+                    class="flex size-8 shrink-0 items-center justify-center rounded-full bg-line text-muted hover:bg-mist hover:text-ink">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
+              </svg>
+            </button>
+            <button id="send-button"
+                    type="button"
+                    aria-label="Send message"
+                    disabled
+                    class="flex size-8 shrink-0 items-center justify-center rounded-full bg-teal-strong text-white hover:bg-teal disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-teal-strong">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <input type="file"
+               id="file-input"
+               class="hidden"
+               multiple
+               accept="image/*">
+      </div>
     </div>
   </div>
   <script src="/vendor/marked.min.js"></script>

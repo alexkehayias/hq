@@ -44,7 +44,7 @@ class HqStateView extends HTMLElement {
       l.setAttribute('slot', 'loading');
       l.className = 'flex justify-center py-12';
       l.innerHTML =
-        '<hq-spinner></hq-spinner><p class="ml-3 text-gray-600 dark:text-gray-400">Loading...</p>';
+        '<hq-spinner></hq-spinner><p class="ml-3 text-muted">Loading...</p>';
       this.appendChild(l);
     }
 

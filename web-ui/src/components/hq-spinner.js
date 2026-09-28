@@ -2,7 +2,7 @@
  * <hq-spinner> — loading spinner (CSS animation).
  *
  * @attr {string} size - sm|md|lg (default: md)
- * @attr {string} tone - optional color class (e.g. "text-blue-600"); inherits currentColor if unset
+ * @attr {string} tone - optional color class (e.g. "text-rust"); inherits currentColor if unset
  *
  * CSS-only: Tailwind animate-spin. Used by <hq-state-view> default loading slot.
  */
@@ -18,7 +18,7 @@ class HqSpinner extends HTMLElement {
       lg: 'h-12 w-12 border-b-4',
     };
     this.className = [
-      'inline-block animate-spin rounded-full border-blue-600 dark:border-blue-400',
+      'inline-block animate-spin rounded-full border-teal-strong',
       sizes[size] || sizes.md,
       tone || '',
     ]
