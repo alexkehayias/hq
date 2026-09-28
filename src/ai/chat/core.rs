@@ -125,7 +125,7 @@ impl Chat {
         // transcript. The stored transcript keeps the small references so the
         // database doesn't accumulate base64 image data.
         let mut outbound_messages = self.transcript.messages();
-        hydrate_images(&mut outbound_messages, self.workspace_path.as_deref()).await;
+        hydrate_images(self.workspace_path.as_deref(), &mut outbound_messages).await;
         let outbound = Transcript::new_with_messages(outbound_messages);
 
         let messages = if self.streaming {

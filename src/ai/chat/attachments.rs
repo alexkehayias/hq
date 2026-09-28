@@ -43,7 +43,7 @@ pub fn user_message_with_attachments(text: &str, filenames: &[String]) -> Messag
 /// Replace workspace-relative image references in `messages` with base64
 /// `data:` URLs. Missing or unreadable images are dropped with a warning so a
 /// deleted upload doesn't break the conversation.
-pub async fn hydrate_images(messages: &mut [Message], workspace: Option<&Path>) {
+pub async fn hydrate_images(workspace: Option<&Path>, messages: &mut [Message]) {
     let Some(workspace) = workspace else {
         return;
     };
@@ -186,7 +186,7 @@ mod tests {
             .unwrap();
 
         let mut messages = vec![user_message_with_attachments("hi", &["a.png".to_string()])];
-        hydrate_images(&mut messages, Some(temp.path())).await;
+        hydrate_images(Some(temp.path()), &mut messages).await;
 
         let MessageContent::Parts(parts) = messages[0].content.as_ref().unwrap() else {
             panic!("expected parts");
@@ -204,7 +204,7 @@ mod tests {
             "hi",
             &["gone.png".to_string()],
         )];
-        hydrate_images(&mut messages, Some(temp.path())).await;
+        hydrate_images(Some(temp.path()), &mut messages).await;
 
         let MessageContent::Parts(parts) = messages[0].content.as_ref().unwrap() else {
             panic!("expected parts");
