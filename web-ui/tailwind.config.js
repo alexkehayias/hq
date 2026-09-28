@@ -6,12 +6,8 @@ module.exports = {
   darkMode: 'class',
   theme: {
     extend: {
-      // Colors resolve to CSS variables declared in input.css so the future
-      // 6a dark theme can override them under `.dark` without touching markup.
-      fontFamily: {
-        sans: ['var(--font-sans)'],
-        mono: ['var(--font-mono)'],
-      },
+      // Colors resolve to CSS variables declared in input.css so a future dark
+      // theme can override them under `.dark` without touching markup.
       colors: {
         teal: {
           DEFAULT: 'var(--color-teal)',

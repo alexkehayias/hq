@@ -5,14 +5,11 @@
 /* biome-ignore lint/suspicious: will fix with tailwind v4 */
 @tailwind utilities;
 
-/* Riverstone · Daytime (7a). Tailwind color/radius/font tokens in
-   tailwind.config.js resolve to these variables, so the future 6a dark theme
-   can override them under `.dark` without changing any component markup. */
+/* Riverstone theme. Tailwind color/radius tokens in tailwind.config.js resolve
+   to these variables, so a future dark theme can override them under `.dark`
+   without changing any component markup. */
 :root {
   color-scheme: light;
-
-  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --color-teal: #1e8c82;
   --color-teal-strong: #197a71;
