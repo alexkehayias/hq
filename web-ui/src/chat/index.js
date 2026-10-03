@@ -192,27 +192,30 @@ document.addEventListener('DOMContentLoaded', () => {
   const needsConversion = (file) =>
     isImageFile(file) && !ALLOWED_EXTENSIONS.includes(extensionOf(file.name));
 
-  const convertToJpeg = (file) =>
-    new Promise((resolve, reject) => {
+  // iPhone photos are HEIC and up to 48MP. iOS only transcodes them to JPEG
+  // when picked in Safari; a standalone PWA hands over the raw HEIC, so we
+  // decode and re-encode here. Downscale before drawing: iOS caps canvas
+  // dimensions and a full-resolution canvas makes `toBlob` return null.
+  const MAX_IMAGE_DIMENSION = 2048;
+
+  // `createImageBitmap` decodes HEIC; `<img>` is the fallback for browsers
+  // that lack it.
+  const decodeImage = async (file) => {
+    if (typeof createImageBitmap === 'function') {
+      try {
+        return await createImageBitmap(file, {
+          imageOrientation: 'from-image',
+        });
+      } catch {
+        // Fall through to the <img> path.
+      }
+    }
+    return await new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
         URL.revokeObjectURL(url);
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext('2d');
-        // JPEG has no alpha channel; fill white so transparent areas don't
-        // turn black.
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
-        canvas.toBlob(
-          (blob) =>
-            blob ? resolve(blob) : reject(new Error('Could not convert image')),
-          'image/jpeg',
-          0.92,
-        );
+        resolve(img);
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);
@@ -220,6 +223,38 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       img.src = url;
     });
+  };
+
+  const convertToJpeg = async (file) => {
+    const source = await decodeImage(file);
+    const sourceWidth = source.naturalWidth ?? source.width;
+    const sourceHeight = source.naturalHeight ?? source.height;
+    const scale = Math.min(
+      1,
+      MAX_IMAGE_DIMENSION / Math.max(sourceWidth, sourceHeight),
+    );
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    // JPEG has no alpha channel; fill white so transparent areas don't
+    // turn black.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(source, 0, 0, width, height);
+    source.close?.();
+
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.92),
+    );
+    if (!blob) {
+      throw new Error('Could not convert image');
+    }
+    return blob;
+  };
 
   const buildChip = (attachment) => {
     const isError = attachment.status === 'error';
