@@ -1,5 +1,5 @@
 // A generic service worker for a PWA
-const CACHE_NAME = 'my-pwa-cache-v2';
+const CACHE_NAME = 'my-pwa-cache-v3';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -30,6 +30,11 @@ self.addEventListener('fetch', (event) => {
   // (POST/PATCH/DELETE) directly so a network failure isn't turned into a
   // cache lookup, which resolves to undefined for these methods.
   if (request.method !== 'GET') return;
+
+  // Never intercept API requests. SSE streams (e.g. /api/chat/{id}/stream)
+  // must reach the network directly; cloning and caching a long-lived
+  // streaming body breaks it.
+  if (new URL(request.url).pathname.startsWith('/api/')) return;
 
   // Network-first strategy: always try network first, fall back to cache if offline
   event.respondWith(
