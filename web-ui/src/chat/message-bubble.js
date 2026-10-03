@@ -115,7 +115,8 @@ class MessageBubble extends HTMLElement {
 
         const reasoningContentElement = document.createElement('div');
         reasoningContentElement.dataset.hqReasoning = '';
-        reasoningContentElement.className = 'text-sm text-muted pl-4 pt-2';
+        reasoningContentElement.className =
+          'text-sm text-muted pl-4 pt-2 overflow-auto';
         reasoningContainer.appendChild(reasoningContentElement);
 
         reasoningEl.appendChild(reasoningContainer);

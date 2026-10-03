@@ -209,6 +209,15 @@
   }
 }
 
+/* The teal link color is nearly invisible against the teal user bubble, so
+   links there fall back to the bubble's own light text color. */
+message-bubble[is-user-message="true"] .markdown a {
+  @apply text-white;
+}
+message-bubble[is-user-message="true"] .markdown a:hover {
+  @apply text-teal-tint;
+}
+
 .animate-bounce-dog1 {
   animation: bounce 1s infinite 0.2s;
 }
