@@ -84,6 +84,19 @@ pub enum RejectReason {
     ExcessiveInvisibleChars,
 }
 
+impl std::fmt::Display for RejectReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reason = match self {
+            RejectReason::ControlChar => "control characters or soft hyphen",
+            RejectReason::BidiFormatting => "bidirectional formatting characters",
+            RejectReason::TagBlock => "Unicode tag block characters",
+            RejectReason::MidWordInterleaving => "invisible characters interleaved between letters",
+            RejectReason::ExcessiveInvisibleChars => "an excessive amount of invisible characters",
+        };
+        f.write_str(reason)
+    }
+}
+
 /// Outcome of scanning a string for invisible characters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvisibleSanitization {

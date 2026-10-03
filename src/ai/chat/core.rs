@@ -1780,20 +1780,15 @@ data: [DONE]
 
         assert!(result.is_ok(), "chat failed: {:?}", result.err());
         let messages = result.unwrap();
-        // 3 messages: tool call request, (rejected) tool response, final content
+        // 3 messages: tool call request, (cleaned) tool response, final content
         assert_eq!(messages.len(), 3);
 
         let tool_result = &messages[1];
         assert_eq!(*tool_result.role(), crate::openai::Role::Tool);
         let content = tool_result.text().expect("missing content");
-        assert!(
-            !content.contains('\u{FEFF}'),
-            "BOM should be filtered out, got: {content:?}",
-        );
-        assert!(
-            content.contains("invisible characters"),
-            "expected rejection message, got: {content}",
-        );
+        // A leading BOM is boundary-adjacent, so it is stripped and the
+        // cleaned content passes through rather than being rejected.
+        assert_eq!(content, "dirty", "BOM should be stripped, got: {content:?}",);
     }
 
     #[tokio::test]
