@@ -121,6 +121,23 @@ impl Chat {
     pub async fn next_msg(&mut self, msg: Message) -> Result<Vec<Message>, Error> {
         self.transcript.push(msg.clone());
 
+        // Persist the user message up front so it's visible while the response
+        // is still streaming (e.g. when a client reconnects mid-turn).
+        // ChatBuilder enforces that these are always set together.
+        if let (Some(db), Some(session_id), Some(tags)) = (&self.db, &self.session_id, &self.tags) {
+            // Convert tags into a slice
+            let tags: &[&str] = &tags.iter().map(String::as_str).collect::<Vec<&str>>();
+            // Ensure that the session exists in the DB
+            // NOTE: While it isn't great that this gets called repeatedly
+            // for each turn in the chat, it avoids filling up the DB
+            // with sessions that have no messages e.g. a chat that
+            // resulted in an error on the first turn.
+            get_or_create_session(db, session_id, tags, SessionMode::Chat).await?;
+
+            // Save the input message
+            insert_chat_message(db, session_id, &msg).await?;
+        }
+
         // Expand image attachment references into data URLs on a copy of the
         // transcript. The stored transcript keeps the small references so the
         // database doesn't accumulate base64 image data.
@@ -156,19 +173,7 @@ impl Chat {
 
         // Store the new messages in the DB
         // ChatBuilder enforces that these are always set together
-        if let (Some(db), Some(session_id), Some(tags)) = (&self.db, &self.session_id, &self.tags) {
-            // Convert tags into a slice
-            let tags: &[&str] = &tags.iter().map(String::as_str).collect::<Vec<&str>>();
-            // Ensure that the session exists in the DB
-            // NOTE: While it isn't great that this gets called repeatedly
-            // for each turn in the chat, it avoids filling up the DB
-            // with sessions that have no messages e.g. a chat that
-            // resulted in an error on the first turn.
-            get_or_create_session(db, session_id, tags, SessionMode::Chat).await?;
-
-            // Save the input message
-            insert_chat_message(db, session_id, &msg).await?;
-
+        if let (Some(db), Some(session_id), Some(_)) = (&self.db, &self.session_id, &self.tags) {
             // Save each message
             for m in messages.iter() {
                 self.transcript.push(m.clone());

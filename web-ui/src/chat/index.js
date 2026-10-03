@@ -118,6 +118,17 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           });
         }
+
+        // If a response is still being generated, attach to its stream and
+        // render the remaining output as it arrives.
+        if (data?.in_progress) {
+          const assistantBubble = new MessageBubble();
+          assistantBubble.setAttribute('is-user-message', 'false');
+          assistantBubble.setAttribute('is-tool-call', 'false');
+          assistantBubble.setAttribute('is-loading', 'true');
+          document.getElementById('chat-display').prepend(assistantBubble);
+          openResumeStream(sessionId, 0, assistantBubble, { content: '' });
+        }
         scrollToBottom();
       })
       .catch((error) => console.error('Error:', error));
@@ -427,6 +438,69 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.setSelectionRange(newPos, newPos);
   };
 
+  // Tracks the active resume stream so a new one replaces any previous.
+  let activeResumeStream = null;
+
+  // Apply a streamed delta to an assistant bubble, accumulating content.
+  const applyDelta = (bubble, accum, parsed) => {
+    const choice = parsed.choices?.[0];
+    if (!choice) return;
+    const content = choice.delta?.content;
+    const reasoning =
+      choice.delta?.reasoning || choice.delta?.reasoning_content;
+    if (content) {
+      accum.content += content;
+      bubble.setAttribute('is-loading', 'false');
+      bubble.updateContent(accum.content);
+    }
+    if (reasoning) {
+      bubble.setAttribute('is-loading', 'false');
+      bubble.addReasoning(reasoning);
+    }
+  };
+
+  // Reconnect to an in-flight response for a session. `after` is the resume
+  // cursor: 0 replays the whole turn (used on page load), while a nonzero value
+  // continues after the chunks already rendered.
+  const openResumeStream = (id, after, assistantBubble, accum) => {
+    if (activeResumeStream) {
+      activeResumeStream.close();
+      activeResumeStream = null;
+    }
+    const es = new EventSource(
+      `/api/chat/${encodeURIComponent(id)}/stream?after=${after}`,
+    );
+    activeResumeStream = es;
+
+    es.onmessage = (event) => {
+      if (event.data === '[DONE]') return;
+      let parsed;
+      try {
+        parsed = JSON.parse(event.data);
+      } catch (error) {
+        console.error('Error parsing JSON:', error);
+        return;
+      }
+      applyDelta(assistantBubble, accum, parsed);
+    };
+
+    // The server sends a terminal `done` event when the turn finishes.
+    es.addEventListener('done', () => {
+      assistantBubble.finishReasoning();
+      es.close();
+      if (activeResumeStream === es) activeResumeStream = null;
+    });
+
+    es.onerror = () => {
+      // A 204 (no active turn) closes the connection for good; otherwise
+      // EventSource reconnects automatically with Last-Event-ID.
+      if (es.readyState === EventSource.CLOSED) {
+        assistantBubble.finishReasoning();
+        if (activeResumeStream === es) activeResumeStream = null;
+      }
+    };
+  };
+
   const sendMessage = () => {
     const message = chatInput.value.trim();
     const hasReadyAttachment = pendingAttachments.some(
@@ -482,91 +556,86 @@ document.addEventListener('DOMContentLoaded', () => {
       attachments: attachments,
     };
 
+    // Accumulates streamed content so a reconnect can continue the same
+    // bubble. `lastEventId` is the SSE cursor for resuming after a read error.
+    const accum = { content: '' };
+    let lastEventId = 0;
+    let finished = false;
+
     fetch('/api/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(chatRequest),
-    }).then((response) => {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+    })
+      .then((response) => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-      let contentAccum = '';
+        function read() {
+          reader
+            .read()
+            .then(({ done, value }) => {
+              if (done) {
+                finished = true;
+                assistantBubble.finishReasoning();
+                return;
+              }
 
-      function read() {
-        reader
-          .read()
-          .then(({ done, value }) => {
-            if (done) {
-              assistantBubble.finishReasoning();
-              console.log('Stream complete');
-              return;
-            }
+              // Convert Uint8Array to string
+              const chunk = decoder.decode(value, { stream: true });
+              buffer += chunk;
 
-            // Convert Uint8Array to string
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
+              // Process complete lines
+              const lines = buffer.split('\n');
+              buffer = lines.pop(); // Keep incomplete line in buffer
 
-            // Process complete lines
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); // Keep incomplete line in buffer
-
-            lines.forEach((line) => {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6).trim();
-                if (data === '[DONE]') {
-                  console.log('Stream finished');
+              lines.forEach((line) => {
+                // Track the SSE event id so a reconnect can resume here.
+                if (line.startsWith('id:')) {
+                  const id = Number.parseInt(line.slice(3).trim(), 10);
+                  if (!Number.isNaN(id)) lastEventId = id;
                   return;
                 }
-                try {
-                  const parsed = JSON.parse(data);
-                  const content = parsed.choices[0].delta.content;
-                  const reasoning =
-                    parsed.choices[0].delta.reasoning ||
-                    parsed.choices[0].delta.reasoning_content;
-
-                  // TODO: Handle rendering tool calls
-                  const _toolCalls = parsed.choices[0].delta.tool_calls;
-                  const _toolCallsFinished =
-                    parsed.choices[0].finish_reason === 'tool_calls';
-
-                  // Handle content delta
-                  if (content) {
-                    contentAccum += content;
-                    assistantBubble.setAttribute('is-loading', 'false');
-                    assistantBubble.updateContent(contentAccum);
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6).trim();
+                  if (data === '[DONE]') {
+                    return;
                   }
-
-                  // Handle reasoning delta
-                  if (reasoning) {
-                    // Tool call deltas are interleaved with reasoning
-                    // deltas as the model thinks through the tools to
-                    // use and retrieves the results so we wait until
-                    // it's dont to render the message bubble.
-                    assistantBubble.setAttribute('is-loading', 'false');
-                    // FIX: There is no div to add this to because it
-                    // might still be in the loading state.
-                    // Need to refactor reasoning to appear in a message bubble
-                    assistantBubble.addReasoning(reasoning);
+                  try {
+                    applyDelta(assistantBubble, accum, JSON.parse(data));
+                  } catch (e) {
+                    console.error('Error parsing JSON:', e);
                   }
-                } catch (e) {
-                  console.error('Error parsing JSON:', e);
                 }
+              });
+
+              read();
+            })
+            .catch((error) => {
+              console.error('Read error:', error);
+              // Resume the in-flight response from where the reader stopped.
+              if (finished) {
+                assistantBubble.finishReasoning();
+              } else {
+                openResumeStream(
+                  sessionId,
+                  lastEventId,
+                  assistantBubble,
+                  accum,
+                );
               }
             });
+        }
 
-            read();
-          })
-          .catch((error) => {
-            assistantBubble.finishReasoning();
-            console.error('Read error:', error);
-          });
-      }
-
-      read();
-    });
+        read();
+      })
+      .catch((error) => {
+        console.error('Chat request failed:', error);
+        openResumeStream(sessionId, lastEventId, assistantBubble, accum);
+      });
 
     chatInput.value = ''; // Clear input field
     chatInput.style.height = 'auto'; // Reset height after sending
