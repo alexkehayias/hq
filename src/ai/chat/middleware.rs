@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::invisible::{InvisibleSanitization, sanitize_invisible_chars};
 use crate::openai::{FunctionCall, Message, Role};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -293,91 +294,7 @@ impl ToolCallMiddleware for ToolSecurityMiddleware {
     }
 }
 
-/// Returns `true` if `c` is an invisible character that should be
-/// filtered from tool call results.
-///
-/// Common ASCII whitespace (`\t`, `\n`, `\r`) is **not** considered
-/// invisible — these are legitimate content in tool output. Printable
-/// text (letters, digits, punctuation, normal spaces) is also allowed.
-///
-/// The invisible set:
-/// - C0 control characters `U+0000`..`U+001F` (NUL, BEL, BS, …)
-///   except for the allowed whitespace above
-/// - DEL `U+007F`
-/// - C1 control characters `U+0080`..`U+009F`
-/// - Soft hyphen `U+00AD` (invisible except at line breaks)
-/// - Zero-width spaces and joiners: `U+200B`, `U+200C`, `U+200D`,
-///   `U+2060` (word joiner)
-/// - BOM / zero-width no-break space `U+FEFF`
-/// - Bidirectional formatting characters: `U+202A`..`U+202E`,
-///   `U+2066`..`U+2069`
-/// - Unicode tag block characters `U+E0000`..`U+E007F`. These are
-///   invisible markers (language tags, cancel tag) that LLMs can read
-///   as hidden instructions — see "Defending LLM applications against
-///   Unicode character smuggling" (AWS Security Blog). This range is
-///   the primary vector for prompt-injection via tool output.
-/// - Variation selectors: `U+FE00`..`U+FE0F` and
-///   `U+E0100`..`U+E01EF`. Default-ignorable code points used to
-///   select glyph variants; safe to strip.
-/// - Hangul fillers: `U+3164`, `U+FFA0`. Default-ignorable spaces
-///   that have no visible glyph.
-///
-/// Note: Rust `char` excludes surrogate code points (`U+D800`..`U+DFFF`)
-/// by construction, so the UTF-16 surrogate-pair smuggling attack
-/// (where a single-pass filter accidentally creates new tag block chars
-/// via surrogate recombination) doesn't apply — a single pass is
-/// sufficient here.
-fn is_invisible_char(c: char) -> bool {
-    let code = c as u32;
-    if matches!(c, '\t' | '\n' | '\r') {
-        return false;
-    }
-    if code <= 0x1F {
-        return true;
-    }
-    if code == 0x7F {
-        return true;
-    }
-    if (0x80..=0x9F).contains(&code) {
-        return true;
-    }
-    if code == 0xAD {
-        return true;
-    }
-    if matches!(code, 0x200B | 0x200C | 0x200D | 0x2060 | 0xFEFF) {
-        return true;
-    }
-    if (0x202A..=0x202E).contains(&code) {
-        return true;
-    }
-    if (0x2066..=0x2069).contains(&code) {
-        return true;
-    }
-    // Unicode tag block characters — primary prompt-injection vector
-    // for tool output (hidden instructions LLMs can read).
-    if (0xE0000..=0xE007F).contains(&code) {
-        return true;
-    }
-    // Variation selectors (default-ignorable).
-    if (0xFE00..=0xFE0F).contains(&code) {
-        return true;
-    }
-    if (0xE0100..=0xE01EF).contains(&code) {
-        return true;
-    }
-    // Hangul fillers (default-ignorable spaces).
-    if matches!(code, 0x3164 | 0xFFA0) {
-        return true;
-    }
-    false
-}
-
-/// Returns `true` if `s` contains any invisible characters.
-fn contains_invisible_chars(s: &str) -> bool {
-    s.chars().any(is_invisible_char)
-}
-
-/// Middleware that filters invisible characters from tool call results.
+/// Middleware that sanitizes invisible characters in tool call results.
 ///
 /// "Invisible characters" are Unicode code points with no visible
 /// representation — zero-width spaces, BOM, bidirectional formatting,
@@ -386,17 +303,27 @@ fn contains_invisible_chars(s: &str) -> bool {
 /// prompt-injection vector for hidden instructions in tool output),
 /// variation selectors, and Hangul fillers.
 ///
-/// On each batch of tool calls, the middleware inspects the actual
-/// results **after** tools execute. For any result whose content
-/// contains invisible characters, the middleware substitutes a
-/// rejection message (preserving the `tool_call_id` so the LLM can
-/// correlate it) and lets clean results pass through unchanged.
+/// Classification is delegated to [`sanitize_invisible_chars`], which
+/// distinguishes characters that can *hide* meaning (control chars, bidi
+/// overrides, tag block — always rejected) from characters that can only
+/// *interleave* (zero-width joiners, variation selectors, fillers). The
+/// latter are stripped when they sit at structural boundaries but rejected
+/// when interleaved mid-word to evade substring filters.
 ///
-/// This runs in the `after_tool_calls` hook so it sees real tool
-/// output, not pre-execution predictions. Only tool call results are
-/// filtered — user-submitted text and system prompts pass through
-/// unchanged, since silently rewriting what the user typed is not
-/// appropriate.
+/// On each batch of tool calls, the middleware inspects the actual
+/// results **after** tools execute:
+///
+/// - `Clean` — passed through unchanged.
+/// - `Cleaned` — the invisible characters are stripped and the sanitized
+///   content is substituted in place.
+/// - `Reject` — the result is replaced with a rejection message naming the
+///   reason and tool, so the model can adjust.
+///
+/// Substitutions preserve the `tool_call_id` so the LLM can correlate them.
+/// This runs in the `after_tool_calls` hook so it sees real tool output, not
+/// pre-execution predictions. Only tool call results are filtered —
+/// user-submitted text and system prompts pass through unchanged, since
+/// silently rewriting what the user typed is not appropriate.
 #[derive(Default)]
 pub struct InvisibleCharFilter;
 
@@ -408,27 +335,30 @@ impl ToolCallMiddleware for InvisibleCharFilter {
         results: &[Message],
     ) -> MiddlewareAction {
         let mut out: Vec<Message> = Vec::with_capacity(results.len());
-        let mut any_rejected = false;
+        let mut any_changed = false;
         for (call, result) in tool_calls.iter().zip(results.iter()) {
             let content = result.text().unwrap_or("");
-            if !contains_invisible_chars(content) {
-                out.push(result.clone());
-                continue;
+            let tool_call_id = result.tool_call_id().unwrap_or("");
+            match sanitize_invisible_chars(content) {
+                InvisibleSanitization::Clean => out.push(result.clone()),
+                InvisibleSanitization::Cleaned(cleaned) => {
+                    out.push(Message::new_tool_call_response(&cleaned, tool_call_id));
+                    any_changed = true;
+                }
+                InvisibleSanitization::Reject { reason } => {
+                    let msg = format!(
+                        "Tool call result rejected: contained invisible characters \
+                         ({reason}). Tool: '{}'. Please adjust your approach — for \
+                         example, by stripping these characters from any input you \
+                         pass to tools.",
+                        call.function.name,
+                    );
+                    out.push(Message::new_tool_call_response(&msg, tool_call_id));
+                    any_changed = true;
+                }
             }
-            let msg = format!(
-                "Tool call result rejected: contained invisible characters \
-                 (zero-width spaces, control codes, or bidirectional formatting). \
-                 Tool: '{}'. Please adjust your approach — for example, by stripping \
-                 these characters from any input you pass to tools.",
-                call.function.name,
-            );
-            out.push(Message::new_tool_call_response(
-                &msg,
-                result.tool_call_id().unwrap_or(""),
-            ));
-            any_rejected = true;
         }
-        if any_rejected {
+        if any_changed {
             MiddlewareAction::Reject(out)
         } else {
             MiddlewareAction::Continue
@@ -945,16 +875,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invisible_char_filter_detects_bom() {
+    async fn test_invisible_char_filter_strips_bom() {
         let mw = InvisibleCharFilter;
         let calls = vec![tool_call("web_search", "call_1")];
-        // \u{FEFF} is BOM / zero-width no-break space
+        // \u{FEFF} is BOM / zero-width no-break space. At the start of the
+        // result it is boundary-adjacent, so it is stripped rather than
+        // rejected.
         let results = vec![Message::new_tool_call_response("\u{FEFF}result", "call_1")];
         let action = mw.after_tool_calls(&calls, &results).await;
-        assert!(
-            matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for BOM, got {action:?}",
-        );
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs.len(), 1);
+                assert_eq!(msgs[0].tool_call_id(), Some("call_1"));
+                assert_eq!(msgs[0].text().expect("missing content"), "result");
+            }
+            other => panic!("Expected Reject with cleaned content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_strips_boundary_zero_width() {
+        let mw = InvisibleCharFilter;
+        let calls = vec![tool_call("view_website", "call_1")];
+        // Docusaurus heading anchor: the ZWSP sits between text and `]`,
+        // not between two letters, so it is stripped and the rest passes
+        // through.
+        let results = vec![Message::new_tool_call_response(
+            "## Heading [More intelligence\u{200B}](#-anchor)",
+            "call_1",
+        )];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                let content = msgs[0].text().expect("missing content");
+                assert!(
+                    !content.contains('\u{200B}'),
+                    "ZWSP should be stripped: {content:?}"
+                );
+                assert!(content.contains("More intelligence"));
+            }
+            other => panic!("Expected Reject with cleaned content, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1045,7 +1006,8 @@ mod tests {
     async fn test_invisible_char_filter_rejection_includes_tool_name() {
         let mw = InvisibleCharFilter;
         let calls = vec![tool_call("my_special_tool", "call_1")];
-        let results = vec![Message::new_tool_call_response("bad\u{200B}", "call_1")];
+        // ZWSP interleaved between letters — rejected, not stripped.
+        let results = vec![Message::new_tool_call_response("ba\u{200B}d", "call_1")];
         let action = mw.after_tool_calls(&calls, &results).await;
         match action {
             MiddlewareAction::Reject(msgs) => {
@@ -1167,31 +1129,36 @@ mod tests {
     // Default-ignorable code points used to select glyph variants.
 
     #[tokio::test]
-    async fn test_invisible_char_filter_detects_variation_selector_basic() {
+    async fn test_invisible_char_filter_strips_variation_selector_basic() {
         let mw = InvisibleCharFilter;
         let calls = vec![tool_call("bash", "call_1")];
-        // U+FE0F (Variation Selector-16) — often appended to emoji
+        // U+FE0F (Variation Selector-16) — often appended to emoji. It is
+        // not between two letters, so it is stripped.
         let dirty = "text\u{FE0F}";
         let results = vec![Message::new_tool_call_response(dirty, "call_1")];
         let action = mw.after_tool_calls(&calls, &results).await;
-        assert!(
-            matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for variation selector U+FE0F, got {action:?}",
-        );
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs[0].text().expect("missing content"), "text");
+            }
+            other => panic!("Expected Reject with cleaned content, got {other:?}"),
+        }
     }
 
     #[tokio::test]
-    async fn test_invisible_char_filter_detects_variation_selector_supplement() {
+    async fn test_invisible_char_filter_strips_variation_selector_supplement() {
         let mw = InvisibleCharFilter;
         let calls = vec![tool_call("bash", "call_1")];
-        // U+E0100 (Variation Selectors Supplement) — start of range
+        // U+E0100 (Variation Selectors Supplement) — start of range.
         let dirty = "text\u{E0100}";
         let results = vec![Message::new_tool_call_response(dirty, "call_1")];
         let action = mw.after_tool_calls(&calls, &results).await;
-        assert!(
-            matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for VS supplement U+E0100, got {action:?}",
-        );
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs[0].text().expect("missing content"), "text");
+            }
+            other => panic!("Expected Reject with cleaned content, got {other:?}"),
+        }
     }
 
     // --- Hangul fillers (U+3164, U+FFA0) ---
