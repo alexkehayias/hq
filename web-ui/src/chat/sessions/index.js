@@ -1,5 +1,6 @@
 import { html } from '/components/lib/html.js';
 import '/components/hq-page-shell.js';
+import '/components/hq-nav-rail.js';
 import '/components/hq-spinner.js';
 import '/components/hq-icon.js';
 import '/components/hq-state-view.js';

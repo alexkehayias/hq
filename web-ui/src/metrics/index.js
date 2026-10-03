@@ -1,4 +1,5 @@
 import '/components/hq-page-shell.js';
+import '/components/hq-nav-rail.js';
 import '/components/hq-card.js';
 import '/components/hq-select.js';
 import '/components/hq-stat-card.js';
