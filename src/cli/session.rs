@@ -8,6 +8,7 @@ use crate::ai::chat::summarize::generate_and_update_session_info;
 use crate::core::db::async_db;
 use crate::openai::{Message, Role};
 use crate::search::delete_chat_session_index;
+use rusqlite::OptionalExtension;
 use tokio_rusqlite::Connection;
 
 /// Delete a chat session, its messages, its tantivy search index entries,
@@ -184,29 +185,32 @@ pub async fn run_list(db: Connection) -> Result<()> {
     Ok(())
 }
 
-/// Print a chat session transcript: each user and assistant message in order,
-/// plus every tool call the assistant made and the result each returned.
+/// Print a chat session: its title and summary, followed by a transcript of
+/// each user and assistant message in order, plus every tool call the
+/// assistant made and the result each returned.
 ///
 /// Bails if the session doesn't exist. System messages (the model's system
 /// prompt) are omitted — only user/assistant/tool turns are shown.
 pub async fn run_get(db: Connection, session_id: &str) -> Result<()> {
-    // Check if the session exists — same check as `run_delete`/`run_summarize`.
-    let s_id_check = session_id.to_string();
-    let exists: bool = db
+    // Fetch the session's title/summary; a missing row means an unknown ID.
+    let s_id = session_id.to_string();
+    let session: Option<(Option<String>, Option<String>)> = db
         .call(move |conn| {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM session WHERE id = ?",
-                rusqlite::params![s_id_check],
-                |row| row.get(0),
-            )?;
-            Ok(count > 0)
+            let row = conn
+                .query_row(
+                    "SELECT title, summary FROM session WHERE id = ?",
+                    rusqlite::params![s_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            Ok(row)
         })
         .await
-        .context("Failed to check session existence")?;
+        .context("Failed to load chat session")?;
 
-    if !exists {
+    let Some((title, summary)) = session else {
         bail!("Chat session {session_id} not found");
-    }
+    };
 
     let messages: Vec<Message> = find_chat_session_by_id(&db, session_id)
         .await
@@ -215,9 +219,29 @@ pub async fn run_get(db: Connection, session_id: &str) -> Result<()> {
         .map(|(_, msg)| msg)
         .collect();
 
-    print!("{}", format_transcript(&messages));
+    print!(
+        "{}",
+        format_session(session_id, title.as_deref(), summary.as_deref(), &messages)
+    );
 
     Ok(())
+}
+
+/// Render a full session view: an ID/title/summary header followed by the
+/// formatted transcript.
+fn format_session(
+    session_id: &str,
+    title: Option<&str>,
+    summary: Option<&str>,
+    messages: &[Message],
+) -> String {
+    let mut out = format!(
+        "Session: {session_id}\nTitle: {}\nSummary: {}\n\n",
+        title.unwrap_or("—"),
+        summary.unwrap_or("—"),
+    );
+    out.push_str(&format_transcript(messages));
+    out
 }
 
 /// Render a chat transcript as plain text: one block per user/assistant
@@ -540,6 +564,15 @@ mod tests {
         insert_chat_message(&db, "get-session", &Message::new(Role::User, "Hello"))
             .await
             .unwrap();
+        db.call(|conn| {
+            conn.execute(
+                "UPDATE session SET title = ?, summary = ? WHERE id = ?",
+                rusqlite::params!["A title", "A summary", "get-session"],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
 
         let result = run_get(db, "get-session").await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
@@ -584,5 +617,25 @@ mod tests {
     fn test_format_transcript_empty() {
         let out = format_transcript(&[]);
         assert_eq!(out, "(no messages)\n");
+    }
+
+    #[test]
+    fn test_format_session_includes_title_and_summary() {
+        let messages = vec![Message::new(Role::User, "Hello")];
+
+        let out = format_session("sess-1", Some("My title"), Some("My summary"), &messages);
+
+        assert!(out.starts_with("Session: sess-1\nTitle: My title\nSummary: My summary\n\n"));
+        assert!(out.contains("[user]\nHello"), "got: {out}");
+    }
+
+    #[test]
+    fn test_format_session_missing_title_and_summary() {
+        let out = format_session("sess-2", None, None, &[]);
+
+        assert!(
+            out.starts_with("Session: sess-2\nTitle: —\nSummary: —\n\n"),
+            "got: {out}"
+        );
     }
 }
