@@ -14,10 +14,10 @@
   <div class="flex h-dvh bg-canvas">
     <hq-nav-rail active="chat"></hq-nav-rail>
     <div class="flex min-w-0 flex-1 flex-col">
-      <div id="chat-container" class="grow overflow-y-auto scrollbar-none">
+      <div id="chat-container" class="grow overflow-y-auto scrollbar-none" style="scrollbar-gutter: stable both-edges;">
         <div id="chat-display" class="mx-auto flex w-full max-w-[720px] flex-col-reverse px-6 py-6"></div>
       </div>
-      <div class="mx-auto w-full max-w-[720px] px-6 pb-6">
+      <div class="mx-auto w-full max-w-[720px] px-6 pb-6" style="margin-top: -14px;">
         <div class="rounded-[18px] border border-line bg-mist p-1.5 md:bg-card">
           <div id="attachment-chips" class="flex flex-wrap gap-2 empty:hidden px-2.5 pt-1.5"></div>
           <textarea id="chat-input"
