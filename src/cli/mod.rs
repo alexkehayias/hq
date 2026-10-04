@@ -26,6 +26,8 @@ pub mod web;
 use auth::ServiceKind;
 use job::JobId;
 
+use crate::core::db::async_db;
+
 #[derive(Subcommand)]
 enum Command {
     /// Initialize indices and clone notes from version control
@@ -231,6 +233,9 @@ enum SessionCommand {
     Summarize { id: String },
     /// List chat sessions with their IDs and titles
     List {},
+    /// Print a transcript of a chat session: user/assistant messages plus
+    /// every tool call and result
+    Get { id: String },
 }
 
 #[derive(Parser)]
@@ -487,8 +492,12 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                 session::run_summarize(db, &api_hostname, &api_key, &model, &id).await?;
             }
             SessionCommand::List {} => {
-                let db = crate::core::db::async_db(&vec_db_path).await?;
+                let db = async_db(&vec_db_path).await?;
                 session::run_list(db).await?;
+            }
+            SessionCommand::Get { id } => {
+                let db = async_db(&vec_db_path).await?;
+                session::run_get(db, &id).await?;
             }
         },
         None => {}
