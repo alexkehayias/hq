@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -5,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use crate::ai::chat::db::{delete_chat_session, find_chat_session_by_id};
 use crate::ai::chat::summarize::generate_and_update_session_info;
 use crate::core::db::async_db;
-use crate::openai::Message;
+use crate::openai::{Message, Role};
 use crate::search::delete_chat_session_index;
 use tokio_rusqlite::Connection;
 
@@ -183,13 +184,100 @@ pub async fn run_list(db: Connection) -> Result<()> {
     Ok(())
 }
 
+/// Print a chat session transcript: each user and assistant message in order,
+/// plus every tool call the assistant made and the result each returned.
+///
+/// Bails if the session doesn't exist. System messages (the model's system
+/// prompt) are omitted — only user/assistant/tool turns are shown.
+pub async fn run_get(db: Connection, session_id: &str) -> Result<()> {
+    // Check if the session exists — same check as `run_delete`/`run_summarize`.
+    let s_id_check = session_id.to_string();
+    let exists: bool = db
+        .call(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM session WHERE id = ?",
+                rusqlite::params![s_id_check],
+                |row| row.get(0),
+            )?;
+            Ok(count > 0)
+        })
+        .await
+        .context("Failed to check session existence")?;
+
+    if !exists {
+        bail!("Chat session {session_id} not found");
+    }
+
+    let messages: Vec<Message> = find_chat_session_by_id(&db, session_id)
+        .await
+        .context("Failed to load chat session transcript")?
+        .into_iter()
+        .map(|(_, msg)| msg)
+        .collect();
+
+    print!("{}", format_transcript(&messages));
+
+    Ok(())
+}
+
+/// Render a chat transcript as plain text: one block per user/assistant
+/// message, with assistant tool calls shown inline and tool results labelled
+/// by the tool that produced them.
+fn format_transcript(messages: &[Message]) -> String {
+    let mut out = String::new();
+    // Map tool_call_id -> tool name so tool result messages can be labelled,
+    // since the result message itself only carries the id.
+    let mut tool_names: HashMap<String, String> = HashMap::new();
+
+    for message in messages {
+        match message.role() {
+            Role::System => {}
+            Role::User => {
+                if let Some(text) = message.text() {
+                    out.push_str(&format!("[user]\n{text}\n\n"));
+                }
+            }
+            Role::Assistant => {
+                if let Some(text) = message.text() {
+                    out.push_str(&format!("[assistant]\n{text}\n\n"));
+                }
+                if let Some(tool_calls) = &message.tool_calls {
+                    for call in tool_calls {
+                        tool_names.insert(call.id.clone(), call.function.name.clone());
+                        out.push_str(&format!(
+                            "[tool call] {}\n{}\n\n",
+                            call.function.name, call.function.arguments
+                        ));
+                    }
+                }
+            }
+            Role::Tool => {
+                let name = message
+                    .tool_call_id()
+                    .and_then(|id| tool_names.get(id))
+                    .map(String::as_str)
+                    .unwrap_or("unknown");
+                if let Some(text) = message.text() {
+                    out.push_str(&format!("[tool result] {name}\n{text}\n\n"));
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        out.push_str("(no messages)\n");
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::chat::db::{get_or_create_session, insert_chat_message};
     use crate::ai::chat::models::SessionMode;
     use crate::core::db::{async_db, initialize_db};
-    use crate::openai::{Message, Role};
+    use crate::openai::{FunctionCall, FunctionCallFn, Message, Role};
     use tempfile::TempDir;
 
     /// Set up a test DB at `{dir}/db` with chat schema initialized.
@@ -419,5 +507,82 @@ mod tests {
 
         let result = run_list(db).await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_run_get_nonexistent_session() {
+        let storage = setup_storage_dir();
+        let db_path = test_db(storage.path()).await;
+        let db = async_db(&db_path).await.unwrap();
+
+        let result = run_get(db, "nonexistent").await;
+
+        assert!(
+            result.is_err(),
+            "expected error for nonexistent session, got {result:?}"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "error should mention 'not found', got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_get_with_messages() {
+        let storage = setup_storage_dir();
+        let db_path = test_db(storage.path()).await;
+        let db = async_db(&db_path).await.unwrap();
+
+        get_or_create_session(&db, "get-session", &[], SessionMode::Chat)
+            .await
+            .unwrap();
+        insert_chat_message(&db, "get-session", &Message::new(Role::User, "Hello"))
+            .await
+            .unwrap();
+
+        let result = run_get(db, "get-session").await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn test_format_transcript_includes_roles_and_tool_calls() {
+        let messages = vec![
+            Message::new(Role::System, "system prompt"),
+            Message::new(Role::User, "Find my notes on books"),
+            Message::new_tool_call_request(vec![FunctionCall {
+                function: FunctionCallFn {
+                    arguments: r#"{"query":"books"}"#.to_string(),
+                    name: "search_notes".to_string(),
+                },
+                id: "call_1".to_string(),
+                r#type: "function".to_string(),
+            }]),
+            Message::new_tool_call_response("Found 3 notes", "call_1"),
+            Message::new(Role::Assistant, "I found 3 notes."),
+        ];
+
+        let out = format_transcript(&messages);
+
+        assert!(
+            !out.contains("system prompt"),
+            "system messages should be omitted, got: {out}"
+        );
+        assert!(out.contains("[user]\nFind my notes on books"), "got: {out}");
+        assert!(
+            out.contains("[tool call] search_notes\n{\"query\":\"books\"}"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("[tool result] search_notes\nFound 3 notes"),
+            "got: {out}"
+        );
+        assert!(out.contains("[assistant]\nI found 3 notes."), "got: {out}");
+    }
+
+    #[test]
+    fn test_format_transcript_empty() {
+        let out = format_transcript(&[]);
+        assert_eq!(out, "(no messages)\n");
     }
 }
