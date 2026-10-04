@@ -4,6 +4,7 @@ import './search-result.js';
 import './note-modal.js';
 
 const searchInput = document.getElementById('search');
+const clearButton = document.getElementById('clear-search');
 const resultList = document.getElementById('results');
 const searchView = document.getElementById('search-view');
 const emptyState = document.getElementById('empty-state');
@@ -120,6 +121,18 @@ function showEmpty(noQuery) {
   searchView.setAttribute('state', 'empty');
 }
 
+function updateClearButton() {
+  clearButton.classList.toggle('hidden', searchInput.value.length === 0);
+}
+
+function resetSearch() {
+  resultList.innerHTML = '';
+  const url = new URL(window.location);
+  url.searchParams.delete('query');
+  window.history.replaceState(null, '', url);
+  showEmpty(true);
+}
+
 // Selecting a result highlights it, shares the note via URL, and opens the
 // note modal.
 resultList.addEventListener('result-select', (e) => {
@@ -170,6 +183,7 @@ const initQuery = urlParams.get('query');
 
 if (initQuery) {
   searchInput.value = decodeURIComponent(initQuery);
+  updateClearButton();
   searchView.setAttribute('state', 'loading');
   await search(searchInput.value);
 
@@ -188,16 +202,21 @@ if (initQuery) {
 
 // Handle search as you type
 searchInput.addEventListener('input', (e) => {
+  updateClearButton();
   const val = e.target.value;
   if (val) {
     search(val);
   } else {
-    resultList.innerHTML = '';
-    const url = new URL(window.location);
-    url.searchParams.delete('query');
-    window.history.replaceState(null, '', url);
-    showEmpty(true);
+    resetSearch();
   }
+});
+
+// Clear the input, its results, and the query param
+clearButton.addEventListener('click', () => {
+  searchInput.value = '';
+  updateClearButton();
+  resetSearch();
+  searchInput.focus();
 });
 
 // Saving on Enter captures a committed search without recording every
@@ -212,6 +231,7 @@ recentSearches.addEventListener('click', (e) => {
   if (!button) return;
   const query = button.dataset.query;
   searchInput.value = query;
+  updateClearButton();
   saveRecentSearch(query);
   search(query);
 });

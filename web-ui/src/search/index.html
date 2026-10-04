@@ -19,8 +19,12 @@
           <hq-icon name="search" size="md"></hq-icon>
         </div>
         <input id="search" type="text" autofocus autocapitalize="none" autocomplete="off"
-          class="h-12 w-full rounded-[12px] border border-line bg-mist pl-10 pr-4 text-ink placeholder:text-muted focus:ring-2 focus:ring-teal sm:text-sm"
+          class="h-12 w-full rounded-[12px] border border-line bg-mist pl-10 pr-9 text-ink placeholder:text-muted focus:ring-2 focus:ring-teal sm:text-sm"
           placeholder="Search...">
+        <button id="clear-search" type="button" aria-label="Clear search"
+          class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted transition-colors hover:text-ink hidden">
+          <hq-icon name="close" size="md"></hq-icon>
+        </button>
       </div>
 
       <hq-state-view id="search-view" state="empty">
