@@ -7,6 +7,7 @@ pub mod core;
 pub mod eval;
 pub mod google;
 pub mod jobs;
+pub mod loops;
 pub mod notify;
 pub mod openai;
 pub mod org;

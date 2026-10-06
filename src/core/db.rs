@@ -212,6 +212,30 @@ embedding float[384]
         Err(e) => println!("Create metric event index failed: {}", e),
     };
 
+    // Create table for storing persisted channel loops
+    let create_loop_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop (
+    -- UUID identifying the loop (also used as its bash session id)
+    id TEXT PRIMARY KEY,
+    -- JSON array of channel IDs the loop subscribes to
+    channels TEXT NOT NULL,
+    -- System prompt for the per-event chat (NULL = built-in default)
+    system_prompt TEXT,
+    -- JSON array of tool names available to the per-event chat
+    tools TEXT NOT NULL,
+    -- Debounce window (ms) for coalescing a channel's line burst into one event
+    debounce_ms INTEGER NOT NULL DEFAULT 250,
+    -- Creation timestamp
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);",
+        [],
+    );
+
+    match create_loop_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop table failed: {}", e),
+    };
+
     Ok(())
 }
 
@@ -536,6 +560,30 @@ COMMIT;",
             Err(e) => println!("Migrate metric_event table failed: {}", e),
         }
     }
+
+    // 2026-10-04 Add loop table
+    let create_loop_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop (
+    -- UUID identifying the loop (also used as its bash session id)
+    id TEXT PRIMARY KEY,
+    -- JSON array of channel IDs the loop subscribes to
+    channels TEXT NOT NULL,
+    -- System prompt for the per-event chat (NULL = built-in default)
+    system_prompt TEXT,
+    -- JSON array of tool names available to the per-event chat
+    tools TEXT NOT NULL,
+    -- Debounce window (ms) for coalescing a channel's line burst into one event
+    debounce_ms INTEGER NOT NULL DEFAULT 250,
+    -- Creation timestamp
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);",
+        [],
+    );
+
+    match create_loop_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop table failed: {}", e),
+    };
 
     Ok(())
 }
