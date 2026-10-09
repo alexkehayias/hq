@@ -686,4 +686,117 @@ mod tests {
         // Should return OK (200) - but with error message in response body
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    /// Tests that the resume endpoint returns 204 when no turn is in flight, so
+    /// EventSource stops reconnecting instead of looping.
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_204_for_idle_chat_stream() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/idle-session/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// Tests that a client can replay a finished turn's buffered events, ending
+    /// with the terminal `done` event.
+    #[tokio::test]
+    #[serial]
+    async fn it_resumes_buffered_stream_events() {
+        let (app, state) = test_app_with_state().await;
+
+        let stream = hq::api::routes::chat::stream::register(&state.streams, "resume-session");
+        stream.publish(r#"{"choices":[{"delta":{"content":"hello"}}]}"#.to_string());
+        stream.finish();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/resume-session/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("hello"), "body was: {body}");
+        assert!(body.contains("event: done"), "body was: {body}");
+    }
+
+    /// Tests that `?after=` skips events at or before the cursor, so a client
+    /// resuming from the last id it saw doesn't render duplicates.
+    #[tokio::test]
+    #[serial]
+    async fn it_resumes_stream_after_cursor() {
+        let (app, state) = test_app_with_state().await;
+
+        let stream = hq::api::routes::chat::stream::register(&state.streams, "resume-cursor");
+        stream.publish("first".to_string());
+        stream.publish("second".to_string());
+        stream.finish();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/resume-cursor/stream?after=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(!body.contains("first"), "body was: {body}");
+        assert!(body.contains("second"), "body was: {body}");
+    }
+
+    /// Tests that the transcript endpoint reports `in_progress` while a turn is
+    /// still streaming, so a reloading client knows to reattach.
+    #[tokio::test]
+    #[serial]
+    async fn it_reports_in_progress_for_active_stream() {
+        use hq::ai::chat::db::{get_or_create_session, insert_chat_message};
+        use hq::ai::chat::models::SessionMode;
+        use hq::openai::{Message, Role};
+
+        let (app, state) = test_app_with_state().await;
+
+        let db = state.db.clone();
+        get_or_create_session(&db, "in-progress-session", &[], SessionMode::Chat)
+            .await
+            .unwrap();
+        insert_chat_message(&db, "in-progress-session", &Message::new(Role::User, "hi"))
+            .await
+            .unwrap();
+
+        // Register a stream but don't finish it, so the turn looks in flight.
+        let _stream =
+            hq::api::routes::chat::stream::register(&state.streams, "in-progress-session");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/in-progress-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"in_progress\":true"), "body was: {body}");
+    }
 }

@@ -25,6 +25,8 @@ const CLAUDE_SETTINGS_LOCAL: &str = r#"{
       "Bash(gh *)",
       "Bash(hq *)",
       "Bash(./bin/*)",
+      "Bash(../bin/biome *)",
+      "Bash(sed *)",
       "Bash(herdr *)"
     ],
     "ask": [

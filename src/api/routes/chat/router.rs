@@ -10,7 +10,7 @@ use axum::response::Response;
 use axum::{
     Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, sse::Event, sse::KeepAlive, sse::Sse},
     routing::{get, post},
 };
@@ -22,6 +22,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
+use super::stream::{self, SessionStream};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
@@ -46,7 +47,7 @@ use crate::openai::{BoxedToolCall, Message, Role};
 use crate::search::index_chat_messages;
 // Re-export public types for this module
 pub use super::public::{
-    ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatTranscriptResponse,
+    ChatRequest, ChatSessionsQuery, ChatSessionsResponse, ChatStreamQuery, ChatTranscriptResponse,
 };
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -75,7 +76,59 @@ async fn chat_session(
             .into_response());
     }
 
-    Ok(axum::Json(ChatTranscriptResponse { transcript }).into_response())
+    let streams = state
+        .read()
+        .expect("Unable to read share state")
+        .streams
+        .clone();
+    let in_progress = stream::get(&streams, &id).is_some_and(|stream| !stream.is_done());
+
+    Ok(axum::Json(ChatTranscriptResponse {
+        transcript,
+        in_progress,
+    })
+    .into_response())
+}
+
+/// Build an SSE response that replays a session's buffered events after
+/// `after`, then tails live until the turn finishes.
+fn sse_from_stream(stream: Arc<SessionStream>, after: u64) -> Response {
+    Sse::new(stream.subscribe(after))
+        .keep_alive(
+            KeepAlive::default()
+                .text("keep-alive")
+                .interval(Duration::from_millis(100)),
+        )
+        .into_response()
+}
+
+/// Attach to a session's in-flight response stream, resuming after the
+/// `Last-Event-ID` header (or `?after=` query). Returns 204 when there is no
+/// active stream, which also tells `EventSource` to stop reconnecting.
+async fn chat_stream_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(params): Query<ChatStreamQuery>,
+) -> Result<Response, crate::api::public::ApiError> {
+    let streams = state
+        .read()
+        .expect("Unable to read share state")
+        .streams
+        .clone();
+
+    let Some(stream) = stream::get(&streams, &id) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    let after = headers
+        .get("Last-Event-ID")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .or(params.after)
+        .unwrap_or(0);
+
+    Ok(sse_from_stream(stream, after))
 }
 
 /// Get a list of all chat sessions
@@ -212,7 +265,7 @@ async fn chat_handler(
 ) -> Result<impl IntoResponse, crate::api::public::ApiError> {
     let session_id = payload.session_id;
     let (tx, rx) = mpsc::unbounded_channel::<String>();
-    let (disconnect_notifier, mut disconnect_receiver) = broadcast::channel::<()>(1);
+    let (disconnect_notifier, disconnect_receiver) = broadcast::channel::<()>(1);
 
     let db = state.read().expect("Unable to read share state").db.clone();
 
@@ -583,11 +636,35 @@ async fn chat_handler(
         }
     }
 
-    // Create SSE stream after mode detection (for non-early-return cases)
-    let sse_stream = tokio_stream::StreamExt::map(UnboundedReceiverStream::new(rx), |chunk| {
-        Ok::<Event, Infallible>(Event::default().data(chunk))
+    // Register a resumable stream for this turn. The POST response below tails
+    // it from the start; a reconnecting client can attach via
+    // GET /api/chat/{id}/stream.
+    let streams = state
+        .read()
+        .expect("Unable to read share state")
+        .streams
+        .clone();
+    let stream = stream::register(&streams, &session_id);
+
+    // Forward model chunks into the resumable stream. This task owns `finish()`
+    // so the terminal event can never precede the last buffered chunk (all `tx`
+    // clones drop only after the turn task below ends).
+    let forward_stream = Arc::clone(&stream);
+    let forward_registry = Arc::clone(&streams);
+    let forward_session_id = session_id.clone();
+    tokio::spawn(async move {
+        let mut rx = rx;
+        while let Some(chunk) = rx.recv().await {
+            forward_stream.publish(chunk);
+        }
+        forward_stream.finish();
+
+        // Keep the finished stream around briefly so a late reload can still
+        // replay the whole turn, then evict it to bound memory. `remove_if_same`
+        // guards against deleting a newer turn's stream for the same session.
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        stream::remove_if_same(&forward_registry, &forward_session_id, &forward_stream);
     });
-    let wrapped_sse_stream = DetectDisconnect::new(sse_stream, disconnect_notifier);
 
     // Create session in database if it doesn't already exist
 
@@ -662,6 +739,7 @@ async fn chat_handler(
 
     let mut chat = chat.build();
 
+    let notify_stream = Arc::clone(&stream);
     tokio::spawn(async move {
         let result = chat.next_msg(user_msg.clone()).await;
 
@@ -684,9 +762,8 @@ async fn chat_handler(
                     }
                 });
 
-                // Send a notification if the client disconnected
-                if tx.is_closed() {
-                    let _ = disconnect_receiver.recv().await;
+                // Send a notification if nobody is watching the stream
+                if notify_stream.subscriber_count() == 0 {
                     tracing::info!("Sending notification!");
                     let db_for_notify = db.clone();
                     let vapid_key_path_for_notify = vapid_key_path.to_string();
@@ -738,15 +815,7 @@ async fn chat_handler(
         Ok::<(), anyhow::Error>(())
     });
 
-    let resp = Sse::new(wrapped_sse_stream)
-        .keep_alive(
-            KeepAlive::default()
-                .text("keep-alive")
-                .interval(Duration::from_millis(100)),
-        )
-        .into_response();
-
-    Ok(resp)
+    Ok(sse_from_stream(stream, 0))
 }
 
 /// Create the chat router
@@ -754,5 +823,6 @@ pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", post(chat_handler))
         .route("/{id}", get(chat_session))
+        .route("/{id}/stream", get(chat_stream_handler))
         .route("/sessions", get(chat_list))
 }

@@ -62,4 +62,14 @@ impl ChatResponse {
 #[derive(Serialize)]
 pub struct ChatTranscriptResponse {
     pub transcript: Vec<Message>,
+    /// True when a response is currently being generated for this session, so
+    /// the client should attach to the resumable stream.
+    pub in_progress: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ChatStreamQuery {
+    /// Resume cursor: replay buffered events with a greater id. Used when the
+    /// browser has no `Last-Event-ID` (e.g. after a full page reload).
+    pub after: Option<u64>,
 }
