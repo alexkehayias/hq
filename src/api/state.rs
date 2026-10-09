@@ -4,7 +4,7 @@ use serde::Deserialize;
 use tokio_rusqlite::Connection;
 
 use crate::ai::skills::SkillRegistry;
-use crate::api::routes::chat::stream::{ChatStreamRegistry, new_registry};
+use crate::api::routes::chat::stream::ChatStreamRegistry;
 use crate::core::AppConfig;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -33,7 +33,7 @@ impl AppState {
             db,
             config,
             skill_registry: Arc::new(RwLock::new(skill_registry)),
-            streams: new_registry(),
+            streams: ChatStreamRegistry::default(),
         }
     }
 }

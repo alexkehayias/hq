@@ -646,24 +646,24 @@ async fn chat_handler(
         .clone();
     let stream = stream::register(&streams, &session_id);
 
-    // Forward model chunks into the resumable stream. The pump owns `finish()`
+    // Forward model chunks into the resumable stream. This task owns `finish()`
     // so the terminal event can never precede the last buffered chunk (all `tx`
     // clones drop only after the turn task below ends).
-    let pump_stream = Arc::clone(&stream);
-    let pump_registry = Arc::clone(&streams);
-    let pump_session_id = session_id.clone();
+    let forward_stream = Arc::clone(&stream);
+    let forward_registry = Arc::clone(&streams);
+    let forward_session_id = session_id.clone();
     tokio::spawn(async move {
         let mut rx = rx;
         while let Some(chunk) = rx.recv().await {
-            pump_stream.publish(chunk);
+            forward_stream.publish(chunk);
         }
-        pump_stream.finish();
+        forward_stream.finish();
 
         // Keep the finished stream around briefly so a late reload can still
         // replay the whole turn, then evict it to bound memory. `remove_if_same`
         // guards against deleting a newer turn's stream for the same session.
         tokio::time::sleep(Duration::from_secs(300)).await;
-        stream::remove_if_same(&pump_registry, &pump_session_id, &pump_stream);
+        stream::remove_if_same(&forward_registry, &forward_session_id, &forward_stream);
     });
 
     // Create session in database if it doesn't already exist

@@ -122,10 +122,6 @@ impl SessionStream {
 /// Maps session id -> the stream for its current (or most recent) turn.
 pub type ChatStreamRegistry = Arc<Mutex<HashMap<String, Arc<SessionStream>>>>;
 
-pub fn new_registry() -> ChatStreamRegistry {
-    Arc::new(Mutex::new(HashMap::new()))
-}
-
 /// Register a fresh stream for a new turn, replacing any previous one.
 pub fn register(registry: &ChatStreamRegistry, session_id: &str) -> Arc<SessionStream> {
     let stream = Arc::new(SessionStream::new());
@@ -221,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn registry_replaces_previous_stream() {
-        let registry = new_registry();
+        let registry = ChatStreamRegistry::default();
         let first = register(&registry, "session");
         let second = register(&registry, "session");
         assert!(!Arc::ptr_eq(&first, &second));
