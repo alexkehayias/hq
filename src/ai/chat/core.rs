@@ -127,11 +127,10 @@ impl Chat {
         if let (Some(db), Some(session_id), Some(tags)) = (&self.db, &self.session_id, &self.tags) {
             // Convert tags into a slice
             let tags: &[&str] = &tags.iter().map(String::as_str).collect::<Vec<&str>>();
-            // Ensure that the session exists in the DB
-            // NOTE: While it isn't great that this gets called repeatedly
-            // for each turn in the chat, it avoids filling up the DB
-            // with sessions that have no messages e.g. a chat that
-            // resulted in an error on the first turn.
+            // Ensure that the session exists in the DB. This now runs before
+            // the model call so the user message is visible while the response
+            // streams, which means a first turn that errors leaves a session
+            // containing only the user message.
             get_or_create_session(db, session_id, tags, SessionMode::Chat).await?;
 
             // Save the input message

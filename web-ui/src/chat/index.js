@@ -560,6 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // bubble. `lastEventId` is the SSE cursor for resuming after a read error.
     const accum = { content: '' };
     let lastEventId = 0;
+    let pendingEventId = null;
     let finished = false;
 
     fetch('/api/chat', {
@@ -593,22 +594,35 @@ document.addEventListener('DOMContentLoaded', () => {
               buffer = lines.pop(); // Keep incomplete line in buffer
 
               lines.forEach((line) => {
-                // Track the SSE event id so a reconnect can resume here.
+                // Remember the event id, but don't commit it as the resume
+                // cursor yet: the id line precedes the data line, so a read
+                // error between the two must not skip this event's payload.
                 if (line.startsWith('id:')) {
                   const id = Number.parseInt(line.slice(3).trim(), 10);
-                  if (!Number.isNaN(id)) lastEventId = id;
+                  if (!Number.isNaN(id)) pendingEventId = id;
                   return;
                 }
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6).trim();
-                  if (data === '[DONE]') {
-                    return;
+                // Skip non-data lines (e.g. the terminal `event: done`, or
+                // keep-alive comments) without trying to parse them.
+                if (!line.startsWith('data:')) return;
+                const data = line.slice(5).trim();
+                if (data === '' || data === '[DONE]') {
+                  // No payload to apply; safe to advance past this event.
+                  if (pendingEventId !== null) {
+                    lastEventId = pendingEventId;
+                    pendingEventId = null;
                   }
-                  try {
-                    applyDelta(assistantBubble, accum, JSON.parse(data));
-                  } catch (e) {
-                    console.error('Error parsing JSON:', e);
+                  return;
+                }
+                try {
+                  applyDelta(assistantBubble, accum, JSON.parse(data));
+                  // Advance the cursor only once the payload has been applied.
+                  if (pendingEventId !== null) {
+                    lastEventId = pendingEventId;
+                    pendingEventId = null;
                   }
+                } catch (e) {
+                  console.error('Error parsing JSON:', e);
                 }
               });
 
