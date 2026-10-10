@@ -1,11 +1,11 @@
-//! Runtime for persisted channel loops.
+//! Supervisor for persisted channel loops.
 //!
 //! A loop mirrors the `hq loop` CLI ([`crate::cli::loop_cmd`]): it connects to
 //! one or more channel publishers, merges their event streams, and runs a fresh
-//! LLM chat turn per event. The difference is that loops are stored in the
-//! database and managed here — [`start`] spawns a background task and records it
-//! in a process-wide [`RUNNING`] registry, [`stop`] aborts it, and
-//! [`respawn_all`] restarts every persisted loop (e.g. on server boot).
+//! LLM chat turn per event. This module owns the live instances — [`start`]
+//! spawns a background task and records it in a process-wide [`RUNNING`]
+//! registry, [`stop`] aborts it, and [`respawn_all`] restarts every persisted
+//! loop (e.g. on server boot).
 //!
 //! The spawned task has no signal handling of its own — it runs until its
 //! `JoinHandle` is aborted by [`stop`] (the per-channel reader tasks then exit
@@ -32,10 +32,10 @@ use crate::ai::tools::{ToolConfig, ToolRegistry};
 use crate::cli::channel::{event_stream_from_reader, socket_path, validate_channel_id};
 use crate::openai::{Message, Role};
 
-/// Configuration for the loop runtime, assembled by the caller from server
+/// Configuration for the loop supervisor, assembled by the caller from server
 /// state and environment.
 #[derive(Clone)]
-pub struct LoopRuntimeConfig {
+pub struct LoopSupervisorConfig {
     pub db: Connection,
     pub api_base_url: String,
     pub api_hostname: String,
@@ -57,7 +57,7 @@ fn running() -> &'static Mutex<HashMap<String, JoinHandle<()>>> {
 /// Every channel is validated and connected up front so a missing publisher
 /// fails fast (before any task is spawned). All `.await`s happen before the
 /// [`RUNNING`] lock is touched.
-pub async fn start(record: Loop, config: LoopRuntimeConfig) -> Result<()> {
+pub async fn start(record: Loop, config: LoopSupervisorConfig) -> Result<()> {
     let id = record.id.clone();
 
     for channel in &record.channels {
@@ -111,7 +111,7 @@ pub fn running_ids() -> Vec<String> {
 
 /// Start every persisted loop. Failures for individual loops are logged and
 /// skipped; an `Err` is returned only if the loop list itself cannot be read.
-pub async fn respawn_all(config: LoopRuntimeConfig) -> Result<()> {
+pub async fn respawn_all(config: LoopSupervisorConfig) -> Result<()> {
     let records = find_all_loops(&config.db).await?;
     for record in records {
         let id = record.id.clone();
@@ -124,7 +124,7 @@ pub async fn respawn_all(config: LoopRuntimeConfig) -> Result<()> {
 
 /// The spawned loop task: fan channel events into one receiver and run a fresh
 /// chat turn per event.
-async fn run_loop(record: Loop, config: LoopRuntimeConfig, streams: Vec<(String, UnixStream)>) {
+async fn run_loop(record: Loop, config: LoopSupervisorConfig, streams: Vec<(String, UnixStream)>) {
     let debounce = Duration::from_millis(record.debounce_ms.max(0) as u64);
 
     // Merge event streams from all channels into one receiver.
@@ -212,7 +212,7 @@ mod tests {
     use super::*;
     use crate::core::db::{async_db, initialize_db};
 
-    async fn setup() -> (tempfile::TempDir, LoopRuntimeConfig) {
+    async fn setup() -> (tempfile::TempDir, LoopSupervisorConfig) {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
@@ -223,7 +223,7 @@ mod tests {
         .unwrap();
 
         let storage_path = dir.path().to_str().unwrap().to_string();
-        let config = LoopRuntimeConfig {
+        let config = LoopSupervisorConfig {
             db,
             api_base_url: "http://localhost".to_string(),
             api_hostname: "localhost".to_string(),
