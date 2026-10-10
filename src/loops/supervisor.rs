@@ -52,6 +52,27 @@ fn running() -> &'static Mutex<HashMap<String, JoinHandle<()>>> {
     RUNNING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Debounce window used when a channel has no `channel` row.
+const DEFAULT_DEBOUNCE_MS: u64 = 250;
+
+/// Debounce window for a channel, read from its `channel` row.
+///
+/// Falls back to [`DEFAULT_DEBOUNCE_MS`] when the channel has no row (e.g. a
+/// socket channel whose publisher has not registered yet).
+async fn channel_debounce_ms(db: &Connection, channel_id: &str) -> Result<u64> {
+    let id = channel_id.to_string();
+    let debounce = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare("SELECT debounce_ms FROM channel WHERE id = ?1")?;
+            let mut rows = stmt.query_map([&id], |i| i.get::<_, i64>(0))?;
+            Ok(rows.next().transpose()?)
+        })
+        .await?;
+    Ok(debounce
+        .map(|ms| ms.max(0) as u64)
+        .unwrap_or(DEFAULT_DEBOUNCE_MS))
+}
+
 /// Start running `record`, replacing any loop already running under the same id.
 ///
 /// Every channel is validated and connected up front so a missing publisher
@@ -73,7 +94,8 @@ pub async fn start(record: Loop, config: LoopSupervisorConfig) -> Result<()> {
                 channel
             )
         })?;
-        streams.push((channel.clone(), stream));
+        let debounce_ms = channel_debounce_ms(&config.db, channel).await?;
+        streams.push((channel.clone(), debounce_ms, stream));
     }
 
     // Dedupe: abort any previous task for this id before replacing it.
@@ -124,13 +146,17 @@ pub async fn respawn_all(config: LoopSupervisorConfig) -> Result<()> {
 
 /// The spawned loop task: fan channel events into one receiver and run a fresh
 /// chat turn per event.
-async fn run_loop(record: Loop, config: LoopSupervisorConfig, streams: Vec<(String, UnixStream)>) {
-    let debounce = Duration::from_millis(record.debounce_ms.max(0) as u64);
-
-    // Merge event streams from all channels into one receiver.
+async fn run_loop(
+    record: Loop,
+    config: LoopSupervisorConfig,
+    streams: Vec<(String, u64, UnixStream)>,
+) {
+    // Merge event streams from all channels into one receiver. Each channel
+    // coalesces its line bursts with its own debounce window.
     let (event_tx, mut event_rx) = mpsc::channel::<(String, String)>(100);
 
-    for (channel_id, stream) in streams {
+    for (channel_id, debounce_ms, stream) in streams {
+        let debounce = Duration::from_millis(debounce_ms);
         let tx = event_tx.clone();
         tokio::spawn(async move {
             let reader = BufReader::new(stream);
@@ -241,9 +267,36 @@ mod tests {
             channels: vec!["nonexistent-channel".to_string()],
             system_prompt: None,
             tools: vec![],
-            debounce_ms: 250,
             created_at: String::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn channel_debounce_reads_row_and_defaults_when_absent() {
+        let (_dir, config) = setup().await;
+
+        // No row -> built-in default.
+        assert_eq!(
+            channel_debounce_ms(&config.db, "absent").await.unwrap(),
+            DEFAULT_DEBOUNCE_MS
+        );
+
+        config
+            .db
+            .call(|conn| {
+                conn.execute(
+                    "INSERT INTO channel (id, source, debounce_ms) VALUES (?1, ?2, ?3)",
+                    rusqlite::params!["alpha", "socket", 1000],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            channel_debounce_ms(&config.db, "alpha").await.unwrap(),
+            1000
+        );
     }
 
     #[tokio::test]
