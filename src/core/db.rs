@@ -212,19 +212,35 @@ embedding float[384]
         Err(e) => println!("Create metric event index failed: {}", e),
     };
 
+    // Create table for storing channels (event sources)
+    let create_channel_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS channel (
+    -- Channel ID (alphanumeric with dashes/underscores)
+    id TEXT PRIMARY KEY,
+    -- Where events for this channel come from: 'socket', 'server', or 'webhook'
+    source TEXT NOT NULL,
+    -- Debounce window (ms) for coalescing a channel's line burst into one event
+    debounce_ms INTEGER NOT NULL DEFAULT 250,
+    -- Creation timestamp
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);",
+        [],
+    );
+
+    match create_channel_table {
+        Ok(_) => (),
+        Err(e) => println!("Create channel table failed: {}", e),
+    };
+
     // Create table for storing persisted channel loops
     let create_loop_table = db.execute(
         "CREATE TABLE IF NOT EXISTS loop (
     -- UUID identifying the loop (also used as its bash session id)
     id TEXT PRIMARY KEY,
-    -- JSON array of channel IDs the loop subscribes to
-    channels TEXT NOT NULL,
     -- System prompt for the per-event chat (NULL = built-in default)
     system_prompt TEXT,
     -- JSON array of tool names available to the per-event chat
     tools TEXT NOT NULL,
-    -- Debounce window (ms) for coalescing a channel's line burst into one event
-    debounce_ms INTEGER NOT NULL DEFAULT 250,
     -- Creation timestamp
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );",
@@ -234,6 +250,26 @@ embedding float[384]
     match create_loop_table {
         Ok(_) => (),
         Err(e) => println!("Create loop table failed: {}", e),
+    };
+
+    // Create loop_channel linking table
+    let create_loop_channel_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop_channel (
+    -- Foreign key to loop table
+    loop_id TEXT NOT NULL REFERENCES loop(id),
+    -- Foreign key to channel table
+    channel_id TEXT NOT NULL REFERENCES channel(id),
+    -- Position preserves subscription order
+    position INTEGER NOT NULL,
+    -- Primary key constraint for the composite key
+    PRIMARY KEY (loop_id, channel_id)
+);",
+        [],
+    );
+
+    match create_loop_channel_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_channel table failed: {}", e),
     };
 
     Ok(())
@@ -561,19 +597,34 @@ COMMIT;",
         }
     }
 
-    // 2026-10-04 Add loop table
+    // 2026-10-04 Add channel, loop, and loop_channel tables
+    let create_channel_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS channel (
+    -- Channel ID (alphanumeric with dashes/underscores)
+    id TEXT PRIMARY KEY,
+    -- Where events for this channel come from: 'socket', 'server', or 'webhook'
+    source TEXT NOT NULL,
+    -- Debounce window (ms) for coalescing a channel's line burst into one event
+    debounce_ms INTEGER NOT NULL DEFAULT 250,
+    -- Creation timestamp
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);",
+        [],
+    );
+
+    match create_channel_table {
+        Ok(_) => (),
+        Err(e) => println!("Create channel table failed: {}", e),
+    };
+
     let create_loop_table = db.execute(
         "CREATE TABLE IF NOT EXISTS loop (
     -- UUID identifying the loop (also used as its bash session id)
     id TEXT PRIMARY KEY,
-    -- JSON array of channel IDs the loop subscribes to
-    channels TEXT NOT NULL,
     -- System prompt for the per-event chat (NULL = built-in default)
     system_prompt TEXT,
     -- JSON array of tool names available to the per-event chat
     tools TEXT NOT NULL,
-    -- Debounce window (ms) for coalescing a channel's line burst into one event
-    debounce_ms INTEGER NOT NULL DEFAULT 250,
     -- Creation timestamp
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );",
@@ -583,6 +634,25 @@ COMMIT;",
     match create_loop_table {
         Ok(_) => (),
         Err(e) => println!("Create loop table failed: {}", e),
+    };
+
+    let create_loop_channel_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop_channel (
+    -- Foreign key to loop table
+    loop_id TEXT NOT NULL REFERENCES loop(id),
+    -- Foreign key to channel table
+    channel_id TEXT NOT NULL REFERENCES channel(id),
+    -- Position preserves subscription order
+    position INTEGER NOT NULL,
+    -- Primary key constraint for the composite key
+    PRIMARY KEY (loop_id, channel_id)
+);",
+        [],
+    );
+
+    match create_loop_channel_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_channel table failed: {}", e),
     };
 
     Ok(())

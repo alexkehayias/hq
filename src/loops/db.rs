@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use tokio_rusqlite::Connection;
 
@@ -5,25 +7,37 @@ use super::models::Loop;
 
 pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
     let loops = db.call(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, channels, system_prompt, tools, debounce_ms, created_at FROM loop",
-        )?;
-        let rows = stmt
+        let mut stmt = conn.prepare("SELECT id, system_prompt, tools, created_at FROM loop")?;
+        let mut loops = stmt
             .query_map([], |i| {
-                let channels: String = i.get(1)?;
-                let tools: String = i.get(3)?;
+                let tools: String = i.get(2)?;
                 Ok(Loop {
                     id: i.get(0)?,
-                    channels: serde_json::from_str(&channels).unwrap_or_default(),
-                    system_prompt: i.get(2)?,
+                    system_prompt: i.get(1)?,
                     tools: serde_json::from_str(&tools).unwrap_or_default(),
-                    debounce_ms: i.get(4)?,
-                    created_at: i.get(5)?,
+                    created_at: i.get(3)?,
+                    channels: Vec::new(),
                 })
             })?
             .filter_map(Result::ok)
             .collect::<Vec<Loop>>();
-        Ok(rows)
+
+        // Channel ids per loop, ordered by subscription position.
+        let mut ch_stmt = conn
+            .prepare("SELECT loop_id, channel_id FROM loop_channel ORDER BY loop_id, position")?;
+        let mut channels: HashMap<String, Vec<String>> = HashMap::new();
+        let rows =
+            ch_stmt.query_map([], |i| Ok((i.get::<_, String>(0)?, i.get::<_, String>(1)?)))?;
+        for row in rows.filter_map(Result::ok) {
+            channels.entry(row.0).or_default().push(row.1);
+        }
+
+        for l in loops.iter_mut() {
+            if let Some(ch) = channels.remove(&l.id) {
+                l.channels = ch;
+            }
+        }
+        Ok(loops)
     });
     Ok(loops.await?)
 }
@@ -31,38 +45,57 @@ pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
 pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
     let id = id.to_string();
     let record = db.call(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, channels, system_prompt, tools, debounce_ms, created_at FROM loop WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query_map([&id], |i| {
-            let channels: String = i.get(1)?;
-            let tools: String = i.get(3)?;
-            Ok(Loop {
-                id: i.get(0)?,
-                channels: serde_json::from_str(&channels).unwrap_or_default(),
-                system_prompt: i.get(2)?,
-                tools: serde_json::from_str(&tools).unwrap_or_default(),
-                debounce_ms: i.get(4)?,
-                created_at: i.get(5)?,
-            })
-        })?;
-        Ok(rows.next().transpose()?)
+        let mut record = {
+            let mut stmt = conn
+                .prepare("SELECT id, system_prompt, tools, created_at FROM loop WHERE id = ?1")?;
+            let mut rows = stmt.query_map([&id], |i| {
+                let tools: String = i.get(2)?;
+                Ok(Loop {
+                    id: i.get(0)?,
+                    system_prompt: i.get(1)?,
+                    tools: serde_json::from_str(&tools).unwrap_or_default(),
+                    created_at: i.get(3)?,
+                    channels: Vec::new(),
+                })
+            })?;
+            match rows.next().transpose()? {
+                Some(record) => record,
+                None => return Ok(None),
+            }
+        };
+
+        let mut ch_stmt = conn
+            .prepare("SELECT channel_id FROM loop_channel WHERE loop_id = ?1 ORDER BY position")?;
+        record.channels = ch_stmt
+            .query_map([&id], |i| i.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .collect();
+
+        Ok(Some(record))
     });
     Ok(record.await?)
 }
 
 pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
     let id = record.id.clone();
-    let channels = serde_json::to_string(&record.channels)?;
     let system_prompt = record.system_prompt.clone();
     let tools = serde_json::to_string(&record.tools)?;
-    let debounce_ms = record.debounce_ms;
+    let channels = record.channels.clone();
     db.call(move |conn| {
-        conn.execute(
-            "INSERT INTO loop (id, channels, system_prompt, tools, debounce_ms)
-            VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![id, channels, system_prompt, tools, debounce_ms],
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO loop (id, system_prompt, tools) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, system_prompt, tools],
         )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO loop_channel (loop_id, channel_id, position) VALUES (?1, ?2, ?3)",
+            )?;
+            for (position, channel_id) in channels.iter().enumerate() {
+                stmt.execute(rusqlite::params![id, channel_id, position as i64])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     })
     .await
@@ -72,7 +105,10 @@ pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
 pub async fn delete_loop(db: &Connection, id: &str) -> Result<usize> {
     let id = id.to_string();
     let deleted = db.call(move |conn| {
-        let count = conn.execute("DELETE FROM loop WHERE id = ?1", [&id])?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM loop_channel WHERE loop_id = ?1", [&id])?;
+        let count = tx.execute("DELETE FROM loop WHERE id = ?1", [&id])?;
+        tx.commit()?;
         Ok(count)
     });
     Ok(deleted.await?)
@@ -95,37 +131,58 @@ mod tests {
         (dir, db)
     }
 
+    /// Insert a channel row directly; channel helpers land in a later PR.
+    async fn insert_channel(db: &Connection, id: &str, source: &str) {
+        let id = id.to_string();
+        let source = source.to_string();
+        db.call(move |conn| {
+            conn.execute(
+                "INSERT INTO channel (id, source) VALUES (?1, ?2)",
+                rusqlite::params![id, source],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
     fn sample_loop() -> Loop {
         Loop {
             id: "loop-1".to_string(),
             channels: vec!["alpha".to_string(), "beta".to_string()],
             system_prompt: Some("You are a loop.".to_string()),
             tools: vec!["bash".to_string(), "note_search".to_string()],
-            debounce_ms: 250,
             created_at: String::new(),
         }
     }
 
     #[tokio::test]
-    async fn initialize_db_creates_loop_table() {
+    async fn initialize_db_creates_loop_tables() {
         let (_dir, db) = setup_db().await;
-        let exists = db
+        let tables = db
             .call(|conn| {
-                let count: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'loop'",
-                    [],
-                    |row| row.get(0),
+                let mut stmt = conn.prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'
+                    AND name IN ('channel', 'loop', 'loop_channel')",
                 )?;
-                Ok(count > 0)
+                let names = stmt
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .filter_map(Result::ok)
+                    .collect::<Vec<String>>();
+                Ok(names)
             })
             .await
             .unwrap();
-        assert!(exists);
+        assert!(tables.contains(&"channel".to_string()));
+        assert!(tables.contains(&"loop".to_string()));
+        assert!(tables.contains(&"loop_channel".to_string()));
     }
 
     #[tokio::test]
     async fn insert_find_and_delete_round_trip() {
         let (_dir, db) = setup_db().await;
+        insert_channel(&db, "alpha", "socket").await;
+        insert_channel(&db, "beta", "server").await;
         let record = sample_loop();
 
         insert_loop(&db, &record).await.unwrap();
@@ -137,7 +194,6 @@ mod tests {
         assert_eq!(found.channels, record.channels);
         assert_eq!(found.tools, record.tools);
         assert_eq!(found.system_prompt, record.system_prompt);
-        assert_eq!(found.debounce_ms, record.debounce_ms);
         assert!(!found.created_at.is_empty());
 
         let deleted = delete_loop(&db, &record.id).await.unwrap();
@@ -148,14 +204,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_loop_removes_channel_links() {
+        let (_dir, db) = setup_db().await;
+        insert_channel(&db, "alpha", "socket").await;
+        insert_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+
+        delete_loop(&db, "loop-1").await.unwrap();
+
+        let remaining = db
+            .call(|conn| {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM loop_channel WHERE loop_id = ?1",
+                    ["loop-1"],
+                    |row| row.get(0),
+                )?;
+                Ok(count)
+            })
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
     async fn find_loop_returns_some_for_present_and_none_for_missing() {
         let (_dir, db) = setup_db().await;
+        insert_channel(&db, "alpha", "socket").await;
+        insert_channel(&db, "beta", "server").await;
         let record = sample_loop();
         insert_loop(&db, &record).await.unwrap();
 
         let found = find_loop(&db, &record.id).await.unwrap();
         assert!(found.is_some());
-        assert_eq!(found.unwrap().id, record.id);
+        let found = found.unwrap();
+        assert_eq!(found.id, record.id);
+        assert_eq!(found.channels, record.channels);
 
         let missing = find_loop(&db, "does-not-exist").await.unwrap();
         assert!(missing.is_none());
