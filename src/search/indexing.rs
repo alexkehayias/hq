@@ -26,6 +26,12 @@ use crate::core::orgmode::{ORG_ARCHIVE_SUFFIX, is_archive_file};
 use crate::core::{AppConfig, git};
 use crate::openai::{Message, Role};
 
+/// Serializes sync+reindex across the periodic `GitSync` job and the GitHub
+/// webhook, and guards Tantivy's index writer for single-file indexing.
+/// Concurrent runs race on the notes working tree (git rebase/push) and on
+/// Tantivy's writer, which panics when the directory lock is already held.
+static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Debug, Clone)]
 struct Task {
     id: String,
@@ -1111,12 +1117,6 @@ pub async fn delete_chat_session_index(
 
     Ok(())
 }
-
-/// Serializes sync+reindex across the periodic `GitSync` job and the GitHub
-/// webhook. Concurrent runs race on the notes working
-/// tree (git rebase/push) and on Tantivy's index writer, which panics when the
-/// directory lock is already held.
-static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Reindex the given note files, whose paths are relative to the notes repo
 /// root (as returned by git).
