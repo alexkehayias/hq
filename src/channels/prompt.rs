@@ -19,6 +19,15 @@ fn interval_label(interval: Duration) -> String {
     }
 }
 
+/// System-message section describing the channel tools. Shared by the chat
+/// prompt and any loop configured with `create_channel`/`emit_channel`.
+pub fn channel_tools_section() -> &'static str {
+    "\n\n## Channels\n\
+     `create_channel` creates a channel you own and returns its id; `emit_channel` \
+     publishes a message to a channel you created. Only the agent that created a channel \
+     can emit to it, and other loops can subscribe to it by id."
+}
+
 /// System-message section describing channels and loops, including the default
 /// timer channels.
 pub fn system_prompt_section() -> String {
@@ -34,13 +43,12 @@ pub fn system_prompt_section() -> String {
          published to a channel runs an LLM turn with the loop's system prompt and tools. \
          Use the `create_loop` tool to create a loop subscribed to one or more channels, \
          `list_loops` to inspect them, and `delete_loop` to remove one. Loops keep running \
-         across server restarts. Use `create_channel` to create a channel you own and \
-         `emit_channel` to publish messages to it; only the agent that created a channel \
-         can emit to it.\n\n\
+         across server restarts.\n\n\
          The following timer channels are always available; each publishes a `tick` event \
          with the current UTC time on a fixed interval:\n\
          {channels}\n\n\
-         To run something on a schedule, create a loop subscribed to the matching timer channel."
+         To run something on a schedule, create a loop subscribed to the matching timer channel.{channel_tools}",
+        channel_tools = channel_tools_section()
     )
 }
 
@@ -60,5 +68,12 @@ mod tests {
         assert!(section.contains("every 1 hour"), "{section}");
         assert!(section.contains("every 4 hours"), "{section}");
         assert!(section.contains("every 12 hours"), "{section}");
+    }
+
+    #[test]
+    fn system_prompt_section_describes_channel_tools() {
+        let section = system_prompt_section();
+        assert!(section.contains("create_channel"));
+        assert!(section.contains("emit_channel"));
     }
 }

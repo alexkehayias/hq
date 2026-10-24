@@ -139,7 +139,8 @@ async fn run_loop(
     }
     drop(event_tx); // close our sender so event_rx drains then returns None
 
-    let system_prompt = build_system_prompt(&record.system_prompt);
+    let tool_names = resolve_loop_tools(&record.tools);
+    let system_prompt = build_system_prompt(&record.system_prompt, &tool_names);
 
     // session_id is the loop id, fixed for the lifetime of the loop so every
     // BashTool mounts the same workspace directory across events and restarts.
@@ -155,7 +156,6 @@ async fn run_loop(
         model: config.model.clone(),
     };
     let registry = ToolRegistry::builtin(context);
-    let tool_names = resolve_loop_tools(&record.tools);
 
     // Each event is processed with only the system prompt and that event — no
     // accumulated transcript. Tools and chat are rebuilt per event.

@@ -1,12 +1,10 @@
-use serde::{Deserialize, Serialize};
-
 /// How a channel is served — where its events come from.
 ///
 /// Mirrors the `channel.source` column. This is distinct from a channel's
 /// *owner*: the nullable `created_by` column naming the agent session that
 /// created it, if any (see [`Channel::created_by`]). A channel's source says
 /// nothing about who may emit to it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelSource {
     /// Served in-process by a server publisher: the default timer channels and
     /// webhooks.
@@ -38,7 +36,7 @@ impl ChannelSource {
 }
 
 /// An event source that loops can subscribe to.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Channel {
     pub id: String,
     /// How the channel is served (`server` or `socket`).

@@ -127,7 +127,8 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
     }
     drop(event_tx); // close our sender so event_rx drains then returns None
 
-    let system_prompt = build_system_prompt(system_prompt);
+    let tool_names = resolve_loop_tools(tools);
+    let system_prompt = build_system_prompt(system_prompt, &tool_names);
 
     // session_id is fixed for the lifetime of the loop so every BashTool mounts
     // the same workspace directory. Files written in one turn are visible in
@@ -149,7 +150,6 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
         model: model.to_string(),
     };
     let registry = ToolRegistry::builtin(context);
-    let tool_names = resolve_loop_tools(tools);
 
     // Main loop: read merged events, send to chat, print responses.
     // Ctrl-C or SIGTERM breaks out and exits cleanly.

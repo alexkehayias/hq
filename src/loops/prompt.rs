@@ -81,10 +81,18 @@ future iterations know what's confirmed vs inferred.
 1. `state/history.md` — what happened last time
 2. All other files in `state/` referenced by history or relevant to this event"#;
 
-/// Build the loop system prompt: the base prompt, with `user_prompt` appended
-/// at the bottom after a `---` separator.
-pub fn build_system_prompt(user_prompt: &str) -> String {
-    format!("{LOOP_SYSTEM_PROMPT}\n\n---\n\n{}", user_prompt.trim())
+/// Build the loop system prompt: the base prompt, an optional channel-tools
+/// section when the loop is configured with those tools, and `user_prompt`
+/// appended at the bottom after a `---` separator.
+pub fn build_system_prompt(user_prompt: &str, tools: &[String]) -> String {
+    let mut base = String::from(LOOP_SYSTEM_PROMPT);
+    if tools
+        .iter()
+        .any(|tool| tool == "create_channel" || tool == "emit_channel")
+    {
+        base.push_str(crate::channels::prompt::channel_tools_section());
+    }
+    format!("{base}\n\n---\n\n{}", user_prompt.trim())
 }
 
 #[cfg(test)]
@@ -93,8 +101,18 @@ mod tests {
 
     #[test]
     fn user_prompt_is_appended_at_the_bottom() {
-        let prompt = build_system_prompt("Check the inbox every hour.");
+        let prompt = build_system_prompt("Check the inbox every hour.", &[]);
         assert!(prompt.starts_with(LOOP_SYSTEM_PROMPT));
         assert!(prompt.ends_with("---\n\nCheck the inbox every hour."));
+        assert!(!prompt.contains("create_channel"));
+    }
+
+    #[test]
+    fn channel_tools_section_is_added_when_configured() {
+        let tools = vec!["bash".to_string(), "emit_channel".to_string()];
+        let prompt = build_system_prompt("Watch the channel.", &tools);
+        assert!(prompt.contains("create_channel"));
+        assert!(prompt.contains("emit_channel"));
+        assert!(prompt.ends_with("---\n\nWatch the channel."));
     }
 }

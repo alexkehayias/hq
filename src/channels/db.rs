@@ -53,8 +53,8 @@ pub async fn find_channel(db: &Connection, id: &str) -> Result<Option<Channel>> 
 /// [`Channel::created_by`].
 pub async fn insert_channel(
     db: &Connection,
-    id: &str,
     source: &ChannelSource,
+    id: &str,
     created_by: Option<&str>,
 ) -> Result<()> {
     let id = id.to_string();
@@ -174,7 +174,7 @@ mod tests {
     async fn insert_and_find_channel_round_trip() {
         let (_dir, db) = setup_db().await;
 
-        insert_channel(&db, "owned", &ChannelSource::Server, Some("agent-a"))
+        insert_channel(&db, &ChannelSource::Server, "owned", Some("agent-a"))
             .await
             .unwrap();
 
@@ -187,11 +187,11 @@ mod tests {
     #[tokio::test]
     async fn insert_channel_rejects_duplicate_id() {
         let (_dir, db) = setup_db().await;
-        insert_channel(&db, "dup", &ChannelSource::Socket, None)
+        insert_channel(&db, &ChannelSource::Socket, "dup", None)
             .await
             .unwrap();
         assert!(
-            insert_channel(&db, "dup", &ChannelSource::Socket, None)
+            insert_channel(&db, &ChannelSource::Socket, "dup", None)
                 .await
                 .is_err()
         );
@@ -202,7 +202,7 @@ mod tests {
         let (_dir, db) = setup_db().await;
         insert_raw_channel(&db, "timer", "server").await; // server, no owner
         insert_raw_channel(&db, "sock", "socket").await; // socket
-        insert_channel(&db, "owned", &ChannelSource::Server, Some("agent-a"))
+        insert_channel(&db, &ChannelSource::Server, "owned", Some("agent-a"))
             .await
             .unwrap();
 

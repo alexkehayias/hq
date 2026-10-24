@@ -206,10 +206,10 @@ mod tests {
         let owned = format!("owned-{}", Uuid::new_v4());
         let socket = format!("sock-{}", Uuid::new_v4());
 
-        insert_channel(&db, &owned, &ChannelSource::Server, Some("agent-a"))
+        insert_channel(&db, &ChannelSource::Server, &owned, Some("agent-a"))
             .await
             .unwrap();
-        insert_channel(&db, &socket, &ChannelSource::Socket, None)
+        insert_channel(&db, &ChannelSource::Socket, &socket, None)
             .await
             .unwrap();
 

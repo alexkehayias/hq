@@ -164,7 +164,7 @@ mod tests {
         let (_dir, db) = setup_db().await;
         let id = format!("agent-{}", Uuid::new_v4());
         // Agent-created channels are stored as server-sourced with an owner.
-        crate::channels::db::insert_channel(&db, &id, &ChannelSource::Server, Some("sess"))
+        crate::channels::db::insert_channel(&db, &ChannelSource::Server, &id, Some("sess"))
             .await
             .unwrap();
 

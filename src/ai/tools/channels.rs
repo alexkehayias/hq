@@ -11,6 +11,7 @@
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
@@ -42,15 +43,13 @@ impl ToolCall for CreateChannelTool {
         let id = format!("chan-{}", Uuid::new_v4().simple());
         insert_channel(
             &self.db,
-            &id,
             &ChannelSource::Server,
+            &id,
             Some(&self.session_id),
         )
         .await?;
         registry::ensure_registered(&id);
-        Ok(format!(
-            "Created channel '{id}'. Emit to it with emit_channel; loops can subscribe to it by id."
-        ))
+        Ok(json!({ "id": id }).to_string())
     }
 
     fn function_name(&self) -> String {
@@ -125,10 +124,17 @@ impl ToolCall for EmitChannelTool {
         })?;
 
         if !channel.is_owned_by(&self.session_id) {
-            return Err(Error::from(RecoverableToolError::new(&format!(
-                "You can only emit to channels you created; '{}' belongs to another agent.",
-                fn_args.id
-            ))));
+            let message = match &channel.created_by {
+                None => format!(
+                    "'{}' is not an agent-created channel, so you cannot emit to it.",
+                    fn_args.id
+                ),
+                Some(_) => format!(
+                    "You can only emit to channels you created; '{}' belongs to another agent.",
+                    fn_args.id
+                ),
+            };
+            return Err(Error::from(RecoverableToolError::new(&message)));
         }
 
         // Bring it live if the process restarted since creation, then publish.
@@ -198,11 +204,12 @@ mod tests {
         (dir, db)
     }
 
-    /// Pull the generated channel id out of a `create_channel` success message.
+    /// Pull the generated channel id out of a `create_channel` result.
     fn created_id(message: &str) -> String {
-        let start = message.find('\'').expect("quoted id") + 1;
-        let end = message[start..].find('\'').expect("closing quote") + start;
-        message[start..end].to_string()
+        serde_json::from_str::<serde_json::Value>(message).unwrap()["id"]
+            .as_str()
+            .expect("id field")
+            .to_string()
     }
 
     #[tokio::test]
@@ -283,6 +290,25 @@ mod tests {
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
         assert!(recoverable.unwrap().message.contains("only emit"));
+    }
+
+    #[tokio::test]
+    async fn emit_to_unowned_channel_reports_not_agent_created() {
+        let (_dir, db) = setup().await;
+        insert_channel(&db, &ChannelSource::Server, "timer-1h", None)
+            .await
+            .unwrap();
+
+        let err = EmitChannelTool::new(db, "agent-a")
+            .call(r#"{"id": "timer-1h", "message": "hi"}"#)
+            .await
+            .unwrap_err();
+        let recoverable = err.downcast_ref::<RecoverableToolError>().unwrap();
+        assert!(
+            recoverable.message.contains("not an agent-created channel"),
+            "{}",
+            recoverable.message
+        );
     }
 
     #[tokio::test]
