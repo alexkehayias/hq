@@ -87,27 +87,28 @@ pub async fn find_agent_channels(db: &Connection) -> Result<Vec<String>> {
     Ok(ids.await?)
 }
 
-/// Ensure a `channel` row exists for each id with the given source so a loop's
-/// `loop_channel` links satisfy the foreign key. Existing rows are left
-/// untouched, preserving a channel's stored source and debounce.
+/// Ensure a `channel` row exists for each of `ids` so a loop's `loop_channel`
+/// links satisfy the foreign key. Rows that already exist are left untouched,
+/// preserving a channel's stored source and debounce.
 ///
-/// Uses `ON CONFLICT(id) DO NOTHING` rather than `INSERT OR IGNORE` so only
-/// the duplicate-id conflict is suppressed; any other constraint failure
-/// still surfaces as an error.
+/// `default_source` is the source assigned only to rows that don't exist yet; it
+/// never reassigns an existing channel's source. Uses `ON CONFLICT(id) DO
+/// NOTHING` rather than `INSERT OR IGNORE` so only the duplicate-id conflict is
+/// suppressed; any other constraint failure still surfaces as an error.
 pub async fn ensure_channels(
     db: &Connection,
-    channels: &[String],
-    source: &ChannelSource,
+    default_source: &ChannelSource,
+    ids: &[String],
 ) -> Result<()> {
-    let channels = channels.to_vec();
-    let source = source.as_str().to_string();
+    let default_source = default_source.as_str().to_string();
+    let ids = ids.to_vec();
     let inserted = db.call(move |conn| {
         let mut stmt = conn.prepare(
             "INSERT INTO channel (id, source) VALUES (?1, ?2)
              ON CONFLICT(id) DO NOTHING",
         )?;
-        for channel in &channels {
-            stmt.execute(rusqlite::params![channel, source])?;
+        for id in &ids {
+            stmt.execute(rusqlite::params![id, default_source])?;
         }
         Ok(())
     });
@@ -218,8 +219,8 @@ mod tests {
 
         ensure_channels(
             &db,
-            &["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
             &ChannelSource::Socket,
+            &["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
         )
         .await
         .unwrap();

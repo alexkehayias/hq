@@ -78,7 +78,7 @@ impl ToolCall for CreateLoopTool {
         let id = Uuid::new_v4().to_string();
         let channels_display = fn_args.channels.join(", ");
 
-        ensure_channels(&self.config.db, &fn_args.channels, &ChannelSource::Socket).await?;
+        ensure_channels(&self.config.db, &ChannelSource::Socket, &fn_args.channels).await?;
 
         let record = Loop {
             id: id.clone(),

@@ -41,7 +41,7 @@ fn default_channel_ids() -> Vec<String> {
 /// Ensure a `channel` row exists for each default channel (`source = server`).
 /// Existing rows are left untouched.
 pub async fn ensure_default_channels(db: &Connection) -> Result<()> {
-    ensure_channels(db, &default_channel_ids(), &ChannelSource::Server).await
+    ensure_channels(db, &ChannelSource::Server, &default_channel_ids()).await
 }
 
 /// Ensure the default channel rows exist and start a publisher for each.
