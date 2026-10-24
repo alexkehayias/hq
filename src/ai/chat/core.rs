@@ -68,17 +68,22 @@ impl Chat {
 
         // Call the tool and get the next completion from the result.
         // Recoverable errors are returned to the LLM as tool response
-        // messages so it can retry or adjust its approach.
-        let tool_call_result = match tools
-            .iter()
-            .find(|i| *i.function_name() == *tool_call_name)
-            .ok_or(anyhow!(
-                "Received tool call that doesn't exist: {}",
-                tool_call_name
-            ))?
-            .call(tool_call_args)
-            .await
-        {
+        // messages so it can retry or adjust its approach. Unknown tool
+        // names are treated the same way so a hallucinated tool call
+        // doesn't break the loop.
+        let Some(tool) = tools.iter().find(|i| *i.function_name() == *tool_call_name) else {
+            let available = tools
+                .iter()
+                .map(|i| i.function_name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(Message::new_tool_call_response(
+                &format!("Error: unknown tool `{tool_call_name}`. Available tools: {available}"),
+                tool_call_id,
+            ));
+        };
+
+        let tool_call_result = match tool.call(tool_call_args).await {
             Ok(result) => result,
             Err(e) => match e.downcast_ref::<RecoverableToolError>() {
                 Some(recoverable) => recoverable.message.clone(),
@@ -1242,6 +1247,100 @@ data: [DONE]
         assert_eq!(
             tool_response.text().unwrap(),
             "Website is temporarily unavailable (HTTP 503). Try again later."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_unknown_tool_call() {
+        let mut server = mockito::Server::new_async().await;
+
+        // Model calls a tool that isn't registered
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_unknown",
+                        "type": "function",
+                        "function": {
+                            "name": "website_view",
+                            "arguments": "{}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "That tool doesn't exist. Let me use a different one."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct MockTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for MockTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("mock result".to_string())
+            }
+            fn function_name(&self) -> String {
+                "mock_tool".to_string()
+            }
+        }
+
+        let url = server.url();
+        let tools = vec![Box::new(MockTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .tools(tools)
+            .build();
+
+        let msg = Message::new(Role::User, "View this website");
+        let result = chat.next_msg(msg).await;
+
+        mock1.assert();
+        mock2.assert();
+
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        assert_eq!(messages.len(), 3);
+
+        // The unknown tool call becomes a tool response message so the
+        // model can recover instead of aborting the loop.
+        let tool_response = &messages[1];
+        assert_eq!(*tool_response.role(), crate::openai::Role::Tool);
+        assert_eq!(
+            tool_response.text().unwrap(),
+            "Error: unknown tool `website_view`. Available tools: mock_tool"
         );
     }
 
