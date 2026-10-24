@@ -68,22 +68,24 @@ impl Chat {
 
         // Call the tool and get the next completion from the result.
         // Recoverable errors are returned to the LLM as tool response
-        // messages so it can retry or adjust its approach. Unknown tool
-        // names are treated the same way so a hallucinated tool call
-        // doesn't break the loop.
-        let Some(tool) = tools.iter().find(|i| *i.function_name() == *tool_call_name) else {
-            let available = tools
-                .iter()
-                .map(|i| i.function_name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Ok(Message::new_tool_call_response(
-                &format!("Error: unknown tool `{tool_call_name}`. Available tools: {available}"),
-                tool_call_id,
-            ));
+        // messages so it can retry or adjust its approach. An unknown
+        // tool name is reported as a recoverable error so a hallucinated
+        // tool call doesn't break the loop.
+        let call_result = match tools.iter().find(|i| *i.function_name() == *tool_call_name) {
+            Some(tool) => tool.call(tool_call_args).await,
+            None => {
+                let available = tools
+                    .iter()
+                    .map(|i| i.function_name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(Error::from(RecoverableToolError::new(&format!(
+                    "Error: unknown tool `{tool_call_name}`. Available tools: {available}",
+                ))))
+            }
         };
 
-        let tool_call_result = match tool.call(tool_call_args).await {
+        let tool_call_result = match call_result {
             Ok(result) => result,
             Err(e) => match e.downcast_ref::<RecoverableToolError>() {
                 Some(recoverable) => recoverable.message.clone(),
