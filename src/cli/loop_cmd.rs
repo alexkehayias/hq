@@ -37,10 +37,11 @@ use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{ToolConfig, ToolRegistry};
+use crate::channels::models::ChannelSource;
+use crate::channels::subscribe::channel_meta;
 use crate::cli::channel::{event_stream_from_reader, sigterm, socket_path};
 use crate::core::markdown_render;
 use crate::loops::prompt::build_system_prompt;
-use crate::loops::subscribe::{ChannelSource, channel_meta};
 use crate::loops::tools::resolve_loop_tools;
 use crate::openai::{Message, Role};
 use tokio_rusqlite::Connection;
@@ -96,7 +97,7 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
 
     for channel_id in channels {
         let (source, _) = channel_meta(&db, channel_id).await?;
-        if source == ChannelSource::Server {
+        if source != ChannelSource::Socket {
             return Err(anyhow!(
                 "channel '{}' is a server channel — only loops running inside the server can subscribe to it",
                 channel_id
@@ -126,7 +127,8 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
     }
     drop(event_tx); // close our sender so event_rx drains then returns None
 
-    let system_prompt = build_system_prompt(system_prompt);
+    let tool_names = resolve_loop_tools(tools);
+    let system_prompt = build_system_prompt(system_prompt, &tool_names);
 
     // session_id is fixed for the lifetime of the loop so every BashTool mounts
     // the same workspace directory. Files written in one turn are visible in
@@ -148,7 +150,6 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
         model: model.to_string(),
     };
     let registry = ToolRegistry::builtin(context);
-    let tool_names = resolve_loop_tools(tools);
 
     // Main loop: read merged events, send to chat, print responses.
     // Ctrl-C or SIGTERM breaks out and exits cleanly.

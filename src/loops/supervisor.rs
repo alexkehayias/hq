@@ -24,12 +24,12 @@ use tokio_rusqlite::Connection;
 use super::db::find_all_loops;
 use super::models::Loop;
 use super::prompt::build_system_prompt;
-use super::subscribe::subscribe;
 use super::tools::resolve_loop_tools;
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{ToolConfig, ToolRegistry};
+use crate::channels::subscribe::subscribe;
 use crate::cli::channel::validate_channel_id;
 use crate::openai::{Message, Role};
 
@@ -139,7 +139,8 @@ async fn run_loop(
     }
     drop(event_tx); // close our sender so event_rx drains then returns None
 
-    let system_prompt = build_system_prompt(&record.system_prompt);
+    let tool_names = resolve_loop_tools(&record.tools);
+    let system_prompt = build_system_prompt(&record.system_prompt, &tool_names);
 
     // session_id is the loop id, fixed for the lifetime of the loop so every
     // BashTool mounts the same workspace directory across events and restarts.
@@ -155,7 +156,6 @@ async fn run_loop(
         model: config.model.clone(),
     };
     let registry = ToolRegistry::builtin(context);
-    let tool_names = resolve_loop_tools(&record.tools);
 
     // Each event is processed with only the system prompt and that event — no
     // accumulated transcript. Tools and chat are rebuilt per event.
@@ -194,8 +194,8 @@ async fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::registry;
     use crate::core::db::{async_db, initialize_db};
-    use crate::loops::registry;
     use uuid::Uuid;
 
     async fn setup() -> (tempfile::TempDir, LoopSupervisorConfig) {
