@@ -6,11 +6,13 @@
 //! the agent session that created it via tools. The two are independent: an
 //! agent-created channel is a `Server`-sourced channel that happens to have an
 //! owner. See [`models`] for the types, [`db`] for persistence, [`registry`]
-//! for the in-process bus, [`subscribe`] for source-aware subscription, and
-//! [`default`] for the built-in timer channels.
+//! for the in-process bus, [`subscribe`] for source-aware subscription,
+//! [`default`] for the built-in timer channels, and [`errors`] for the default
+//! channel carrying the server's error logs.
 
 pub mod db;
 pub mod default;
+pub mod errors;
 pub mod models;
 pub mod prompt;
 pub mod registry;

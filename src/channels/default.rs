@@ -1,9 +1,11 @@
 //! Default channels available to loops.
 //!
 //! These are server-sourced channels: instead of a CLI publisher reading stdin,
-//! the server publishes an event on a fixed interval through the in-process
-//! [`registry`](super::registry). Loops subscribe to them like any other
-//! channel, receiving events tagged `[timer-1h] tick <timestamp>`.
+//! the server publishes events through the in-process [`registry`](super::registry).
+//! The timer channels publish a tick on a fixed interval; loops subscribe to
+//! them like any other channel, receiving events tagged
+//! `[timer-1h] tick <timestamp>`. The `server-errors` channel is fed by a
+//! tracing layer instead (see [`super::errors`]).
 //!
 //! [`start_default_channels`] ensures a `channel` row exists for each default
 //! channel (`source = 'server'`) and starts its publisher, so a persisted loop
@@ -19,6 +21,7 @@ use tokio::time::{Instant, interval_at};
 use tokio_rusqlite::Connection;
 
 use super::db::{ensure_channels, find_agent_channels};
+use super::errors::{SERVER_ERROR_CHANNEL, register as register_error_channel};
 use super::models::ChannelSource;
 use super::registry;
 
@@ -30,11 +33,12 @@ pub const DEFAULT_TIMER_CHANNELS: &[(&str, Duration)] = &[
     ("timer-12h", Duration::from_secs(12 * 60 * 60)),
 ];
 
-/// Channel ids of the default timer channels.
+/// Channel ids of the default server channels: the timers plus `server-errors`.
 fn default_channel_ids() -> Vec<String> {
     DEFAULT_TIMER_CHANNELS
         .iter()
         .map(|(id, _)| id.to_string())
+        .chain(std::iter::once(SERVER_ERROR_CHANNEL.to_string()))
         .collect()
 }
 
@@ -55,6 +59,11 @@ pub async fn start_default_channels(db: &Connection) -> Result<()> {
         spawn_timer_channel(id, interval);
         tracing::info!("started default timer channel '{}'", id);
     }
+    // The error channel has no publisher task: its tracing layer publishes
+    // directly. Registering it here makes it subscribable even before the first
+    // error is logged.
+    register_error_channel();
+    tracing::info!("started default error channel '{}'", SERVER_ERROR_CHANNEL);
     Ok(())
 }
 
@@ -147,6 +156,7 @@ mod tests {
         assert_eq!(
             rows,
             vec![
+                ("server-errors".to_string(), "server".to_string()),
                 ("timer-12h".to_string(), "server".to_string()),
                 ("timer-1h".to_string(), "server".to_string()),
                 ("timer-30m".to_string(), "server".to_string()),

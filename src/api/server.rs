@@ -9,6 +9,7 @@ use super::{assets, routes};
 use crate::ai::skills::SkillRegistry;
 use crate::api::state::AppState;
 use crate::channels::default::{register_agent_channels, start_default_channels};
+use crate::channels::errors::{ErrorChannelLayer, register as register_error_channel};
 use crate::core::{AppConfig, db::async_db};
 use crate::jobs::{DailyAgenda, GenerateSessionTitles, GitSync, spawn_periodic_job};
 use crate::loops::supervisor::{self as loops, LoopSupervisorConfig};
@@ -32,6 +33,10 @@ pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
 // Run the server
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(host: String, port: String, config: AppConfig) {
+    // Register the error channel before installing the tracing layer so errors
+    // logged during boot are not dropped.
+    register_error_channel();
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -44,6 +49,7 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
                 .into()
             }),
         )
+        .with(ErrorChannelLayer::default())
         .with(tracing_subscriber::fmt::layer())
         .init();
 

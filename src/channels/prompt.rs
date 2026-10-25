@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use super::default::DEFAULT_TIMER_CHANNELS;
+use super::errors::SERVER_ERROR_CHANNEL;
 
 /// Human-readable label for a timer interval (e.g. `every 30 minutes`).
 fn interval_label(interval: Duration) -> String {
@@ -47,7 +48,10 @@ pub fn system_prompt_section() -> String {
          The following timer channels are always available; each publishes a `tick` event \
          with the current UTC time on a fixed interval:\n\
          {channels}\n\n\
+         The `{errors}` channel publishes every ERROR-level server log event, so a loop \
+         subscribed to it can react to failures.\n\n\
          To run something on a schedule, create a loop subscribed to the matching timer channel.{channel_tools}",
+        errors = SERVER_ERROR_CHANNEL,
         channel_tools = channel_tools_section()
     )
 }
@@ -68,6 +72,11 @@ mod tests {
         assert!(section.contains("every 1 hour"), "{section}");
         assert!(section.contains("every 4 hours"), "{section}");
         assert!(section.contains("every 12 hours"), "{section}");
+        assert!(section.contains(SERVER_ERROR_CHANNEL), "{section}");
+        assert!(
+            section.contains("ERROR-level server log event"),
+            "{section}"
+        );
     }
 
     #[test]
