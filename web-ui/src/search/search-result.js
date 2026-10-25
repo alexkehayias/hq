@@ -8,7 +8,8 @@
  * Replaces the inline template in search/index.js.
  *
  * @fires result-select - on click, with { result } (bubbles). The page handles
- *   highlighting, URL updates, and opening the note modal.
+ *   highlighting and the note modal, or navigation to the chat session for
+ *   chat hits.
  */
 import { html } from '/components/lib/html.js';
 

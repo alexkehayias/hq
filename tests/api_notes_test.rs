@@ -320,5 +320,12 @@ mod tests {
             "Expected chat_role field: {}",
             body
         );
+
+        // Should identify the session so the UI can link to it
+        assert!(
+            body.contains("\"session_id\":\"role-test-session\""),
+            "Expected session_id field: {}",
+            body
+        );
     }
 }
