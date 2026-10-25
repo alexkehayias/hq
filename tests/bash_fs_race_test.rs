@@ -39,27 +39,27 @@ async fn concurrent_hq_tasks_create_via_cli() {
     let dir = TempDir::new().unwrap();
     let storage = dir.path().to_path_buf();
     init_storage(&storage).await;
-
-    unsafe {
-        std::env::set_var("HQ_STORAGE_PATH", &storage);
-    }
+    let storage_path = storage.to_string_lossy().to_string();
 
     let count = 8;
-    let futures = (0..count).map(|i| async move {
-        let args = vec![
-            "hq".to_string(),
-            "tasks".to_string(),
-            "create".to_string(),
-            format!("Task {i}"),
-        ];
-        tokio::time::timeout(Duration::from_secs(20), hq::cli::run_with_args(args)).await
+    let futures = (0..count).map(|i| {
+        let storage_path = storage_path.clone();
+        async move {
+            let args = vec![
+                "hq".to_string(),
+                "tasks".to_string(),
+                "create".to_string(),
+                format!("Task {i}"),
+            ];
+            tokio::time::timeout(
+                Duration::from_secs(20),
+                hq::cli::run_with_args_in(args, &storage_path),
+            )
+            .await
+        }
     });
 
     let results: Vec<_> = futures_util::future::join_all(futures).await;
-
-    unsafe {
-        std::env::remove_var("HQ_STORAGE_PATH");
-    }
 
     let mut errors = Vec::new();
     for (i, result) in results.into_iter().enumerate() {
@@ -95,29 +95,29 @@ async fn concurrent_hq_tasks_create_new_project_via_cli() {
     let dir = TempDir::new().unwrap();
     let storage = dir.path().to_path_buf();
     init_storage(&storage).await;
-
-    unsafe {
-        std::env::set_var("HQ_STORAGE_PATH", &storage);
-    }
+    let storage_path = storage.to_string_lossy().to_string();
 
     let count = 8;
-    let futures = (0..count).map(|i| async move {
-        let args = vec![
-            "hq".to_string(),
-            "tasks".to_string(),
-            "create".to_string(),
-            format!("Task {i}"),
-            "--project".to_string(),
-            "newproj".to_string(),
-        ];
-        tokio::time::timeout(Duration::from_secs(20), hq::cli::run_with_args(args)).await
+    let futures = (0..count).map(|i| {
+        let storage_path = storage_path.clone();
+        async move {
+            let args = vec![
+                "hq".to_string(),
+                "tasks".to_string(),
+                "create".to_string(),
+                format!("Task {i}"),
+                "--project".to_string(),
+                "newproj".to_string(),
+            ];
+            tokio::time::timeout(
+                Duration::from_secs(20),
+                hq::cli::run_with_args_in(args, &storage_path),
+            )
+            .await
+        }
     });
 
     let results: Vec<_> = futures_util::future::join_all(futures).await;
-
-    unsafe {
-        std::env::remove_var("HQ_STORAGE_PATH");
-    }
 
     let mut errors = Vec::new();
     for (i, result) in results.into_iter().enumerate() {
@@ -161,10 +161,7 @@ async fn concurrent_hq_tasks_create_via_bash() {
     let dir = TempDir::new().unwrap();
     let storage = dir.path().to_path_buf();
     init_storage(&storage).await;
-
-    unsafe {
-        std::env::set_var("HQ_STORAGE_PATH", &storage);
-    }
+    let storage_path = storage.to_string_lossy().to_string();
 
     let workspace = storage.join("workspace").join("session");
     tokio::fs::create_dir_all(&workspace).await.unwrap();
@@ -182,22 +179,19 @@ async fn concurrent_hq_tasks_create_via_bash() {
 
     let count = 8;
     let futures = (0..count).map(|i| {
+        let storage_path = storage_path.clone();
         let workspace = workspace.clone();
         async move {
             let command = format!("hq tasks create 'Task {i}'");
             tokio::time::timeout(
                 Duration::from_secs(20),
-                run_in_sandbox(&command, &workspace),
+                run_in_sandbox(&storage_path, &workspace, &command),
             )
             .await
         }
     });
 
     let results: Vec<_> = futures_util::future::join_all(futures).await;
-
-    unsafe {
-        std::env::remove_var("HQ_STORAGE_PATH");
-    }
 
     let mut errors = Vec::new();
     let mut report = String::new();

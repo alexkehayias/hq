@@ -49,6 +49,8 @@ pub struct BashTool {
     pub r#type: ToolType,
     pub function: Function<BashProps>,
     #[serde(skip_serializing)]
+    storage_path: String,
+    #[serde(skip_serializing)]
     workspace_path: PathBuf,
 }
 
@@ -56,7 +58,8 @@ pub struct BashTool {
 impl ToolCall for BashTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: BashArgs = parse_tool_args(args)?;
-        let result = run_in_sandbox(&fn_args.command, &self.workspace_path).await?;
+        let result =
+            run_in_sandbox(&self.storage_path, &self.workspace_path, &fn_args.command).await?;
         Ok(serde_json::to_string(&result)?)
     }
 
@@ -108,6 +111,7 @@ impl BashTool {
         Self {
             r#type: ToolType::Function,
             function,
+            storage_path: storage_path.to_string(),
             workspace_path,
         }
     }
@@ -122,7 +126,11 @@ impl BashTool {
 /// blocked even on a single-CPU runtime. This lets `run_in_sandbox` execute
 /// directly on the caller's runtime instead of needing a nested blocking-thread
 /// workaround.
-pub async fn run_in_sandbox(command: &str, workspace_path: &Path) -> Result<BashOutput> {
+pub async fn run_in_sandbox(
+    storage_path: &str,
+    workspace_path: &Path,
+    command: &str,
+) -> Result<BashOutput> {
     fs::create_dir_all(workspace_path).await?;
 
     let backend = RealFs::new(workspace_path, RealFsMode::ReadWrite)
@@ -130,7 +138,9 @@ pub async fn run_in_sandbox(command: &str, workspace_path: &Path) -> Result<Bash
         .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
     let fs = Arc::new(PosixFs::new(backend));
 
-    let mut bash = Bash::builder().builtin("hq", Box::new(HqBuiltin)).build();
+    let mut bash = Bash::builder()
+        .builtin("hq", Box::new(HqBuiltin::new(storage_path)))
+        .build();
     bash.mount(SANDBOX_ROOT, fs)
         .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
 

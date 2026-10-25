@@ -567,7 +567,8 @@ async fn chat_handler(
             // Run a command in the bashkit sandbox and return the output
             let workspace_path =
                 PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
-            let response = match run_in_sandbox(command, &workspace_path).await {
+            let response = match run_in_sandbox(&storage_path_owned, &workspace_path, command).await
+            {
                 Ok(output) => {
                     let mut parts = Vec::new();
                     parts.push("```".to_string());

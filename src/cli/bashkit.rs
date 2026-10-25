@@ -9,9 +9,19 @@ use std::time::Duration;
 /// Registered as the `hq` command inside bashkit sandboxes. Only subcommands
 /// in [`ALLOWED_SUBCOMMANDS`] are permitted; all others return an error.
 /// Help output is filtered to show only allowed subcommands.
-/// Arguments are forwarded to [`cli::run_with_args`], with stdout and stderr
+/// Arguments are forwarded to [`cli::run_with_args_in`], with stdout and stderr
 /// captured via Unix pipes and returned as the builtin's output.
-pub struct HqBuiltin;
+pub struct HqBuiltin {
+    storage_path: String,
+}
+
+impl HqBuiltin {
+    pub fn new(storage_path: impl Into<String>) -> Self {
+        Self {
+            storage_path: storage_path.into(),
+        }
+    }
+}
 
 /// Subcommands that the `hq` builtin is allowed to run inside the sandbox.
 const ALLOWED_SUBCOMMANDS: &[&str] = &["tasks", "eval", "projects"];
@@ -63,7 +73,10 @@ impl Builtin for HqBuiltin {
         let mut args = vec!["hq".to_string()];
         args.extend(ctx.args.iter().cloned());
 
-        match capture_async(move || async { cli::run_with_args(args).await }).await {
+        let storage_path = self.storage_path.clone();
+        match capture_async(move || async move { cli::run_with_args_in(args, &storage_path).await })
+            .await
+        {
             Ok(output) => {
                 if output.stderr.is_empty() {
                     Ok(ExecResult::ok(output.stdout))
@@ -231,7 +244,9 @@ mod tests {
 
     /// Create a bash instance with the hq builtin registered.
     fn bash_with_hq() -> Bash {
-        Bash::builder().builtin("hq", Box::new(HqBuiltin)).build()
+        Bash::builder()
+            .builtin("hq", Box::new(HqBuiltin::new(".")))
+            .build()
     }
 
     #[tokio::test]
