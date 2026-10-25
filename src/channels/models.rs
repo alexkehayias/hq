@@ -1,3 +1,6 @@
+use std::convert::Infallible;
+use std::str::FromStr;
+
 /// How a channel is served — where its events come from.
 ///
 /// Mirrors the `channel.source` column. This is distinct from a channel's
@@ -14,24 +17,28 @@ pub enum ChannelSource {
 }
 
 impl ChannelSource {
-    /// Reconstruct a source from a `channel` row's `source` column. Unknown
-    /// values (including the reserved `webhook`) are treated as [`Server`],
-    /// since they are published in-process.
-    ///
-    /// [`Server`]: ChannelSource::Server
-    pub fn from_column(source: &str) -> Self {
-        match source {
-            "socket" => Self::Socket,
-            _ => Self::Server,
-        }
-    }
-
     /// The `source` column value for this source.
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Server => "server",
             Self::Socket => "socket",
         }
+    }
+}
+
+impl FromStr for ChannelSource {
+    type Err = Infallible;
+
+    /// Parse a `source` column value. Unknown values (including the reserved
+    /// `webhook`) are treated as [`Server`], since they are published
+    /// in-process.
+    ///
+    /// [`Server`]: ChannelSource::Server
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        Ok(match source {
+            "socket" => Self::Socket,
+            _ => Self::Server,
+        })
     }
 }
 
@@ -62,21 +69,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_column_distinguishes_socket_and_server() {
-        assert_eq!(ChannelSource::from_column("socket"), ChannelSource::Socket);
-        assert_eq!(ChannelSource::from_column("server"), ChannelSource::Server);
+    fn from_str_distinguishes_socket_and_server() {
+        assert_eq!(
+            "socket".parse::<ChannelSource>().unwrap(),
+            ChannelSource::Socket
+        );
+        assert_eq!(
+            "server".parse::<ChannelSource>().unwrap(),
+            ChannelSource::Server
+        );
     }
 
     #[test]
-    fn from_column_treats_webhook_and_unknown_as_server() {
-        assert_eq!(ChannelSource::from_column("webhook"), ChannelSource::Server);
-        assert_eq!(ChannelSource::from_column(""), ChannelSource::Server);
+    fn from_str_treats_webhook_and_unknown_as_server() {
+        assert_eq!(
+            "webhook".parse::<ChannelSource>().unwrap(),
+            ChannelSource::Server
+        );
+        assert_eq!("".parse::<ChannelSource>().unwrap(), ChannelSource::Server);
     }
 
     #[test]
     fn source_round_trips_through_column() {
         for source in [ChannelSource::Server, ChannelSource::Socket] {
-            assert_eq!(ChannelSource::from_column(source.as_str()), source);
+            assert_eq!(source.as_str().parse::<ChannelSource>().unwrap(), source);
         }
     }
 

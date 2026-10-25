@@ -35,7 +35,7 @@ pub async fn channel_meta(db: &Connection, id: &str) -> Result<(ChannelSource, u
             let mut stmt = conn.prepare("SELECT source, debounce_ms FROM channel WHERE id = ?1")?;
             let mut rows = stmt.query_map([&id], |i| {
                 Ok((
-                    ChannelSource::from_column(&i.get::<_, String>(0)?),
+                    i.get::<_, String>(0)?.parse::<ChannelSource>().unwrap(),
                     i.get::<_, i64>(1)?,
                 ))
             })?;

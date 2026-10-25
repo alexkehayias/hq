@@ -11,7 +11,6 @@
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio_rusqlite::Connection;
 use uuid::Uuid;
 
@@ -49,7 +48,9 @@ impl ToolCall for CreateChannelTool {
         )
         .await?;
         registry::ensure_registered(&id);
-        Ok(json!({ "id": id }).to_string())
+        Ok(format!(
+            "Created channel '{id}'. Emit to it with emit_channel; loops can subscribe to it by id."
+        ))
     }
 
     fn function_name(&self) -> String {
@@ -204,12 +205,11 @@ mod tests {
         (dir, db)
     }
 
-    /// Pull the generated channel id out of a `create_channel` result.
+    /// Pull the generated channel id out of a `create_channel` success message.
     fn created_id(message: &str) -> String {
-        serde_json::from_str::<serde_json::Value>(message).unwrap()["id"]
-            .as_str()
-            .expect("id field")
-            .to_string()
+        let start = message.find('\'').expect("quoted id") + 1;
+        let end = message[start..].find('\'').expect("closing quote") + start;
+        message[start..end].to_string()
     }
 
     #[tokio::test]

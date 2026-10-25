@@ -13,7 +13,7 @@ pub async fn find_all_channels(db: &Connection) -> Result<Vec<Channel>> {
             .query_map([], |i| {
                 Ok(Channel {
                     id: i.get(0)?,
-                    source: ChannelSource::from_column(&i.get::<_, String>(1)?),
+                    source: i.get::<_, String>(1)?.parse::<ChannelSource>().unwrap(),
                     debounce_ms: i.get(2)?,
                     created_by: i.get(3)?,
                     created_at: i.get(4)?,
@@ -36,7 +36,7 @@ pub async fn find_channel(db: &Connection, id: &str) -> Result<Option<Channel>> 
         let mut rows = stmt.query_map([&id], |i| {
             Ok(Channel {
                 id: i.get(0)?,
-                source: ChannelSource::from_column(&i.get::<_, String>(1)?),
+                source: i.get::<_, String>(1)?.parse::<ChannelSource>().unwrap(),
                 debounce_ms: i.get(2)?,
                 created_by: i.get(3)?,
                 created_at: i.get(4)?,
