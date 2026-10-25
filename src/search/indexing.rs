@@ -26,6 +26,12 @@ use crate::core::orgmode::{ORG_ARCHIVE_SUFFIX, is_archive_file};
 use crate::core::{AppConfig, git};
 use crate::openai::{Message, Role};
 
+/// Serializes sync+reindex across the periodic `GitSync` job and the GitHub
+/// webhook, and guards Tantivy's index writer for single-file indexing.
+/// Concurrent runs race on the notes working tree (git rebase/push) and on
+/// Tantivy's writer, which panics when the directory lock is already held.
+static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Debug, Clone)]
 struct Task {
     id: String,
@@ -763,7 +769,10 @@ pub async fn index_single_file(
     .await
     .expect("DB work failed");
 
-    // Index full text in Tantivy
+    // Index full text in Tantivy. Serialize writer creation with the periodic
+    // sync job and other writers: Tantivy's directory lock is exclusive and a
+    // second writer panics with LockBusy.
+    let _guard = SYNC_LOCK.lock().await;
     let index_path =
         tantivy::directory::MmapDirectory::open(index_dir_path).expect("Index not found");
     let schema = note_schema();
@@ -793,6 +802,9 @@ pub async fn remove_task_from_indexes(
     // Remove from Tantivy full-text index. Best-effort: if the index directory
     // doesn't exist there's nothing to remove, but DB cleanup must still run.
     if let Ok(index_path) = tantivy::directory::MmapDirectory::open(index_dir_path) {
+        // Serialize with the periodic sync job and other index writers so
+        // Tantivy's exclusive writer lock can't be contended.
+        let _guard = SYNC_LOCK.lock().await;
         let schema = note_schema();
         let idx = Index::open_or_create(index_path, schema.clone())
             .expect("Unable to open or create index");
@@ -1105,12 +1117,6 @@ pub async fn delete_chat_session_index(
 
     Ok(())
 }
-
-/// Serializes sync+reindex across the periodic `GitSync` job and the GitHub
-/// webhook. Concurrent runs race on the notes working
-/// tree (git rebase/push) and on Tantivy's index writer, which panics when the
-/// directory lock is already held.
-static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Reindex the given note files, whose paths are relative to the notes repo
 /// root (as returned by git).

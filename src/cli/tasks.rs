@@ -131,11 +131,27 @@ pub async fn run_create(
     let headline = orgmode::build_headline(&id, title, body, &status_upper, 1);
 
     let file_path = if let Some(project_name) = project {
-        // Look up existing project in DB, or create a new project file
+        // Look up an existing project, or create one. Creation must be
+        // serialized on the target path: concurrent creates for a brand-new
+        // project can all miss the DB lookup and race to create it, and an
+        // unlocked create can clobber a task another create just appended.
+        // Re-checking under the lock ensures only the first creator writes the
+        // header.
         let project_path =
             match projects::db::find_project_file(db, notes_path, project_name).await? {
                 Some(path) => path,
-                None => create_project_file(db, notes_path, project_name).await?,
+                None => {
+                    let path = project_file_path(notes_path, project_name)?;
+                    orgmode::with_file_lock(&path, || async {
+                        if let Some(existing) =
+                            projects::db::find_project_file(db, notes_path, project_name).await?
+                        {
+                            return Ok(existing);
+                        }
+                        create_project_file(db, notes_path, project_name).await
+                    })
+                    .await?
+                }
             };
         println!("Created project file: {}", project_path.display());
         orgmode::with_file_lock(&project_path, || async {

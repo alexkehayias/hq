@@ -268,23 +268,34 @@ pub struct Cli {
 /// Run the CLI, parsing args from the environment.
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
-    run_dispatch(cli).await
+    let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
+    run_dispatch(cli, &storage_path).await
 }
 
 /// Run the CLI with explicit arguments (for programmatic use, e.g. bashkit).
 ///
 /// The first element should be the program name (e.g. "hq"), followed by
 /// subcommand and flags — matching what would be passed on the command line.
+/// The storage root is read from `HQ_STORAGE_PATH`; callers that already know
+/// it should use [`run_with_args_in`].
 pub async fn run_with_args(args: Vec<String>) -> Result<()> {
-    let cli = Cli::try_parse_from(args)?;
-    run_dispatch(cli).await
+    let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
+    run_with_args_in(args, &storage_path).await
 }
 
-async fn run_dispatch(cli: Cli) -> Result<()> {
-    let storage_path = env::var("HQ_STORAGE_PATH").unwrap_or("./".to_string());
-    let index_path = format!("{}/index", storage_path);
-    let notes_path = format!("{}/notes", storage_path);
-    let vec_db_path = format!("{}/db", storage_path);
+/// Run the CLI with explicit arguments and an explicit storage root.
+///
+/// The first element should be the program name (e.g. "hq"), followed by
+/// subcommand and flags — matching what would be passed on the command line.
+pub async fn run_with_args_in(args: Vec<String>, storage_path: &str) -> Result<()> {
+    let cli = Cli::try_parse_from(args)?;
+    run_dispatch(cli, storage_path).await
+}
+
+async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
+    let index_path = format!("{storage_path}/index");
+    let notes_path = format!("{storage_path}/notes");
+    let vec_db_path = format!("{storage_path}/db");
 
     match cli.command {
         Some(Command::Init {
@@ -355,7 +366,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
             .await?;
         }
         Some(Command::Channel { id, debounce_ms }) => {
-            channel::run(&storage_path, &id, Duration::from_millis(debounce_ms)).await?;
+            channel::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
         }
         Some(Command::Loop {
             channel,
@@ -380,7 +391,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
                     api_hostname: &api_hostname,
                     api_key: &api_key,
                     model: &model,
-                    storage_path: &storage_path,
+                    storage_path,
                     vapid_key_path: &vapid_key_path,
                     channels: &channel,
                     tools: &tools,
@@ -500,7 +511,7 @@ async fn run_dispatch(cli: Cli) -> Result<()> {
         }
         Some(Command::Session { command }) => match command {
             SessionCommand::Delete { id } => {
-                session::run_delete(&vec_db_path, &index_path, &storage_path, &id).await?;
+                session::run_delete(&vec_db_path, &index_path, storage_path, &id).await?;
             }
             SessionCommand::Summarize { id } => {
                 let api_hostname = env::var("HQ_LOCAL_LLM_HOST")

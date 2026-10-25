@@ -9,9 +9,19 @@ use std::time::Duration;
 /// Registered as the `hq` command inside bashkit sandboxes. Only subcommands
 /// in [`ALLOWED_SUBCOMMANDS`] are permitted; all others return an error.
 /// Help output is filtered to show only allowed subcommands.
-/// Arguments are forwarded to [`cli::run_with_args`], with stdout and stderr
+/// Arguments are forwarded to [`cli::run_with_args_in`], with stdout and stderr
 /// captured via Unix pipes and returned as the builtin's output.
-pub struct HqBuiltin;
+pub struct HqBuiltin {
+    storage_path: String,
+}
+
+impl HqBuiltin {
+    pub fn new(storage_path: impl Into<String>) -> Self {
+        Self {
+            storage_path: storage_path.into(),
+        }
+    }
+}
 
 /// Subcommands that the `hq` builtin is allowed to run inside the sandbox.
 const ALLOWED_SUBCOMMANDS: &[&str] = &["tasks", "eval", "projects"];
@@ -63,7 +73,10 @@ impl Builtin for HqBuiltin {
         let mut args = vec!["hq".to_string()];
         args.extend(ctx.args.iter().cloned());
 
-        match capture_async(move || async { cli::run_with_args(args).await }).await {
+        let storage_path = self.storage_path.clone();
+        match capture_async(move || async move { cli::run_with_args_in(args, &storage_path).await })
+            .await
+        {
             Ok(output) => {
                 if output.stderr.is_empty() {
                     Ok(ExecResult::ok(output.stdout))
@@ -94,6 +107,16 @@ impl Builtin for HqBuiltin {
     }
 }
 
+/// Serializes `hq` builtin executions.
+///
+/// `capture_async` redirects the process's fd 1/2, which are process-global.
+/// The agent loop runs tool calls concurrently, so without this lock two
+/// captures would interleave their `dup2` calls: one would save the other's
+/// pipe as its "original" stdout and restore fd 1 to a stale pipe, losing
+/// output and potentially wedging the process. Holding this for the whole
+/// capture makes the save/redirect/restore sequence sound.
+static HQ_EXEC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Run an async closure with stdout and stderr redirected to pipes, capturing
 /// all output into the returned strings.
 async fn capture_async<F, Fut>(
@@ -103,6 +126,8 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>>,
 {
+    let _guard = HQ_EXEC_LOCK.lock().await;
+
     // Flush before redirecting
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
@@ -152,8 +177,8 @@ where
 
         // Read from pipes on background threads to avoid deadlock when
         // output exceeds the OS pipe buffer size (~64 KB on macOS/Linux).
-        let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
-        let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+        let (stdout_tx, stdout_rx) = tokio::sync::oneshot::channel();
+        let (stderr_tx, stderr_rx) = tokio::sync::oneshot::channel();
 
         std::thread::spawn(move || {
             let mut buf = String::new();
@@ -185,10 +210,20 @@ where
 
         // Wait for pipe readers with a timeout to prevent hangs if a pipe
         // write end reference is not properly closed (e.g. inherited by a
-        // background thread). Fall back to empty string on timeout.
+        // background thread). Await the channels asynchronously so a slow
+        // reader never blocks the runtime worker. Fall back to empty string
+        // on timeout.
         let capture_timeout = Duration::from_secs(5);
-        let captured_stdout = stdout_rx.recv_timeout(capture_timeout).unwrap_or_default();
-        let captured_stderr = stderr_rx.recv_timeout(capture_timeout).unwrap_or_default();
+        let captured_stdout = tokio::time::timeout(capture_timeout, stdout_rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
+        let captured_stderr = tokio::time::timeout(capture_timeout, stderr_rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
 
         let output = CapturedOutput {
             stdout: captured_stdout,
@@ -209,7 +244,9 @@ mod tests {
 
     /// Create a bash instance with the hq builtin registered.
     fn bash_with_hq() -> Bash {
-        Bash::builder().builtin("hq", Box::new(HqBuiltin)).build()
+        Bash::builder()
+            .builtin("hq", Box::new(HqBuiltin::new(".")))
+            .build()
     }
 
     #[tokio::test]
