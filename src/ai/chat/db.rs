@@ -217,11 +217,12 @@ pub async fn get_non_background_sessions(db: &Connection) -> Result<Vec<SessionW
     Ok(sessions.await?)
 }
 
-/// Retrieve multiple chat messages by their IDs, along with session titles
+/// Retrieve multiple chat messages by their IDs, along with their session IDs
+/// and session titles
 pub async fn get_chat_messages_by_ids(
     db: &Connection,
     message_ids: &[String],
-) -> Result<Vec<(String, Message, Option<String>)>, Error> {
+) -> Result<Vec<(String, Message, String, Option<String>)>, Error> {
     if message_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -229,7 +230,7 @@ pub async fn get_chat_messages_by_ids(
     let ids_json = serde_json::to_string(message_ids).unwrap();
     let result = db.call(move |conn| {
         let mut stmt = conn.prepare(
-            "SELECT cm.id, cm.data, s.title FROM chat_message cm
+            "SELECT cm.id, cm.data, cm.session_id, s.title FROM chat_message cm
              JOIN session s ON cm.session_id = s.id
              WHERE cm.id IN (SELECT value FROM json_each(?))",
         )?;
@@ -238,11 +239,12 @@ pub async fn get_chat_messages_by_ids(
                 let id: String = i.get(0)?;
                 let val: String = i.get(1)?;
                 let msg: Message = serde_json::from_str(&val).unwrap();
-                let title: Option<String> = i.get(2)?;
-                Ok((id, msg, title))
+                let session_id: String = i.get(2)?;
+                let title: Option<String> = i.get(3)?;
+                Ok((id, msg, session_id, title))
             })?
             .filter_map(Result::ok)
-            .collect::<Vec<(String, Message, Option<String>)>>();
+            .collect::<Vec<(String, Message, String, Option<String>)>>();
         Ok(rows)
     });
     Ok(result.await?)

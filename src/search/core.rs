@@ -279,6 +279,7 @@ pub async fn search_notes(
                         task_closed,
                         meeting_date,
                         chat_role: None,
+                        session_id: None,
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchResult>, _>>()?;
@@ -293,7 +294,7 @@ pub async fn search_notes(
     if !chat_message_ids.is_empty()
         && let Ok(messages) = get_chat_messages_by_ids(db, &chat_message_ids).await
     {
-        for (message_id, msg, session_title) in messages {
+        for (message_id, msg, session_id, session_title) in messages {
             let role = msg.role();
             // Only include user and assistant messages (not system/tool)
             if *role == Role::User || *role == Role::Assistant {
@@ -323,6 +324,7 @@ pub async fn search_notes(
                     task_closed: None,
                     meeting_date: None,
                     chat_role: Some(role.as_str().to_string()),
+                    session_id: Some(session_id),
                 });
             }
         }

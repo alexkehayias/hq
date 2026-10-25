@@ -43,6 +43,9 @@ pub struct SearchResult {
     pub body: String,
     #[serde(default)]
     pub chat_role: Option<String>,
+    /// For chat results, the session the message belongs to.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

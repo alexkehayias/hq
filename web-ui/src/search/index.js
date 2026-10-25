@@ -134,12 +134,22 @@ function resetSearch() {
 }
 
 // Selecting a result highlights it, shares the note via URL, and opens the
-// note modal.
+// note modal. Chat hits link to the chat session instead.
 resultList.addEventListener('result-select', (e) => {
   const result = e.detail.result;
 
   // The query that produced this hit counts as a completed search
   saveRecentSearch(searchInput.value);
+
+  // Chat hits are messages; open the session that contains the message
+  if (result.type === 'chat') {
+    if (result.session_id) {
+      window.location.href = `/chat/?session_id=${encodeURIComponent(result.session_id)}`;
+    } else {
+      console.error('Chat search result is missing session_id', result);
+    }
+    return;
+  }
 
   resultList.querySelectorAll('hq-search-result').forEach((el) => {
     el.removeAttribute('selected');
