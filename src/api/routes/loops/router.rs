@@ -32,7 +32,7 @@ async fn list_loops(State(state): State<SharedState>) -> Result<impl IntoRespons
         .map(|record| LoopSummaryResponse {
             running: running.iter().any(|id| id == &record.id),
             id: record.id,
-            channels: record.channels,
+            subscribe_channels: record.subscribe_channels,
             emit_channels: record.emit_channels,
             system_prompt: record.system_prompt,
             tools: record.tools,

@@ -31,7 +31,7 @@ fn loop_supervisor_config(conf: &ToolConfig) -> LoopSupervisorConfig {
 
 #[derive(Serialize)]
 pub struct CreateLoopProps {
-    pub channels: ArrayProperty,
+    pub subscribe_channels: ArrayProperty,
     pub emit_channels: ArrayProperty,
     pub system_prompt: Property,
     pub tools: ArrayProperty,
@@ -39,7 +39,7 @@ pub struct CreateLoopProps {
 
 #[derive(Deserialize)]
 struct CreateLoopArgs {
-    channels: Vec<String>,
+    subscribe_channels: Vec<String>,
     system_prompt: String,
     #[serde(default)]
     tools: Option<Vec<String>>,
@@ -60,12 +60,12 @@ impl ToolCall for CreateLoopTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: CreateLoopArgs = parse_tool_args(args)?;
 
-        if fn_args.channels.is_empty() {
+        if fn_args.subscribe_channels.is_empty() {
             return Err(Error::from(RecoverableToolError::new(
                 "At least one channel is required.",
             )));
         }
-        for channel in &fn_args.channels {
+        for channel in &fn_args.subscribe_channels {
             if let Err(e) = validate_channel_id(channel) {
                 return Err(Error::from(RecoverableToolError::new(&format!(
                     "Invalid channel '{channel}': {e}"
@@ -96,9 +96,14 @@ impl ToolCall for CreateLoopTool {
         }
 
         let id = Uuid::new_v4().to_string();
-        let channels_display = fn_args.channels.join(", ");
+        let subscribe_display = fn_args.subscribe_channels.join(", ");
 
-        ensure_channels(&self.config.db, &ChannelSource::Socket, &fn_args.channels).await?;
+        ensure_channels(
+            &self.config.db,
+            &ChannelSource::Socket,
+            &fn_args.subscribe_channels,
+        )
+        .await?;
 
         let mut tools = resolve_loop_tools(fn_args.tools.as_deref().unwrap_or(&[]));
         // Emit permission is useless without the tool to exercise it.
@@ -108,7 +113,7 @@ impl ToolCall for CreateLoopTool {
 
         let record = Loop {
             id: id.clone(),
-            channels: fn_args.channels,
+            subscribe_channels: fn_args.subscribe_channels,
             emit_channels: emit_channels.clone(),
             system_prompt: fn_args.system_prompt,
             tools,
@@ -129,7 +134,7 @@ impl ToolCall for CreateLoopTool {
             format!(" It may emit to channel(s): {}.", emit_channels.join(", "))
         };
         Ok(format!(
-            "Created loop '{id}' listening on channel(s): {channels_display}.{emit_note} It is now running."
+            "Created loop '{id}' listening on channel(s): {subscribe_display}.{emit_note} It is now running."
         ))
     }
 
@@ -156,7 +161,7 @@ impl CreateLoopTool {
             parameters: Parameters {
                 r#type: String::from("object"),
                 properties: CreateLoopProps {
-                    channels: ArrayProperty::strings(
+                    subscribe_channels: ArrayProperty::strings(
                         "Channel IDs the loop should subscribe to. Each must be alphanumeric with dashes/underscores. The channel publisher must already be running.",
                     ),
                     emit_channels: ArrayProperty::strings(
@@ -170,7 +175,10 @@ impl CreateLoopTool {
                         "Optional tool names the loop's chat may call (defaults to [\"bash\", \"notify\"]). The bash tool is always included so the loop can read and write its state/ files.",
                     ),
                 },
-                required: vec![String::from("channels"), String::from("system_prompt")],
+                required: vec![
+                    String::from("subscribe_channels"),
+                    String::from("system_prompt"),
+                ],
                 additional_properties: false,
             },
             strict: false,
@@ -218,9 +226,9 @@ impl ToolCall for ListLoopsTool {
                 record.emit_channels.join(", ")
             };
             out.push_str(&format!(
-                "- {} ({status})\n  channels: {}\n  emit channels: {}\n  tools: {}\n  prompt: {}\n",
+                "- {} ({status})\n  subscribe channels: {}\n  emit channels: {}\n  tools: {}\n  prompt: {}\n",
                 record.id,
-                record.channels.join(", "),
+                record.subscribe_channels.join(", "),
                 emit_channels,
                 record.tools.join(", "),
                 prompt,
@@ -374,8 +382,8 @@ mod tests {
         let json = serde_json::to_value(&tool.function).unwrap();
 
         let properties = &json["parameters"]["properties"];
-        assert_eq!(properties["channels"]["type"], "array");
-        assert_eq!(properties["channels"]["items"]["type"], "string");
+        assert_eq!(properties["subscribe_channels"]["type"], "array");
+        assert_eq!(properties["subscribe_channels"]["items"]["type"], "string");
         assert_eq!(properties["emit_channels"]["type"], "array");
         assert_eq!(properties["emit_channels"]["items"]["type"], "string");
         assert_eq!(properties["tools"]["type"], "array");
@@ -385,7 +393,7 @@ mod tests {
         assert_eq!(
             required,
             &vec![
-                serde_json::json!("channels"),
+                serde_json::json!("subscribe_channels"),
                 serde_json::json!("system_prompt")
             ]
         );
@@ -396,7 +404,7 @@ mod tests {
         let (_dir, config) = setup().await;
         let tool = CreateLoopTool::new(config);
         let err = tool
-            .call(r#"{"channels": ["../bad"], "system_prompt": "Do the thing."}"#)
+            .call(r#"{"subscribe_channels": ["../bad"], "system_prompt": "Do the thing."}"#)
             .await
             .unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
@@ -410,14 +418,17 @@ mod tests {
         let tool = CreateLoopTool::new(config);
 
         // Omitted entirely: serde rejects the args before the handler runs.
-        let err = tool.call(r#"{"channels": ["alpha"]}"#).await.unwrap_err();
+        let err = tool
+            .call(r#"{"subscribe_channels": ["alpha"]}"#)
+            .await
+            .unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
         assert!(recoverable.unwrap().message.contains("system_prompt"));
 
         // Present but blank: rejected by the handler's validation.
         let err = tool
-            .call(r#"{"channels": ["alpha"], "system_prompt": "  "}"#)
+            .call(r#"{"subscribe_channels": ["alpha"], "system_prompt": "  "}"#)
             .await
             .unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
@@ -431,7 +442,7 @@ mod tests {
         let tool = CreateLoopTool::new(config);
         let err = tool
             .call(
-                r#"{"channels": ["alpha"], "system_prompt": "Do the thing.",
+                r#"{"subscribe_channels": ["alpha"], "system_prompt": "Do the thing.",
                     "emit_channels": ["ghost"]}"#,
             )
             .await
