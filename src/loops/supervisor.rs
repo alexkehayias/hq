@@ -225,6 +225,7 @@ mod tests {
         Loop {
             id: "loop-test".to_string(),
             channels: vec!["nonexistent-channel".to_string()],
+            emit_channels: vec![],
             system_prompt: "You are a loop.".to_string(),
             tools: vec![],
             created_at: String::new(),
@@ -252,6 +253,7 @@ mod tests {
         let record = Loop {
             id: "loop-server".to_string(),
             channels: vec![channel],
+            emit_channels: vec![],
             system_prompt: "You are a loop.".to_string(),
             tools: vec![],
             created_at: String::new(),

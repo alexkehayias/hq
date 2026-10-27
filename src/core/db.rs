@@ -276,6 +276,25 @@ embedding float[384]
         Err(e) => println!("Create loop_channel table failed: {}", e),
     };
 
+    // Create loop_emit_channel linking table: channels a loop is permitted to
+    // emit to (in addition to any channel it created itself).
+    let create_loop_emit_channel_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop_emit_channel (
+    -- Foreign key to loop table
+    loop_id TEXT NOT NULL REFERENCES loop(id),
+    -- Foreign key to channel table
+    channel_id TEXT NOT NULL REFERENCES channel(id),
+    -- Primary key constraint for the composite key
+    PRIMARY KEY (loop_id, channel_id)
+);",
+        [],
+    );
+
+    match create_loop_emit_channel_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_emit_channel table failed: {}", e),
+    };
+
     Ok(())
 }
 
@@ -661,6 +680,26 @@ COMMIT;",
     match create_loop_channel_table {
         Ok(_) => (),
         Err(e) => println!("Create loop_channel table failed: {}", e),
+    };
+
+    // 2026-10-20 Add loop_emit_channel: the channels a loop is permitted to
+    // emit to. A new table, so CREATE IF NOT EXISTS covers both fresh and
+    // pre-existing databases (same pattern as channel/loop/loop_channel above).
+    let create_loop_emit_channel_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop_emit_channel (
+    -- Foreign key to loop table
+    loop_id TEXT NOT NULL REFERENCES loop(id),
+    -- Foreign key to channel table
+    channel_id TEXT NOT NULL REFERENCES channel(id),
+    -- Primary key constraint for the composite key
+    PRIMARY KEY (loop_id, channel_id)
+);",
+        [],
+    );
+
+    match create_loop_emit_channel_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_emit_channel table failed: {}", e),
     };
 
     // 2026-10-16 Make loop.system_prompt required. It used to be nullable with a

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{Tool, ToolConfig};
-use crate::channels::db::ensure_channels;
+use crate::channels::db::{ensure_channels, find_channel};
 use crate::channels::models::ChannelSource;
 use crate::cli::channel::validate_channel_id;
 use crate::loops::db::{delete_loop, find_all_loops, insert_loop};
@@ -32,6 +32,7 @@ fn loop_supervisor_config(conf: &ToolConfig) -> LoopSupervisorConfig {
 #[derive(Serialize)]
 pub struct CreateLoopProps {
     pub channels: ArrayProperty,
+    pub emit_channels: ArrayProperty,
     pub system_prompt: Property,
     pub tools: ArrayProperty,
 }
@@ -42,6 +43,8 @@ struct CreateLoopArgs {
     system_prompt: String,
     #[serde(default)]
     tools: Option<Vec<String>>,
+    #[serde(default)]
+    emit_channels: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -75,16 +78,40 @@ impl ToolCall for CreateLoopTool {
             )));
         }
 
+        let emit_channels = fn_args.emit_channels.unwrap_or_default();
+        for channel in &emit_channels {
+            if let Err(e) = validate_channel_id(channel) {
+                return Err(Error::from(RecoverableToolError::new(&format!(
+                    "Invalid emit channel '{channel}': {e}"
+                ))));
+            }
+            // loop_emit_channel has a foreign key to channel, so the target must
+            // already exist. Report it recoverably rather than as a raw DB error.
+            if find_channel(&self.config.db, channel).await?.is_none() {
+                return Err(Error::from(RecoverableToolError::new(&format!(
+                    "Cannot grant emit permission for channel '{channel}' — no such channel. \
+                     Create it with create_channel first."
+                ))));
+            }
+        }
+
         let id = Uuid::new_v4().to_string();
         let channels_display = fn_args.channels.join(", ");
 
         ensure_channels(&self.config.db, &ChannelSource::Socket, &fn_args.channels).await?;
 
+        let mut tools = resolve_loop_tools(fn_args.tools.as_deref().unwrap_or(&[]));
+        // Emit permission is useless without the tool to exercise it.
+        if !emit_channels.is_empty() && !tools.iter().any(|t| t == "emit_channel") {
+            tools.push("emit_channel".to_string());
+        }
+
         let record = Loop {
             id: id.clone(),
             channels: fn_args.channels,
+            emit_channels: emit_channels.clone(),
             system_prompt: fn_args.system_prompt,
-            tools: resolve_loop_tools(fn_args.tools.as_deref().unwrap_or(&[])),
+            tools,
             created_at: String::new(),
         };
 
@@ -96,8 +123,13 @@ impl ToolCall for CreateLoopTool {
             return Err(e);
         }
 
+        let emit_note = if emit_channels.is_empty() {
+            String::new()
+        } else {
+            format!(" It may emit to channel(s): {}.", emit_channels.join(", "))
+        };
         Ok(format!(
-            "Created loop '{id}' listening on channel(s): {channels_display}. It is now running."
+            "Created loop '{id}' listening on channel(s): {channels_display}.{emit_note} It is now running."
         ))
     }
 
@@ -126,6 +158,9 @@ impl CreateLoopTool {
                 properties: CreateLoopProps {
                     channels: ArrayProperty::strings(
                         "Channel IDs the loop should subscribe to. Each must be alphanumeric with dashes/underscores. The channel publisher must already be running.",
+                    ),
+                    emit_channels: ArrayProperty::strings(
+                        "Optional channel IDs the loop is permitted to emit to with emit_channel, in addition to any channel it creates itself. Each must already exist; the loop is automatically given the emit_channel tool.",
                     ),
                     system_prompt: Property::new(
                         "string",
@@ -177,10 +212,16 @@ impl ToolCall for ListLoopsTool {
                 "stopped"
             };
             let prompt = &record.system_prompt;
+            let emit_channels = if record.emit_channels.is_empty() {
+                "(none)".to_string()
+            } else {
+                record.emit_channels.join(", ")
+            };
             out.push_str(&format!(
-                "- {} ({status})\n  channels: {}\n  tools: {}\n  prompt: {}\n",
+                "- {} ({status})\n  channels: {}\n  emit channels: {}\n  tools: {}\n  prompt: {}\n",
                 record.id,
                 record.channels.join(", "),
+                emit_channels,
                 record.tools.join(", "),
                 prompt,
             ));
@@ -335,6 +376,8 @@ mod tests {
         let properties = &json["parameters"]["properties"];
         assert_eq!(properties["channels"]["type"], "array");
         assert_eq!(properties["channels"]["items"]["type"], "string");
+        assert_eq!(properties["emit_channels"]["type"], "array");
+        assert_eq!(properties["emit_channels"]["items"]["type"], "string");
         assert_eq!(properties["tools"]["type"], "array");
         assert_eq!(properties["tools"]["items"]["type"], "string");
 
@@ -380,6 +423,26 @@ mod tests {
         let recoverable = err.downcast_ref::<RecoverableToolError>();
         assert!(recoverable.is_some());
         assert!(recoverable.unwrap().message.contains("system prompt"));
+    }
+
+    #[tokio::test]
+    async fn create_loop_unknown_emit_channel_is_recoverable() {
+        let (_dir, config) = setup().await;
+        let tool = CreateLoopTool::new(config);
+        let err = tool
+            .call(
+                r#"{"channels": ["alpha"], "system_prompt": "Do the thing.",
+                    "emit_channels": ["ghost"]}"#,
+            )
+            .await
+            .unwrap_err();
+        let recoverable = err.downcast_ref::<RecoverableToolError>();
+        assert!(recoverable.is_some());
+        assert!(
+            recoverable.unwrap().message.contains("no such channel"),
+            "{}",
+            recoverable.unwrap().message
+        );
     }
 
     #[tokio::test]

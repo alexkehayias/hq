@@ -25,7 +25,9 @@ pub fn channel_tools_section() -> &'static str {
     "\n\n## Channels\n\
      `create_channel` creates a channel you own and returns its id; `emit_channel` \
      publishes a message to a channel you created. Only the agent that created a channel \
-     can emit to it, and other loops can subscribe to it by id."
+     can emit to it, and other loops can subscribe to it by id. A loop may also be created \
+     with `create_loop`'s `emit_channels` argument, granting it permission to emit to \
+     channels it does not own."
 }
 
 /// System-message section describing channels and loops, including the default

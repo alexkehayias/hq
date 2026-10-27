@@ -206,6 +206,14 @@ async function showLoopDetail(id) {
         : html`<p class="text-sm text-muted">This loop is not subscribed to any channels.</p>`,
     )}
     ${section(
+      'Emit channels',
+      loop.emit_channels.length
+        ? html`<div class="flex flex-wrap gap-2">
+            ${loop.emit_channels.map((channel) => html`<a href="/loops/?channel=${channel}"><hq-badge tone="amber">${channel}</hq-badge></a>`)}
+          </div>`
+        : html`<p class="text-sm text-muted">This loop can only emit to channels it creates itself.</p>`,
+    )}
+    ${section(
       'Tools',
       loop.tools.length
         ? html`<div class="flex flex-wrap gap-2">${loop.tools.map((tool) => html`<hq-badge tone="gray">${tool}</hq-badge>`)}</div>`
