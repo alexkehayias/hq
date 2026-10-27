@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::default::DEFAULT_TIMER_CHANNELS;
 use super::errors::SERVER_ERROR_CHANNEL;
+use super::notes::NEW_NOTE_CHANNEL;
 
 /// Human-readable label for a timer interval (e.g. `every 30 minutes`).
 fn interval_label(interval: Duration) -> String {
@@ -50,8 +51,11 @@ pub fn system_prompt_section() -> String {
          {channels}\n\n\
          The `{errors}` channel publishes every ERROR-level server log event, so a loop \
          subscribed to it can react to failures.\n\n\
+         The `{notes}` channel publishes an event whenever a new org note is indexed, \
+         carrying the note's title, path, and a short body excerpt.\n\n\
          To run something on a schedule, create a loop subscribed to the matching timer channel.{channel_tools}",
         errors = SERVER_ERROR_CHANNEL,
+        notes = NEW_NOTE_CHANNEL,
         channel_tools = channel_tools_section()
     )
 }
@@ -77,6 +81,8 @@ mod tests {
             section.contains("ERROR-level server log event"),
             "{section}"
         );
+        assert!(section.contains(NEW_NOTE_CHANNEL), "{section}");
+        assert!(section.contains("new org note is indexed"), "{section}");
     }
 
     #[test]
