@@ -78,6 +78,7 @@ pub async fn test_app() -> Router {
         openai_model: String::from("gpt-4o"),
         openai_api_hostname: String::from("https://api.openai.com"),
         openai_api_key: String::from("test-api-key"),
+        system_one_model: String::from("gpt-4o"),
         system_message: String::from("You are a helpful assistant."),
     };
     let skill_registry = SkillRegistry::new(&skills_path).await.unwrap();
@@ -165,6 +166,7 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         openai_model: String::from("gpt-4o"),
         openai_api_hostname: String::from("https://api.openai.com"),
         openai_api_key: String::from("test-api-key"),
+        system_one_model: String::from("gpt-4o"),
         system_message: String::from("You are a helpful assistant."),
     };
     let skill_registry = SkillRegistry::new(&skills_path).await.unwrap();
@@ -256,6 +258,7 @@ pub async fn test_app_with_skills() -> Router {
         openai_model: String::from("gpt-4o"),
         openai_api_hostname: String::from("https://api.openai.com"),
         openai_api_key: String::from("test-api-key"),
+        system_one_model: String::from("gpt-4o"),
         system_message: String::from("You are a helpful assistant."),
     };
     let skill_registry = SkillRegistry::new(skills_path.display().to_string())

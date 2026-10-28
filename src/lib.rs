@@ -13,3 +13,4 @@ pub mod notify;
 pub mod openai;
 pub mod org;
 pub mod search;
+pub mod system_one;

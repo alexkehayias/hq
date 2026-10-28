@@ -42,6 +42,7 @@ pub struct AppConfig {
     pub openai_model: String,
     pub openai_api_hostname: String,
     pub openai_api_key: String,
+    pub system_one_model: String,
     pub system_message: String,
 }
 
@@ -70,6 +71,12 @@ impl Default for AppConfig {
             env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
         let openai_model =
             env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+        // The System One endpoint is expected to be served by the same locally
+        // hosted inference server as the completions API, so it reuses
+        // `openai_api_hostname` and `openai_api_key` and only needs its own
+        // model name. Defaults to the completions model when unset.
+        let system_one_model =
+            env::var("HQ_SYSTEM_ONE_MODEL").unwrap_or_else(|_| openai_model.clone());
         let system_message = env::var("HQ_SYSTEM_MESSAGE")
             .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
         let google_search_api_key = std::env::var("HQ_GOOGLE_SEARCH_API_KEY")
@@ -93,6 +100,7 @@ impl Default for AppConfig {
             openai_api_hostname,
             openai_api_key,
             openai_model,
+            system_one_model,
             system_message,
         }
     }
