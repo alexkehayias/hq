@@ -14,6 +14,8 @@ use tracing;
 pub enum Role {
     #[serde(rename = "system")]
     System,
+    #[serde(rename = "developer")]
+    Developer,
     #[serde(rename = "assistant")]
     Assistant,
     #[serde(rename = "user")]
@@ -26,6 +28,7 @@ impl Role {
     pub fn as_str(&self) -> &'static str {
         match self {
             Role::System => "system",
+            Role::Developer => "developer",
             Role::Assistant => "assistant",
             Role::User => "user",
             Role::Tool => "tool",
@@ -48,13 +51,13 @@ impl Role {
 //         }
 //     ]
 // }
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct FunctionCallFn {
     pub arguments: String,
     pub name: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct FunctionCall {
     pub function: FunctionCallFn,
     pub id: String,
@@ -79,7 +82,9 @@ impl MessageContent {
             MessageContent::Text(text) => Some(text.as_str()),
             MessageContent::Parts(parts) => parts.iter().find_map(|part| match part {
                 ContentPart::Text { text } => Some(text.as_str()),
-                ContentPart::ImageUrl { .. } => None,
+                ContentPart::InputText { text, .. } => Some(text.as_str()),
+                ContentPart::OutputText { text } => Some(text.as_str()),
+                _ => None,
             }),
         }
     }
@@ -97,12 +102,41 @@ impl From<&str> for MessageContent {
     }
 }
 
-/// A single part of a multimodal message.
+/// A single part of a message.
+///
+/// Chat completions use the `text` and `image_url` parts. The Decisions API
+/// uses the `input_*`, `output_text`, and `refusal` parts for conversation
+/// evidence.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
-    Text { text: String },
-    ImageUrl { image_url: ImageUrl },
+    Text {
+        text: String,
+    },
+    ImageUrl {
+        image_url: ImageUrl,
+    },
+    InputText {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
+    },
+    InputImage {
+        image_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<ImageDetail>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
+    },
+    InputJson {
+        data: Value,
+    },
+    OutputText {
+        text: String,
+    },
+    Refusal {
+        refusal: String,
+    },
 }
 
 impl ContentPart {
@@ -122,6 +156,40 @@ impl ContentPart {
             },
         }
     }
+
+    /// A text part for Decisions API input evidence.
+    pub fn input_text(text: impl Into<String>) -> Self {
+        ContentPart::InputText {
+            text: text.into(),
+            prompt_cache_breakpoint: None,
+        }
+    }
+
+    /// An image part for Decisions API input evidence.
+    pub fn input_image(image_url: impl Into<String>) -> Self {
+        ContentPart::InputImage {
+            image_url: image_url.into(),
+            detail: None,
+            prompt_cache_breakpoint: None,
+        }
+    }
+
+    /// A structured JSON part for Decisions API input evidence.
+    pub fn input_json(data: Value) -> Self {
+        ContentPart::InputJson { data }
+    }
+
+    /// A text part in an assistant message used as Decisions API evidence.
+    pub fn output_text(text: impl Into<String>) -> Self {
+        ContentPart::OutputText { text: text.into() }
+    }
+
+    /// A refusal part in an assistant message used as Decisions API evidence.
+    pub fn refusal(refusal: impl Into<String>) -> Self {
+        ContentPart::Refusal {
+            refusal: refusal.into(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -129,7 +197,37 @@ pub struct ImageUrl {
     pub url: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+/// Level of detail for an image part.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageDetail {
+    Low,
+    High,
+    Auto,
+    Original,
+}
+
+/// Marks a prompt cache breakpoint in message content.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PromptCacheBreakpoint {
+    pub mode: PromptCacheBreakpointMode,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCacheBreakpointMode {
+    Explicit,
+}
+
+/// The phase of an assistant message in Decisions API evidence.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantPhase {
+    Commentary,
+    FinalAnswer,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct Message {
     role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +238,8 @@ pub struct Message {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<FunctionCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<AssistantPhase>,
 }
 
 impl Message {
@@ -167,6 +267,7 @@ impl Message {
             content: Some(MessageContent::Text(content.to_string())),
             tool_call_id: None,
             tool_calls: None,
+            phase: None,
         }
     }
 
@@ -178,6 +279,7 @@ impl Message {
             content: Some(MessageContent::Parts(parts)),
             tool_call_id: None,
             tool_calls: None,
+            phase: None,
         }
     }
 
@@ -188,6 +290,7 @@ impl Message {
             content: None,
             tool_call_id: None,
             tool_calls: Some(tool_calls),
+            phase: None,
         }
     }
     pub fn new_tool_call_response(content: &str, tool_call_id: &str) -> Self {
@@ -197,6 +300,7 @@ impl Message {
             content: Some(MessageContent::Text(content.to_string())),
             tool_call_id: Some(tool_call_id.to_string()),
             tool_calls: None,
+            phase: None,
         }
     }
 }
