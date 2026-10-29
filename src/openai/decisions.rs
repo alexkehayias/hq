@@ -5,8 +5,8 @@
 //! a value from a fixed set for a `choice`, or a score against ordered levels.
 //!
 //! Requests are sent to `POST {api_hostname}/v1/decisions`. Like the chat
-//! completions client in [`crate::openai`], the host, API key, and model are
-//! caller-supplied so this can target a local OpenAI-compatible inference
+//! completions client in [`crate::openai::core`], the host, API key, and model
+//! are caller-supplied so this can target a local OpenAI-compatible inference
 //! server as well as `api.openai.com`.
 //!
 //! This module is intentionally standalone: it is not wired into `AppConfig`
@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use anyhow::{Error, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+use super::core::{ContentPart, FunctionCallFn, Message};
 
 /// The model used by OpenAI's hosted Decisions API.
 ///
@@ -59,144 +60,13 @@ pub enum InputItem {
     #[serde(rename = "message")]
     Message(Message),
     #[serde(rename = "function_call")]
-    FunctionCall(FunctionCall),
+    FunctionCall(FunctionCallItem),
     #[serde(rename = "function_call_output")]
     FunctionCallOutput(FunctionCallOutput),
     #[serde(rename = "custom_tool_call")]
     CustomToolCall(CustomToolCall),
     #[serde(rename = "custom_tool_call_output")]
     CustomToolCallOutput(CustomToolCallOutput),
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    User,
-    Developer,
-    System,
-    Assistant,
-}
-
-/// The phase of an assistant message.
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AssistantPhase {
-    Commentary,
-    FinalAnswer,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub struct Message {
-    pub role: Role,
-    pub content: MessageContent,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phase: Option<AssistantPhase>,
-}
-
-impl Message {
-    pub fn new(role: Role, content: impl Into<MessageContent>) -> Self {
-        Self {
-            role,
-            content: content.into(),
-            phase: None,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(untagged)]
-pub enum MessageContent {
-    Text(String),
-    Parts(Vec<InputPart>),
-}
-
-impl From<&str> for MessageContent {
-    fn from(text: &str) -> Self {
-        Self::Text(text.to_string())
-    }
-}
-
-impl From<String> for MessageContent {
-    fn from(text: String) -> Self {
-        Self::Text(text)
-    }
-}
-
-impl From<Vec<InputPart>> for MessageContent {
-    fn from(parts: Vec<InputPart>) -> Self {
-        Self::Parts(parts)
-    }
-}
-
-/// A part of message content.
-///
-/// `input_*` parts are supported on user messages, `output_text` and
-/// `refusal` parts on assistant messages, and `input_text` on developer and
-/// system messages.
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(tag = "type")]
-pub enum InputPart {
-    #[serde(rename = "input_text")]
-    Text {
-        text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
-    },
-    #[serde(rename = "input_image")]
-    Image {
-        image_url: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        detail: Option<ImageDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
-    },
-    #[serde(rename = "input_json")]
-    Json { data: Value },
-    #[serde(rename = "output_text")]
-    OutputText { text: String },
-    #[serde(rename = "refusal")]
-    Refusal { refusal: String },
-}
-
-impl InputPart {
-    pub fn text(text: impl Into<String>) -> Self {
-        Self::Text {
-            text: text.into(),
-            prompt_cache_breakpoint: None,
-        }
-    }
-
-    pub fn image(image_url: impl Into<String>) -> Self {
-        Self::Image {
-            image_url: image_url.into(),
-            detail: None,
-            prompt_cache_breakpoint: None,
-        }
-    }
-
-    pub fn json(data: Value) -> Self {
-        Self::Json { data }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ImageDetail {
-    Low,
-    High,
-    Auto,
-    Original,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub struct PromptCacheBreakpoint {
-    pub mode: PromptCacheBreakpointMode,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum PromptCacheBreakpointMode {
-    Explicit,
 }
 
 /// The status of a tool call or tool output item.
@@ -208,11 +78,15 @@ pub enum ItemStatus {
     Incomplete,
 }
 
+/// A function call in conversation evidence.
+///
+/// The Decisions API puts `name` and `arguments` directly on the item, which
+/// is what [`FunctionCallFn`] carries, so it is flattened into this struct.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub struct FunctionCall {
+pub struct FunctionCallItem {
     pub call_id: String,
-    pub name: String,
-    pub arguments: String,
+    #[serde(flatten)]
+    pub function: FunctionCallFn,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,7 +133,7 @@ pub struct CustomToolCallOutput {
 #[serde(untagged)]
 pub enum ToolOutput {
     Text(String),
-    Parts(Vec<ToolOutputPart>),
+    Parts(Vec<ContentPart>),
 }
 
 impl From<&str> for ToolOutput {
@@ -274,23 +148,32 @@ impl From<String> for ToolOutput {
     }
 }
 
+/// The instructions for a question.
+///
+/// Either plain text or an ordered array of content parts.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(tag = "type")]
-pub enum ToolOutputPart {
-    #[serde(rename = "input_text")]
-    Text {
-        text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
-    },
-    #[serde(rename = "input_image")]
-    Image {
-        image_url: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        detail: Option<ImageDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
-    },
+#[serde(untagged)]
+pub enum Instructions {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl From<&str> for Instructions {
+    fn from(text: &str) -> Self {
+        Self::Text(text.to_string())
+    }
+}
+
+impl From<String> for Instructions {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<Vec<ContentPart>> for Instructions {
+    fn from(parts: Vec<ContentPart>) -> Self {
+        Self::Parts(parts)
+    }
 }
 
 /// A question to ask about the input.
@@ -323,40 +206,6 @@ pub enum Question {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(untagged)]
-pub enum Instructions {
-    Text(String),
-    Parts(Vec<QuestionInputPart>),
-}
-
-impl From<&str> for Instructions {
-    fn from(text: &str) -> Self {
-        Self::Text(text.to_string())
-    }
-}
-
-impl From<String> for Instructions {
-    fn from(text: String) -> Self {
-        Self::Text(text)
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-#[serde(tag = "type")]
-pub enum QuestionInputPart {
-    #[serde(rename = "input_text")]
-    Text { text: String },
-    #[serde(rename = "input_image")]
-    Image {
-        image_url: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        detail: Option<ImageDetail>,
-    },
-    #[serde(rename = "input_json")]
-    Json { data: Value },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -581,6 +430,7 @@ pub struct OutputTokensDetails {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openai::{ContentPart, FunctionCallFn, Role};
     use serde_json::json;
 
     #[test]
@@ -617,11 +467,11 @@ mod tests {
 
     #[test]
     fn serializes_message_input_with_parts() {
-        let input = DecisionInput::Items(vec![InputItem::Message(Message::new(
+        let input = DecisionInput::Items(vec![InputItem::Message(Message::new_with_parts(
             Role::User,
             vec![
-                InputPart::text("Evaluate the ticket using the order evidence."),
-                InputPart::json(json!({
+                ContentPart::input_text("Evaluate the ticket using the order evidence."),
+                ContentPart::input_json(json!({
                     "ticket": { "body": "Please refund the duplicate charge." },
                     "order": { "charges": [49, 49] }
                 })),
@@ -653,10 +503,12 @@ mod tests {
     fn serializes_conversation_with_tool_calls() {
         let input = DecisionInput::Items(vec![
             InputItem::Message(Message::new(Role::User, "What is the order status?")),
-            InputItem::FunctionCall(FunctionCall {
+            InputItem::FunctionCall(FunctionCallItem {
                 call_id: "call_1".to_string(),
-                name: "lookup_order".to_string(),
-                arguments: r#"{"id":42}"#.to_string(),
+                function: FunctionCallFn {
+                    arguments: r#"{"id":42}"#.to_string(),
+                    name: "lookup_order".to_string(),
+                },
                 id: None,
                 namespace: None,
                 status: Some(ItemStatus::Completed),

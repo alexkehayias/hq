@@ -5,7 +5,6 @@ pub mod bash;
 pub mod channels;
 pub mod cli;
 pub mod core;
-pub mod decisions;
 pub mod eval;
 pub mod google;
 pub mod jobs;

@@ -255,7 +255,7 @@ fn format_transcript(messages: &[Message]) -> String {
 
     for message in messages {
         match message.role() {
-            Role::System => {}
+            Role::System | Role::Developer => {}
             Role::User => {
                 if let Some(text) = message.text() {
                     out.push_str(&format!("[user]\n{text}\n\n"));
