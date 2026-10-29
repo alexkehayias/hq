@@ -49,6 +49,10 @@ mod tests {
                 [],
             )?;
             conn.execute(
+                "INSERT INTO channel (id, source) VALUES ('beta', 'server')",
+                [],
+            )?;
+            conn.execute(
                 "INSERT INTO loop (id, system_prompt, tools)
                  VALUES ('loop-1', 'You are a loop.', '[\"bash\"]')",
                 [],
@@ -56,6 +60,11 @@ mod tests {
             conn.execute(
                 "INSERT INTO loop_channel (loop_id, channel_id, position)
                  VALUES ('loop-1', 'alpha', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_emit_channel (loop_id, channel_id)
+                 VALUES ('loop-1', 'beta')",
                 [],
             )?;
             Ok(())
@@ -78,6 +87,7 @@ mod tests {
         let body = body_to_string(response.into_body()).await;
         assert!(body.contains("\"loop-1\""));
         assert!(body.contains("\"alpha\""));
+        assert!(body.contains("\"emit_channels\":[\"beta\"]"), "{body}");
         assert!(body.contains("\"running\":false"));
     }
 }

@@ -34,7 +34,7 @@ async function loadData() {
 }
 
 function subscribersOf(id) {
-  return loops.filter((loop) => loop.channels.includes(id));
+  return loops.filter((loop) => loop.subscribe_channels.includes(id));
 }
 
 /* ===== List View ===== */
@@ -129,8 +129,8 @@ function loopCard(loop) {
       </div>
       <div class="mt-3 flex flex-wrap gap-1.5">
         ${
-          loop.channels.length
-            ? loop.channels.map(
+          loop.subscribe_channels.length
+            ? loop.subscribe_channels.map(
                 (channel) => html`<hq-badge tone="teal">${channel}</hq-badge>`,
               )
             : html`<span class="text-xs text-muted">No channels</span>`
@@ -199,11 +199,19 @@ async function showLoopDetail(id) {
   body.innerHTML = html`<div class="flex flex-col gap-6">
     ${section(
       'Subscribed channels',
-      loop.channels.length
+      loop.subscribe_channels.length
         ? html`<div class="flex flex-wrap gap-2">
-            ${loop.channels.map((channel) => html`<a href="/loops/?channel=${channel}"><hq-badge tone="teal">${channel}</hq-badge></a>`)}
+            ${loop.subscribe_channels.map((channel) => html`<a href="/loops/?channel=${channel}"><hq-badge tone="teal">${channel}</hq-badge></a>`)}
           </div>`
         : html`<p class="text-sm text-muted">This loop is not subscribed to any channels.</p>`,
+    )}
+    ${section(
+      'Emit channels',
+      loop.emit_channels.length
+        ? html`<div class="flex flex-wrap gap-2">
+            ${loop.emit_channels.map((channel) => html`<a href="/loops/?channel=${channel}"><hq-badge tone="amber">${channel}</hq-badge></a>`)}
+          </div>`
+        : html`<p class="text-sm text-muted">This loop can only emit to channels it creates itself.</p>`,
     )}
     ${section(
       'Tools',

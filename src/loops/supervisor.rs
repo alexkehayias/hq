@@ -61,8 +61,8 @@ fn running() -> &'static Mutex<HashMap<String, JoinHandle<()>>> {
 pub async fn start(record: Loop, config: LoopSupervisorConfig) -> Result<()> {
     let id = record.id.clone();
 
-    let mut streams = Vec::with_capacity(record.channels.len());
-    for channel in &record.channels {
+    let mut streams = Vec::with_capacity(record.subscribe_channels.len());
+    for channel in &record.subscribe_channels {
         validate_channel_id(channel)?;
         let stream = subscribe(&config.db, &config.storage_path, channel).await?;
         streams.push((channel.clone(), stream));
@@ -224,7 +224,8 @@ mod tests {
     fn loop_record() -> Loop {
         Loop {
             id: "loop-test".to_string(),
-            channels: vec!["nonexistent-channel".to_string()],
+            subscribe_channels: vec!["nonexistent-channel".to_string()],
+            emit_channels: vec![],
             system_prompt: "You are a loop.".to_string(),
             tools: vec![],
             created_at: String::new(),
@@ -251,7 +252,8 @@ mod tests {
 
         let record = Loop {
             id: "loop-server".to_string(),
-            channels: vec![channel],
+            subscribe_channels: vec![channel],
+            emit_channels: vec![],
             system_prompt: "You are a loop.".to_string(),
             tools: vec![],
             created_at: String::new(),

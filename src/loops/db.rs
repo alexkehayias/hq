@@ -16,7 +16,8 @@ pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
                     system_prompt: i.get(1)?,
                     tools: serde_json::from_str(&tools).unwrap_or_default(),
                     created_at: i.get(3)?,
-                    channels: Vec::new(),
+                    subscribe_channels: Vec::new(),
+                    emit_channels: Vec::new(),
                 })
             })?
             .filter_map(Result::ok)
@@ -25,16 +26,30 @@ pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
         // Channel ids per loop, ordered by subscription position.
         let mut ch_stmt = conn
             .prepare("SELECT loop_id, channel_id FROM loop_channel ORDER BY loop_id, position")?;
-        let mut channels: HashMap<String, Vec<String>> = HashMap::new();
+        let mut subscribe_channels: HashMap<String, Vec<String>> = HashMap::new();
         let rows =
             ch_stmt.query_map([], |i| Ok((i.get::<_, String>(0)?, i.get::<_, String>(1)?)))?;
         for row in rows.filter_map(Result::ok) {
-            channels.entry(row.0).or_default().push(row.1);
+            subscribe_channels.entry(row.0).or_default().push(row.1);
+        }
+
+        // Emit-permission channel ids per loop, ordered by channel id.
+        let mut emit_stmt = conn.prepare(
+            "SELECT loop_id, channel_id FROM loop_emit_channel ORDER BY loop_id, channel_id",
+        )?;
+        let mut emit_channels: HashMap<String, Vec<String>> = HashMap::new();
+        let rows =
+            emit_stmt.query_map([], |i| Ok((i.get::<_, String>(0)?, i.get::<_, String>(1)?)))?;
+        for row in rows.filter_map(Result::ok) {
+            emit_channels.entry(row.0).or_default().push(row.1);
         }
 
         for l in loops.iter_mut() {
-            if let Some(ch) = channels.remove(&l.id) {
-                l.channels = ch;
+            if let Some(ch) = subscribe_channels.remove(&l.id) {
+                l.subscribe_channels = ch;
+            }
+            if let Some(ch) = emit_channels.remove(&l.id) {
+                l.emit_channels = ch;
             }
         }
         Ok(loops)
@@ -55,7 +70,8 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
                     system_prompt: i.get(1)?,
                     tools: serde_json::from_str(&tools).unwrap_or_default(),
                     created_at: i.get(3)?,
-                    channels: Vec::new(),
+                    subscribe_channels: Vec::new(),
+                    emit_channels: Vec::new(),
                 })
             })?;
             match rows.next().transpose()? {
@@ -66,7 +82,15 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
 
         let mut ch_stmt = conn
             .prepare("SELECT channel_id FROM loop_channel WHERE loop_id = ?1 ORDER BY position")?;
-        record.channels = ch_stmt
+        record.subscribe_channels = ch_stmt
+            .query_map([&id], |i| i.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .collect();
+
+        let mut emit_stmt = conn.prepare(
+            "SELECT channel_id FROM loop_emit_channel WHERE loop_id = ?1 ORDER BY channel_id",
+        )?;
+        record.emit_channels = emit_stmt
             .query_map([&id], |i| i.get::<_, String>(0))?
             .filter_map(Result::ok)
             .collect();
@@ -76,11 +100,28 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
     Ok(record.await?)
 }
 
+/// Whether loop `loop_id` is permitted to emit to `channel_id`, independent of
+/// channel ownership. `false` if the loop has no such grant (or does not exist).
+pub async fn loop_may_emit(db: &Connection, loop_id: &str, channel_id: &str) -> Result<bool> {
+    let loop_id = loop_id.to_string();
+    let channel_id = channel_id.to_string();
+    let permitted = db.call(move |conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM loop_emit_channel WHERE loop_id = ?1 AND channel_id = ?2",
+            rusqlite::params![loop_id, channel_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    });
+    Ok(permitted.await?)
+}
+
 pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
     let id = record.id.clone();
     let system_prompt = record.system_prompt.clone();
     let tools = serde_json::to_string(&record.tools)?;
-    let channels = record.channels.clone();
+    let subscribe_channels = record.subscribe_channels.clone();
+    let emit_channels = record.emit_channels.clone();
     db.call(move |conn| {
         let tx = conn.transaction()?;
         tx.execute(
@@ -91,8 +132,15 @@ pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
             let mut stmt = tx.prepare(
                 "INSERT INTO loop_channel (loop_id, channel_id, position) VALUES (?1, ?2, ?3)",
             )?;
-            for (position, channel_id) in channels.iter().enumerate() {
+            for (position, channel_id) in subscribe_channels.iter().enumerate() {
                 stmt.execute(rusqlite::params![id, channel_id, position as i64])?;
+            }
+        }
+        {
+            let mut stmt =
+                tx.prepare("INSERT INTO loop_emit_channel (loop_id, channel_id) VALUES (?1, ?2)")?;
+            for channel_id in emit_channels.iter() {
+                stmt.execute(rusqlite::params![id, channel_id])?;
             }
         }
         tx.commit()?;
@@ -107,6 +155,7 @@ pub async fn delete_loop(db: &Connection, id: &str) -> Result<usize> {
     let deleted = db.call(move |conn| {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM loop_channel WHERE loop_id = ?1", [&id])?;
+        tx.execute("DELETE FROM loop_emit_channel WHERE loop_id = ?1", [&id])?;
         let count = tx.execute("DELETE FROM loop WHERE id = ?1", [&id])?;
         tx.commit()?;
         Ok(count)
@@ -149,7 +198,8 @@ mod tests {
     fn sample_loop() -> Loop {
         Loop {
             id: "loop-1".to_string(),
-            channels: vec!["alpha".to_string(), "beta".to_string()],
+            subscribe_channels: vec!["alpha".to_string(), "beta".to_string()],
+            emit_channels: vec!["beta".to_string()],
             system_prompt: "You are a loop.".to_string(),
             tools: vec!["bash".to_string(), "note_search".to_string()],
             created_at: String::new(),
@@ -163,7 +213,7 @@ mod tests {
             .call(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT name FROM sqlite_master WHERE type = 'table'
-                    AND name IN ('channel', 'loop', 'loop_channel')",
+                    AND name IN ('channel', 'loop', 'loop_channel', 'loop_emit_channel')",
                 )?;
                 let names = stmt
                     .query_map([], |row| row.get::<_, String>(0))?
@@ -176,6 +226,7 @@ mod tests {
         assert!(tables.contains(&"channel".to_string()));
         assert!(tables.contains(&"loop".to_string()));
         assert!(tables.contains(&"loop_channel".to_string()));
+        assert!(tables.contains(&"loop_emit_channel".to_string()));
     }
 
     #[tokio::test]
@@ -191,7 +242,8 @@ mod tests {
         assert_eq!(all.len(), 1);
         let found = &all[0];
         assert_eq!(found.id, record.id);
-        assert_eq!(found.channels, record.channels);
+        assert_eq!(found.subscribe_channels, record.subscribe_channels);
+        assert_eq!(found.emit_channels, record.emit_channels);
         assert_eq!(found.tools, record.tools);
         assert_eq!(found.system_prompt, record.system_prompt);
         assert!(!found.created_at.is_empty());
@@ -212,18 +264,38 @@ mod tests {
 
         delete_loop(&db, "loop-1").await.unwrap();
 
-        let remaining = db
+        let (subscriptions, emit_grants) = db
             .call(|conn| {
-                let count: i64 = conn.query_row(
+                let subscriptions: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM loop_channel WHERE loop_id = ?1",
                     ["loop-1"],
                     |row| row.get(0),
                 )?;
-                Ok(count)
+                let emit_grants: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM loop_emit_channel WHERE loop_id = ?1",
+                    ["loop-1"],
+                    |row| row.get(0),
+                )?;
+                Ok((subscriptions, emit_grants))
             })
             .await
             .unwrap();
-        assert_eq!(remaining, 0);
+        assert_eq!(subscriptions, 0);
+        assert_eq!(emit_grants, 0);
+    }
+
+    #[tokio::test]
+    async fn loop_may_emit_reflects_grants() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+
+        // sample_loop is granted emit access to "beta" only.
+        assert!(loop_may_emit(&db, "loop-1", "beta").await.unwrap());
+        assert!(!loop_may_emit(&db, "loop-1", "alpha").await.unwrap());
+        assert!(!loop_may_emit(&db, "loop-1", "missing").await.unwrap());
+        assert!(!loop_may_emit(&db, "no-such-loop", "beta").await.unwrap());
     }
 
     #[tokio::test]
@@ -238,7 +310,8 @@ mod tests {
         assert!(found.is_some());
         let found = found.unwrap();
         assert_eq!(found.id, record.id);
-        assert_eq!(found.channels, record.channels);
+        assert_eq!(found.subscribe_channels, record.subscribe_channels);
+        assert_eq!(found.emit_channels, record.emit_channels);
 
         let missing = find_loop(&db, "does-not-exist").await.unwrap();
         assert!(missing.is_none());
