@@ -47,6 +47,9 @@ pub async fn run(
 ) -> Result<()> {
     let worktree_path = format!(".claude/worktrees/{name}");
     let base_port = base_port.unwrap_or(2222);
+    // Resolve the project root before chdir-ing into the worktree. Claude Code derives its
+    // per-project config dir from the cwd, so this is the project whose memory we share.
+    let project_root = fs::canonicalize(".").await?;
 
     println!("=== Setting up hq development worktree ===");
     println!("Branch: {name}");
@@ -78,6 +81,12 @@ pub async fn run(
     // Step 3b: Write per-worktree Claude settings so Claude Code doesn't re-prompt for
     // common dev commands (cargo, git, gh, hq, bin scripts) in this worktree.
     write_claude_settings().await?;
+
+    // Step 3c: Share the main project's Claude Code memory with this worktree. Claude Code
+    // names its project dirs after the cwd, so a worktree would otherwise get a separate
+    // memory directory from the main checkout.
+    let worktree_dir = fs::canonicalize(".").await?;
+    link_claude_memory(&project_root, &worktree_dir).await?;
 
     // Get Tailscale IPv4 address for HQ_HOST, falling back to localhost
     let host = Command::new("tailscale")
@@ -162,8 +171,7 @@ pub async fn run(
     // Reusing prevents duplicate workspaces when re-running `hq develop <name>` on an
     // existing worktree (tmux used `-s {name}` which failed on collision; herdr has no
     // such guard, so we match by cwd instead).
-    let abs_path = fs::canonicalize(".").await?;
-    let worktree_abs = abs_path.to_string_lossy().to_string();
+    let worktree_abs = worktree_dir.to_string_lossy().to_string();
 
     let (workspace_id, root_pane) = match find_workspace_for_cwd(&worktree_abs)? {
         Some(found) => {
@@ -373,6 +381,65 @@ fn focus_workspace(workspace_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Point this worktree's Claude Code memory directory at `project_root`'s, so memories
+/// written in one worktree are visible in every other worktree and the main checkout.
+///
+/// Claude Code derives its per-project directory from the cwd (`~/.claude/projects/` plus
+/// the cwd with every non-alphanumeric character replaced by `-`) and has no setting to
+/// override just the `memory/` subdirectory, so we symlink it explicitly.
+async fn link_claude_memory(project_root: &Path, worktree_dir: &Path) -> Result<()> {
+    let home = env::var_os("HOME").context("HOME is not set; cannot locate ~/.claude")?;
+    let projects_dir = Path::new(&home).join(".claude").join("projects");
+
+    let source_memory = projects_dir
+        .join(encode_project_dir(project_root))
+        .join("memory");
+    let worktree_project = projects_dir.join(encode_project_dir(worktree_dir));
+    let link = worktree_project.join("memory");
+
+    fs::create_dir_all(&source_memory).await?;
+    fs::create_dir_all(&worktree_project).await?;
+
+    match fs::symlink_metadata(&link).await {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if fs::read_link(&link).await? == source_memory {
+                println!(
+                    "  Claude memory already linked to {}",
+                    source_memory.display()
+                );
+                return Ok(());
+            }
+            fs::remove_file(&link).await?;
+        }
+        Ok(_) => {
+            println!(
+                "  warning: {} exists and is not a symlink; leaving Claude memory unlinked",
+                link.display()
+            );
+            return Ok(());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).context("Failed to inspect Claude memory link"),
+    }
+
+    fs::symlink(&source_memory, &link).await?;
+    println!(
+        "  Linked Claude memory {} -> {}",
+        link.display(),
+        source_memory.display()
+    );
+    Ok(())
+}
+
+/// Encode a project path the way Claude Code names `~/.claude/projects/<name>` dirs:
+/// every character outside `[a-zA-Z0-9]` becomes `-`.
+fn encode_project_dir(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// Write `.claude/settings.local.json` (gitignored) with the per-worktree dev-command
 /// allowlist so Claude Code starts each worktree session without re-prompting.
 async fn write_claude_settings() -> Result<()> {
@@ -397,6 +464,15 @@ fn pick_port(host: &str, base: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_encode_project_dir_matches_claude_code() {
+        assert_eq!(encode_project_dir(Path::new("/repo/hq")), "-repo-hq");
+        assert_eq!(
+            encode_project_dir(Path::new("/repo/hq/.claude/worktrees/foo")),
+            "-repo-hq--claude-worktrees-foo"
+        );
+    }
 
     #[test]
     fn test_pick_port_returns_valid_port() {
