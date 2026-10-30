@@ -352,11 +352,21 @@ impl ToolCallMiddleware for ToolSecurityMiddleware {
 /// variation selectors, and Hangul fillers.
 ///
 /// Classification is delegated to [`sanitize_invisible_chars`], which
-/// distinguishes characters that can *hide* meaning (control chars, bidi
-/// overrides, tag block — always rejected) from characters that can only
-/// *interleave* (zero-width joiners, variation selectors, fillers). The
-/// latter are stripped when they sit at structural boundaries but rejected
-/// when interleaved mid-word to evade substring filters.
+/// distinguishes characters that can *hide* meaning (bidi overrides, tag
+/// block — always rejected) from characters that can only *interleave*
+/// (zero-width joiners, variation selectors, fillers) or that are
+/// corruption artifacts (control chars, soft hyphen — always stripped).
+/// Interleaving characters are stripped when they sit at structural
+/// boundaries but rejected when interleaved mid-word to evade substring
+/// filters.
+///
+/// The filter is deliberately permissive for email and web content: a
+/// single stray control byte from a decoding bug or a newsletter's
+/// zero-width preheader padding must not replace the whole result with an
+/// error, or the agent can never read that mail. Genuinely dangerous
+/// characters (tag block, bidi) are still rejected for every tool, and the
+/// structural defenses in [`ToolSecurityMiddleware`] remain the primary
+/// guard against injected instructions.
 ///
 /// On each batch of tool calls, the middleware inspects the actual
 /// results **after** tools execute:
@@ -1045,31 +1055,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invisible_char_filter_detects_c0_control_chars() {
+    async fn test_invisible_char_filter_strips_c0_control_chars() {
         let mw = InvisibleCharFilter;
-        // Bell + backspace (C0 controls)
-        let bad_result = "result\u{0007}\u{0008}";
+        // Bell + backspace (C0 controls) — stripped, not rejected.
+        let dirty_result = "result\u{0007}\u{0008}";
         let calls = vec![tool_call("bash", "call_1")];
-        let results = vec![Message::new_tool_call_response(bad_result, "call_1")];
+        let results = vec![Message::new_tool_call_response(dirty_result, "call_1")];
         let action = mw.after_tool_calls(&calls, &results).await;
-        assert!(
-            matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for C0 control chars, got {action:?}",
-        );
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs[0].text().expect("missing content"), "result");
+            }
+            other => panic!("Expected cleaned content, got {other:?}"),
+        }
     }
 
     #[tokio::test]
-    async fn test_invisible_char_filter_detects_c1_control_chars() {
+    async fn test_invisible_char_filter_strips_c1_control_chars() {
         let mw = InvisibleCharFilter;
-        // U+0085 (NEL) is in the C1 range
-        let bad_result = "result\u{0085}";
+        // U+0085 (NEL) is in the C1 range — stripped, not rejected.
+        let dirty_result = "result\u{0085}";
         let calls = vec![tool_call("bash", "call_1")];
-        let results = vec![Message::new_tool_call_response(bad_result, "call_1")];
+        let results = vec![Message::new_tool_call_response(dirty_result, "call_1")];
         let action = mw.after_tool_calls(&calls, &results).await;
-        assert!(
-            matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for C1 control chars, got {action:?}",
-        );
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                assert_eq!(msgs[0].text().expect("missing content"), "result");
+            }
+            other => panic!("Expected cleaned content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_char_filter_sanitizes_email_instead_of_rejecting() {
+        let mw = InvisibleCharFilter;
+        // Mirrors a newsletter whose URLs picked up raw control bytes from a
+        // decoding bug. The mail must still reach the model.
+        let calls = vec![tool_call("get_unread_emails", "call_1")];
+        let body = "## Money Stuff\n\nRead <https://x.test/?cmpid\u{001D}D102926>";
+        let results = vec![Message::new_tool_call_response(body, "call_1")];
+        let action = mw.after_tool_calls(&calls, &results).await;
+        match action {
+            MiddlewareAction::Reject(msgs) => {
+                let content = msgs[0].text().expect("missing content");
+                assert!(
+                    content.contains("Money Stuff"),
+                    "email content should be preserved, got: {content:?}",
+                );
+                assert!(
+                    !content.chars().any(|c| c.is_control() && c != '\n'),
+                    "control chars should be stripped, got: {content:?}",
+                );
+                assert!(
+                    !content.contains("rejected"),
+                    "email should be sanitized, not rejected: {content:?}",
+                );
+            }
+            other => panic!("Expected sanitized content, got {other:?}"),
+        }
     }
 
     #[tokio::test]

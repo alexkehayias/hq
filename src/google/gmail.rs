@@ -93,9 +93,10 @@ fn decode_base64(data: &str) -> String {
 fn clean_unicode(content: &str) -> String {
     let mut content = content.to_string();
 
-    // Decode quoted-printable (common in Gmail)
-    // Handle patterns like =E2=80=99, =20, etc.
-    content = decode_quoted_printable(&content);
+    // Decode quoted-printable, but only when the text actually looks
+    // QP-encoded. Applying it unconditionally corrupts URLs that contain
+    // `=` followed by two hex digits (e.g. `cmpid=1D102926`).
+    content = decode_quoted_printable_safely(&content);
 
     // Decode HTML entities (e.g., &amp; &#x2019;)
     content = html_entity_decode(&content);
@@ -161,6 +162,89 @@ fn decode_quoted_printable(input: &str) -> String {
 
     // Try to decode as UTF-8, fallback to lossy if invalid
     String::from_utf8_lossy(&bytes).to_string()
+}
+
+/// Decode quoted-printable content without corrupting already-decoded text.
+///
+/// The Gmail API returns already-decoded bodies for most parts, but some
+/// parts still arrive quoted-printable encoded. Decoding unconditionally
+/// mangles any URL that happens to contain `=` followed by two hex digits:
+/// `cmpid=1D102926` becomes `cmpid` + `U+001D` + `02926`, and `stpe=default`
+/// becomes `stpe` + `U+FFFD`. Those bytes then look like invisible-character
+/// smuggling to the chat middleware, which rejects the whole email.
+///
+/// Two guards prevent that:
+///
+/// 1. Only decode when the text carries a QP signature — a literal `=`
+///    escaped as `=3D`, a `=` soft line break, or an escape sequence that
+///    forms a valid multi-byte UTF-8 character (e.g. `=E2=80=99`). Plain
+///    URLs have none of these.
+/// 2. Even when the signature is present, discard the decode if it
+///    introduces control characters or replacement characters that weren't
+///    already in the input. A cleanup step must never *create* corruption.
+fn decode_quoted_printable_safely(input: &str) -> String {
+    if !looks_quoted_printable(input) {
+        return input.to_string();
+    }
+    let decoded = decode_quoted_printable(input);
+    if introduces_control_chars(input, &decoded) {
+        return input.to_string();
+    }
+    decoded
+}
+
+/// Whether `input` shows evidence of being quoted-printable encoded.
+fn looks_quoted_printable(input: &str) -> bool {
+    // A literal `=` is always escaped as `=3D` in QP, and long lines are
+    // wrapped with `=` soft line breaks.
+    if input.contains("=3D") || input.contains("=\n") || input.contains("=\r\n") {
+        return true;
+    }
+    // QP-encoded non-ASCII text uses sequences like `=E2=80=99` that decode
+    // to valid multi-byte UTF-8. Plain URLs essentially never do.
+    has_qp_utf8_sequence(input)
+}
+
+/// True when `input` contains a QP escape sequence that decodes to a valid
+/// multi-byte UTF-8 character.
+fn has_qp_utf8_sequence(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    for i in 0..bytes.len() {
+        let Some(lead) = qp_byte(bytes, i) else {
+            continue;
+        };
+        let len = match lead {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => continue,
+        };
+        if (1..len).all(|k| qp_byte(bytes, i + k * 3).is_some_and(|b| (0x80..=0xBF).contains(&b))) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Decode a single `=XX` escape starting at `i`, if one is present.
+fn qp_byte(bytes: &[u8], i: usize) -> Option<u8> {
+    if i + 3 > bytes.len() || bytes[i] != b'=' {
+        return None;
+    }
+    let hi = (bytes[i + 1] as char).to_digit(16)?;
+    let lo = (bytes[i + 2] as char).to_digit(16)?;
+    Some((hi * 16 + lo) as u8)
+}
+
+/// Whether decoding introduced control or replacement characters.
+fn introduces_control_chars(before: &str, after: &str) -> bool {
+    let control_count = |s: &str| {
+        s.chars()
+            .filter(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+            .count()
+    };
+    control_count(after) > control_count(before)
+        || (after.contains('\u{FFFD}') && !before.contains('\u{FFFD}'))
 }
 
 /// Decode HTML entities in a string
@@ -555,6 +639,54 @@ mod tests {
         // Combined (all transformations applied)
         let input = "=E2=80=9CQuote &amp; \\u2018escape\\u2019=E2=80=9D";
         assert_eq!(clean_unicode(input), "\"Quote & 'escape'\"");
+    }
+
+    #[test]
+    fn test_clean_unicode_preserves_urls_with_hex_like_params() {
+        // Newsletter URLs contain `=` followed by hex-looking characters.
+        // Decoding those as quoted-printable would turn them into control
+        // bytes (or U+FFFD) and the chat middleware would reject the mail.
+        let input = "Read: <https://www.bloomberg.com/opinion/newsletters/2026-10-29/x?cmpid=1D102926_MONEYSTUFF&utm_content=1655>\n\
+                     <https://sli.bloomberg.com/click?s=1149004&li=733401&stpe=default>\n\
+                     <https://www.wsj.com/a?reflink=desktopwebshare_permalink>";
+        let out = clean_unicode(input);
+
+        assert!(
+            !out.chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')),
+            "clean_unicode introduced control chars: {out:?}",
+        );
+        assert!(
+            !out.contains('\u{FFFD}'),
+            "clean_unicode introduced U+FFFD: {out:?}"
+        );
+        assert!(out.contains("cmpid=1D102926_MONEYSTUFF"));
+        assert!(out.contains("utm_content=1655"));
+        assert!(out.contains("stpe=default"));
+        assert!(out.contains("reflink=desktopwebshare_permalink"));
+    }
+
+    #[test]
+    fn test_clean_unicode_still_decodes_real_quoted_printable() {
+        // `=3D` is the QP escape for a literal `=`, so this is definitely QP.
+        assert_eq!(clean_unicode("a=3Db"), "a=b");
+        // Soft line breaks are also a QP signature.
+        assert_eq!(clean_unicode("line1=\nline2"), "line1line2");
+        // QP-encoded UTF-8 decodes as before.
+        assert_eq!(clean_unicode("Don=E2=80=99t"), "Don't");
+    }
+
+    #[test]
+    fn test_qp_decode_discarded_when_it_introduces_controls() {
+        // The input has a QP signature (`=3D`) but also a URL parameter that
+        // would decode to a control byte (`=1D`). The safe decoder must
+        // discard the whole decode rather than emit the control byte.
+        let input = "a=3Db&x=1Dc";
+        let out = clean_unicode(input);
+        assert!(
+            !out.chars().any(|c| c.is_control() && c != '\n'),
+            "expected no control chars, got: {out:?}",
+        );
     }
 
     #[test]
