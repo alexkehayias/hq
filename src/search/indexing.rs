@@ -518,8 +518,26 @@ fn store_embeddings_in_db(
 /// representing the note that all other indexes refer to by ID. It
 /// should always be safe to query an index and then lookup the
 /// note(s) by ID.
-fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) -> Result<()> {
+///
+/// Returns `true` when the note-level row did not previously exist, i.e. the
+/// note was newly added. Archives never report as new (they have no note-level
+/// row of their own).
+fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) -> Result<bool> {
     let is_archive = is_archive_file(file_name);
+
+    // Determine newness before the upsert, since `REPLACE INTO` cannot
+    // distinguish an insert from an update.
+    let is_new_note = if is_archive {
+        false
+    } else {
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM note_meta WHERE id = ?1)",
+            [&note.id],
+            |row| row.get(0),
+        )?;
+        !exists
+    };
+
     let mut note_meta_stmt = db.prepare(
         "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )?;
@@ -587,7 +605,7 @@ fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) 
             .expect("Note meta upsert failed for task");
     }
 
-    Ok(())
+    Ok(is_new_note)
 }
 
 /// This is the primary function to call for indexing. Coordinates
@@ -675,13 +693,20 @@ pub async fn index_all(
         let file_name_inner = Arc::clone(&file_name);
 
         // First, store the note meta in the database
-        db.call(move |conn| {
-            index_note_meta(conn, &file_name_inner, &note_inner)
-                .expect("Upserting note meta failed");
-            Ok(())
-        })
-        .await
-        .expect("DB work failed");
+        let is_new_note = db
+            .call(move |conn| {
+                let is_new = index_note_meta(conn, &file_name_inner, &note_inner)
+                    .expect("Upserting note meta failed");
+                Ok(is_new)
+            })
+            .await
+            .expect("DB work failed");
+
+        // Announce newly indexed notes on the `new-notes` channel so loops can
+        // react to them. A no-op unless a server publisher is registered.
+        if is_new_note {
+            crate::channels::notes::publish_new_note(&file_name, &note.title, &note.body);
+        }
 
         // If vector indexing is enabled, generate embeddings asynchronously
         // and then store them in the database. Archives share the source
@@ -1272,6 +1297,47 @@ mod tests {
             tagged += 1;
         }
         assert!(tagged > 0, "expected at least one tagged archived entry");
+    }
+
+    /// `index_note_meta` reports a note as new only on its first insert, and
+    /// never reports an archive (which has no note-level row) as new.
+    #[tokio::test]
+    async fn test_index_note_meta_reports_new_notes_once() {
+        let (db, _db_dir) = test_db().await;
+
+        let note = Note {
+            id: "note-1".to_string(),
+            title: "First".to_string(),
+            category: "note".to_string(),
+            body: "body".to_string(),
+            tags: None,
+            tasks: Vec::new(),
+            meetings: Vec::new(),
+            headings: Vec::new(),
+        };
+
+        let note_for_db = note.clone();
+        let is_new = db
+            .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
+            .await
+            .unwrap();
+        assert!(is_new, "first index should report a new note");
+
+        let note_for_db = note.clone();
+        let is_new = db
+            .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
+            .await
+            .unwrap();
+        assert!(!is_new, "re-indexing should not report a new note");
+
+        let archive_for_db = note.clone();
+        let is_new = db
+            .call(move |conn| {
+                Ok(index_note_meta(conn, "notes/first.org_archive", &archive_for_db).unwrap())
+            })
+            .await
+            .unwrap();
+        assert!(!is_new, "archives should not report as new");
     }
 
     /// ===== Tests for `delete_chat_session_index` =====

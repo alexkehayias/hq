@@ -5,7 +5,8 @@
 //! The timer channels publish a tick on a fixed interval; loops subscribe to
 //! them like any other channel, receiving events tagged
 //! `[timer-1h] tick <timestamp>`. The `server-errors` channel is fed by a
-//! tracing layer instead (see [`super::errors`]).
+//! tracing layer (see [`super::errors`]), and `new-notes` by the indexer when a
+//! note is first added (see [`super::notes`]).
 //!
 //! [`start_default_channels`] ensures a `channel` row exists for each default
 //! channel (`source = 'server'`) and starts its publisher, so a persisted loop
@@ -23,6 +24,7 @@ use tokio_rusqlite::Connection;
 use super::db::{ensure_channels, find_agent_channels};
 use super::errors::{SERVER_ERROR_CHANNEL, register as register_error_channel};
 use super::models::ChannelSource;
+use super::notes::{NEW_NOTE_CHANNEL, register as register_note_channel};
 use super::registry;
 
 /// Default timer channels as `(id, interval)`.
@@ -33,12 +35,14 @@ pub const DEFAULT_TIMER_CHANNELS: &[(&str, Duration)] = &[
     ("timer-12h", Duration::from_secs(12 * 60 * 60)),
 ];
 
-/// Channel ids of the default server channels: the timers plus `server-errors`.
+/// Channel ids of the default server channels: the timers plus `server-errors`
+/// and `new-notes`.
 fn default_channel_ids() -> Vec<String> {
     DEFAULT_TIMER_CHANNELS
         .iter()
         .map(|(id, _)| id.to_string())
         .chain(std::iter::once(SERVER_ERROR_CHANNEL.to_string()))
+        .chain(std::iter::once(NEW_NOTE_CHANNEL.to_string()))
         .collect()
 }
 
@@ -64,6 +68,10 @@ pub async fn start_default_channels(db: &Connection) -> Result<()> {
     // error is logged.
     register_error_channel();
     tracing::info!("started default error channel '{}'", SERVER_ERROR_CHANNEL);
+    // The new-notes channel is fed by the indexer, not a task; registering it
+    // here makes it subscribable before the first note is added.
+    register_note_channel();
+    tracing::info!("started default new-notes channel '{}'", NEW_NOTE_CHANNEL);
     Ok(())
 }
 
@@ -156,6 +164,7 @@ mod tests {
         assert_eq!(
             rows,
             vec![
+                ("new-notes".to_string(), "server".to_string()),
                 ("server-errors".to_string(), "server".to_string()),
                 ("timer-12h".to_string(), "server".to_string()),
                 ("timer-1h".to_string(), "server".to_string()),

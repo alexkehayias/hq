@@ -7,13 +7,15 @@
 //! agent-created channel is a `Server`-sourced channel that happens to have an
 //! owner. See [`models`] for the types, [`db`] for persistence, [`registry`]
 //! for the in-process bus, [`subscribe`] for source-aware subscription,
-//! [`default`] for the built-in timer channels, and [`errors`] for the default
-//! channel carrying the server's error logs.
+//! [`default`] for the built-in timer channels, [`errors`] for the default
+//! channel carrying the server's error logs, and [`notes`] for the default
+//! channel announcing newly indexed notes.
 
 pub mod db;
 pub mod default;
 pub mod errors;
 pub mod models;
+pub mod notes;
 pub mod prompt;
 pub mod registry;
 pub mod subscribe;
