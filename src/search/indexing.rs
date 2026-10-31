@@ -20,6 +20,7 @@ use super::source::{note_filter, notes};
 use crate::ai::chat::db::{
     find_chat_session_by_id, get_non_background_sessions, session_has_background_tag,
 };
+use crate::channels::notes::{NewEntry, publish_new_note};
 use crate::core::fastembed_cache_dir;
 use crate::core::markdown::MarkdownExport;
 use crate::core::orgmode::{ORG_ARCHIVE_SUFFIX, is_archive_file};
@@ -519,14 +520,14 @@ fn store_embeddings_in_db(
 /// should always be safe to query an index and then lookup the
 /// note(s) by ID.
 ///
-/// Returns the IDs of rows that did not previously exist, i.e. the entries that
-/// were newly added. Archives never report their note-level row as new (they
-/// have no note-level row of their own).
+/// Returns the entries that did not previously exist, i.e. the rows that were
+/// newly added. Archives never report their note-level row as new (they have no
+/// note-level row of their own).
 fn index_note_meta(
     db: &mut rusqlite::Connection,
     file_name: &str,
     note: &Note,
-) -> Result<Vec<String>> {
+) -> Result<Vec<NewEntry>> {
     let is_archive = is_archive_file(file_name);
 
     // Each upsert reports newness through `index_updated_at`: the insert branch
@@ -572,7 +573,7 @@ fn index_note_meta(
          RETURNING (index_updated_at IS NULL) AS is_new",
     )?;
 
-    let mut new_ids = Vec::new();
+    let mut new_entries = Vec::new();
 
     // Archive files share the source note's ID, so skip the note-level row to
     // avoid clobbering the source's row and to keep archives out of the
@@ -593,7 +594,11 @@ fn index_note_meta(
             )
             .expect("Note meta upsert failed");
         if is_new {
-            new_ids.push(note.id.clone());
+            new_entries.push(NewEntry {
+                id: note.id.clone(),
+                title: note.title.clone(),
+                kind: "note",
+            });
         }
     }
 
@@ -607,7 +612,11 @@ fn index_note_meta(
             )
             .expect("Note meta upsert failed for meeting");
         if is_new {
-            new_ids.push(m.id.clone());
+            new_entries.push(NewEntry {
+                id: m.id.clone(),
+                title: m.title.clone(),
+                kind: "meeting",
+            });
         }
     }
 
@@ -621,7 +630,11 @@ fn index_note_meta(
             )
             .expect("Note meta upsert failed for heading");
         if is_new {
-            new_ids.push(h.id.clone());
+            new_entries.push(NewEntry {
+                id: h.id.clone(),
+                title: h.title.clone(),
+                kind: "heading",
+            });
         }
     }
 
@@ -645,11 +658,15 @@ fn index_note_meta(
             )
             .expect("Note meta upsert failed for task");
         if is_new {
-            new_ids.push(t.id.clone());
+            new_entries.push(NewEntry {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                kind: "task",
+            });
         }
     }
 
-    Ok(new_ids)
+    Ok(new_entries)
 }
 
 /// This is the primary function to call for indexing. Coordinates
@@ -737,11 +754,11 @@ pub async fn index_all(
         let file_name_inner = Arc::clone(&file_name);
 
         // First, store the note meta in the database
-        let new_ids = db
+        let new_entries = db
             .call(move |conn| {
-                let new_ids = index_note_meta(conn, &file_name_inner, &note_inner)
+                let new_entries = index_note_meta(conn, &file_name_inner, &note_inner)
                     .expect("Upserting note meta failed");
-                Ok(new_ids)
+                Ok(new_entries)
             })
             .await
             .expect("DB work failed");
@@ -749,8 +766,8 @@ pub async fn index_all(
         // Announce newly indexed entries (note, task, meeting, heading) on the
         // `new-notes` channel so loops can react to them. A no-op unless a
         // server publisher is registered.
-        if !new_ids.is_empty() {
-            crate::channels::notes::publish_new_note(&file_name, &note.title, &note.body);
+        if !new_entries.is_empty() {
+            publish_new_note(&file_name, &note.title, &new_entries);
         }
 
         // If vector indexing is enabled, generate embeddings asynchronously
@@ -832,11 +849,11 @@ pub async fn index_single_file(
     // Index metadata in SQLite (backs tasks list / projects list)
     let file_name_for_db = file_name.clone();
     let note_for_db = note.clone();
-    let new_ids = db
+    let new_entries = db
         .call(move |conn| {
-            let new_ids = index_note_meta(conn, &file_name_for_db, &note_for_db)
+            let new_entries = index_note_meta(conn, &file_name_for_db, &note_for_db)
                 .expect("Upserting note meta failed");
-            Ok(new_ids)
+            Ok(new_entries)
         })
         .await
         .expect("DB work failed");
@@ -844,8 +861,8 @@ pub async fn index_single_file(
     // Announce newly indexed entries (note, task, meeting, heading) on the
     // `new-notes` channel so loops can react to them. A no-op unless a server
     // publisher is registered.
-    if !new_ids.is_empty() {
-        crate::channels::notes::publish_new_note(&file_name, &note.title, &note.body);
+    if !new_entries.is_empty() {
+        publish_new_note(&file_name, &note.title, &new_entries);
     }
 
     // Index full text in Tantivy. Serialize writer creation with the periodic
@@ -1394,36 +1411,58 @@ mod tests {
         };
 
         let note_for_db = note.clone();
-        let new_ids = db
+        let new_entries = db
             .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
             .await
             .unwrap();
         assert_eq!(
-            new_ids,
+            new_entries,
             vec![
-                "note-1".to_string(),
-                "meeting-1".to_string(),
-                "heading-1".to_string(),
-                "task-1".to_string()
+                NewEntry {
+                    id: "note-1".to_string(),
+                    title: "First".to_string(),
+                    kind: "note",
+                },
+                NewEntry {
+                    id: "meeting-1".to_string(),
+                    title: "Meeting".to_string(),
+                    kind: "meeting",
+                },
+                NewEntry {
+                    id: "heading-1".to_string(),
+                    title: "Heading".to_string(),
+                    kind: "heading",
+                },
+                NewEntry {
+                    id: "task-1".to_string(),
+                    title: "Task".to_string(),
+                    kind: "task",
+                },
             ],
             "first index should report every row as new"
         );
 
         let note_for_db = note.clone();
-        let new_ids = db
+        let new_entries = db
             .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
             .await
             .unwrap();
-        assert!(new_ids.is_empty(), "re-indexing should not report new rows");
+        assert!(
+            new_entries.is_empty(),
+            "re-indexing should not report new rows"
+        );
 
         let archive_for_db = note.clone();
-        let new_ids = db
+        let new_entries = db
             .call(move |conn| {
                 Ok(index_note_meta(conn, "notes/first.org_archive", &archive_for_db).unwrap())
             })
             .await
             .unwrap();
-        assert!(new_ids.is_empty(), "archives should not report new rows");
+        assert!(
+            new_entries.is_empty(),
+            "archives should not report new rows"
+        );
     }
 
     /// ===== Tests for `delete_chat_session_index` =====
