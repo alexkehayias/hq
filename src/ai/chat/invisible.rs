@@ -7,9 +7,10 @@
 //!
 //! The key distinction is *what a character can do*:
 //!
-//! - **Can hide meaning** — control chars, bidirectional overrides, and the
-//!   Unicode tag block (`U+E0000..U+E007F`). These let an attacker make the
-//!   model read something a human never sees. Any occurrence is a hard reject.
+//! - **Can hide meaning** — bidirectional overrides and the Unicode tag block
+//!   (`U+E0000..U+E007F`). Tag characters map 1:1 to ASCII, so they let an
+//!   attacker make the model read something a human never sees. Any
+//!   occurrence is a hard reject.
 //!
 //! - **Can only interleave** — zero-width spaces and joiners, combining
 //!   grapheme joiner, Mongolian vowel separator, BOM, invisible math operators,
@@ -19,19 +20,21 @@
 //!   substring filters while keeping the text readable to the model. So they
 //!   are stripped when they sit at structural boundaries (next to whitespace,
 //!   punctuation, or markup) but rejected when interleaved mid-word.
+//!
+//! - **Corruption artifacts** — C0/C1 control chars and soft hyphen. A model
+//!   does not read `U+0010` as a letter, so these cannot carry a hidden
+//!   instruction; in practice they come from transport/decoding bugs or
+//!   ordinary hyphenation. They are always stripped, never rejected, so one
+//!   stray byte in a newsletter cannot take the whole result away from the
+//!   model.
 
 /// The set of characters that can *hide* meaning and are always rejected.
 ///
-/// - C0 controls, DEL, C1 controls (`char::is_control`), plus soft hyphen
-///   `U+00AD`
 /// - Bidirectional formatting: LRM `U+200E`, RLM `U+200F`,
 ///   `U+202A..U+202E`, `U+2066..U+2069`
 /// - Unicode tag block `U+E0000..U+E007F`
 fn is_hard_reject(c: char) -> Option<RejectReason> {
     let code = c as u32;
-    if c.is_control() || code == 0xAD {
-        return Some(RejectReason::ControlChar);
-    }
     if matches!(code, 0x200E | 0x200F)
         || (0x202A..=0x202E).contains(&code)
         || (0x2066..=0x2069).contains(&code)
@@ -42,6 +45,14 @@ fn is_hard_reject(c: char) -> Option<RejectReason> {
         return Some(RejectReason::TagBlock);
     }
     None
+}
+
+/// Control chars (C0, DEL, C1) and soft hyphen. These are corruption
+/// artifacts, not smuggling vectors, so they are stripped unconditionally —
+/// including mid-word, where a stray byte is far more likely to be a decoding
+/// bug than a deliberate filter-evasion attempt.
+fn is_control_or_soft_hyphen(c: char) -> bool {
+    c.is_control() || c as u32 == 0xAD
 }
 
 /// The set of characters that can only interleave and are safe to strip when
@@ -61,37 +72,23 @@ fn is_strippable(c: char) -> bool {
         || matches!(code, 0x115F | 0x1160 | 0x3164 | 0xFFA0) // hangul fillers
 }
 
-/// Reject when stripped characters make up more than ~1/3 of the input *and*
-/// there are at least a handful of them. A handful of structural artifacts
-/// (e.g. Docusaurus heading anchors) lands around 10-15%; a single emoji ZWJ
-/// sequence is short but legitimate. Only a string that is mostly invisible
-/// junk trips the density check.
-const MIN_STRIPPABLE_COUNT: usize = 5;
-const MAX_STRIPPABLE_DIVISOR: usize = 3; // allow up to 1 / 3 = 33%
-
 /// Why a string was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
-    /// Control characters or soft hyphen — can corrupt or confuse output.
-    ControlChar,
     /// Bidirectional overrides — can make text render differently than it reads.
     BidiFormatting,
     /// Unicode tag block chars — the primary prompt-injection vector.
     TagBlock,
     /// A strippable char interleaved between two letters — filter evasion.
     MidWordInterleaving,
-    /// Too many strippable chars for the size of the input.
-    ExcessiveInvisibleChars,
 }
 
 impl std::fmt::Display for RejectReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let reason = match self {
-            RejectReason::ControlChar => "control characters or soft hyphen",
             RejectReason::BidiFormatting => "bidirectional formatting characters",
             RejectReason::TagBlock => "Unicode tag block characters",
             RejectReason::MidWordInterleaving => "invisible characters interleaved between letters",
-            RejectReason::ExcessiveInvisibleChars => "an excessive amount of invisible characters",
         };
         f.write_str(reason)
     }
@@ -122,11 +119,9 @@ pub fn sanitize_invisible_chars(input: &str) -> InvisibleSanitization {
     let mut out = String::with_capacity(input.len());
     let mut prev: Option<char> = None;
     let mut stripped = 0usize;
-    let mut total = 0usize;
 
     let mut it = input.chars();
     while let Some(c) = it.next() {
-        total += 1;
         // Common whitespace is legitimate content, not invisible.
         if matches!(c, '\t' | '\n' | '\r') {
             out.push(c);
@@ -136,6 +131,13 @@ pub fn sanitize_invisible_chars(input: &str) -> InvisibleSanitization {
 
         if let Some(reason) = is_hard_reject(c) {
             return InvisibleSanitization::Reject { reason };
+        }
+
+        // Control chars and soft hyphen are stripped wherever they appear.
+        if is_control_or_soft_hyphen(c) {
+            stripped += 1;
+            prev = Some(c);
+            continue;
         }
 
         if is_strippable(c) {
@@ -157,12 +159,6 @@ pub fn sanitize_invisible_chars(input: &str) -> InvisibleSanitization {
 
         out.push(c);
         prev = Some(c);
-    }
-
-    if stripped >= MIN_STRIPPABLE_COUNT && stripped * MAX_STRIPPABLE_DIVISOR > total {
-        return InvisibleSanitization::Reject {
-            reason: RejectReason::ExcessiveInvisibleChars,
-        };
     }
 
     if stripped == 0 {
@@ -361,33 +357,47 @@ mod tests {
     }
 
     #[test]
-    fn control_chars_are_rejected() {
-        for bad in [
-            "result\u{0007}",
-            "result\u{0085}",
-            "a\u{007F}b",
-            "a\u{00AD}b",
-        ] {
-            assert_reject(bad, RejectReason::ControlChar);
-        }
+    fn control_chars_and_soft_hyphen_are_stripped() {
+        assert_eq!(assert_cleaned("result\u{0007}"), "result");
+        assert_eq!(assert_cleaned("result\u{0085}"), "result");
+        assert_eq!(assert_cleaned("a\u{007F}b"), "ab");
+        assert_eq!(assert_cleaned("a\u{00AD}b"), "ab");
     }
 
     #[test]
-    fn excessive_density_is_rejected() {
-        // Many ZWSPs crammed into a short string.
-        assert_reject(
-            "a\u{200B}\u{200B}\u{200B}\u{200B}\u{200B}b",
-            RejectReason::ExcessiveInvisibleChars,
+    fn mid_word_control_char_is_stripped_not_rejected() {
+        // A stray control byte between letters is corruption, not a
+        // filter-evasion attempt, so it must not take down the result.
+        assert_eq!(assert_cleaned("i\u{0010}g\u{0010}n\u{0010}o"), "igno");
+    }
+
+    #[test]
+    fn dense_zero_width_run_is_stripped() {
+        // Many ZWSPs crammed into a short string are stripped, not rejected.
+        assert_eq!(
+            assert_cleaned("a\u{200B}\u{200B}\u{200B}\u{200B}\u{200B}b"),
+            "ab"
         );
     }
 
     #[test]
-    fn sparse_boundary_zero_width_is_not_excessive() {
-        // A few ZWSPs in a long document stay under the density threshold.
-        let mut input = String::from("## Heading\u{200B}](#a)");
-        for _ in 0..20 {
-            input.push_str("\n\nSome normal prose padding to keep density low.");
-        }
-        assert_cleaned(&input);
+    fn newsletter_preheader_padding_is_stripped() {
+        // Real newsletters pad the preheader with long runs of ZWNJ/ZWSP.
+        let padding = "\u{200C} ".repeat(300);
+        let input = format!("Subject line\n{padding}\nReal body text.");
+        let out = assert_cleaned(&input);
+        assert!(!out.contains('\u{200C}'));
+        assert!(out.contains("Real body text."));
+    }
+
+    #[test]
+    fn control_chars_in_urls_are_stripped() {
+        // Mirrors the decoding artifacts described in
+        // `gmail::decode_quoted_printable_safely`: `=1D` and `=16` in a URL
+        // query string becoming raw control bytes.
+        let input = "Read <https://x.test/a?cmpid\u{001D}D102926&utm_content\u{0016}55>";
+        let out = assert_cleaned(input);
+        assert!(!out.chars().any(char::is_control));
+        assert!(out.contains("https://x.test/a?cmpidD102926"));
     }
 }
