@@ -14,6 +14,20 @@ use crate::core::{AppConfig, db::async_db};
 use crate::jobs::{DailyAgenda, GenerateSessionTitles, GitSync, spawn_periodic_job};
 use crate::loops::supervisor::{self as loops, LoopSupervisorConfig};
 
+/// Directives used when `RUST_LOG` is unset.
+///
+/// The leading `error` directive is global. Without it, `EnvFilter` disables
+/// every target that has no explicit directive, so `ERROR`-level events from
+/// other crates (and the `log` bridge) would never reach the logs. `hq` and the
+/// HTTP stack stay more verbose: axum logs extractor rejections at `TRACE`
+/// under `axum::rejection`, hence that target's directive.
+fn default_log_filter() -> String {
+    format!(
+        "error,{}=debug,tower_http=debug,axum::rejection=trace",
+        env!("CARGO_CRATE_NAME")
+    )
+}
+
 pub fn app(shared_state: Arc<RwLock<AppState>>) -> Router {
     let cors = CorsLayer::permissive();
 
@@ -39,15 +53,8 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
 
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                // axum logs rejections from built-in extractors with the `axum::rejection`
-                // target, at `TRACE` level. `axum::rejection=trace` enables showing those events
-                format!(
-                    "{}=debug,tower_http=debug,axum::rejection=trace",
-                    env!("CARGO_CRATE_NAME")
-                )
-                .into()
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_log_filter().into()),
         )
         .with(ErrorChannelLayer::default())
         .with(tracing_subscriber::fmt::layer())
@@ -109,4 +116,57 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
     spawn_periodic_job(config, db, GenerateSessionTitles);
 
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::default_log_filter;
+
+    /// In-memory writer for capturing formatted log output.
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Buffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Buffer {
+        type Writer = Buffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The default filter must log `ERROR` events from targets it has no
+    /// explicit directive for, while leaving their lower levels off.
+    #[test]
+    fn default_filter_logs_errors_from_unlisted_targets() {
+        let buffer = Buffer::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(default_log_filter()))
+            .with(tracing_subscriber::fmt::layer().with_writer(buffer.clone()));
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "unlisted_crate", "debug noise");
+            tracing::error!(target: "unlisted_crate", "boom");
+        });
+
+        let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("boom"), "{output}");
+        assert!(!output.contains("debug noise"), "{output}");
+    }
 }
