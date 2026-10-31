@@ -519,93 +519,137 @@ fn store_embeddings_in_db(
 /// should always be safe to query an index and then lookup the
 /// note(s) by ID.
 ///
-/// Returns `true` when the note-level row did not previously exist, i.e. the
-/// note was newly added. Archives never report as new (they have no note-level
-/// row of their own).
-fn index_note_meta(db: &mut rusqlite::Connection, file_name: &str, note: &Note) -> Result<bool> {
+/// Returns the IDs of rows that did not previously exist, i.e. the entries that
+/// were newly added. Archives never report their note-level row as new (they
+/// have no note-level row of their own).
+fn index_note_meta(
+    db: &mut rusqlite::Connection,
+    file_name: &str,
+    note: &Note,
+) -> Result<Vec<String>> {
     let is_archive = is_archive_file(file_name);
 
-    // Determine newness before the upsert, since `REPLACE INTO` cannot
-    // distinguish an insert from an update.
-    let is_new_note = if is_archive {
-        false
-    } else {
-        let exists: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM note_meta WHERE id = ?1)",
-            [&note.id],
-            |row| row.get(0),
-        )?;
-        !exists
-    };
-
+    // Each upsert reports newness through `index_updated_at`: the insert branch
+    // leaves it NULL, while the DO UPDATE branch stamps it. SQLite's RETURNING
+    // on an UPSERT reports inserted and updated rows alike, so the timestamp is
+    // what tells the two apart.
     let mut note_meta_stmt = db.prepare(
-        "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET type = excluded.type, category = excluded.category, \
+         file_name = excluded.file_name, title = excluded.title, tags = excluded.tags, \
+         body = excluded.body, status = NULL, scheduled = NULL, deadline = NULL, \
+         closed = NULL, date = NULL, index_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         RETURNING (index_updated_at IS NULL) AS is_new",
     )?;
+
+    let mut meeting_meta_stmt = db.prepare(
+        "INSERT INTO note_meta(id, type, category, file_name, title, tags, body, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET type = excluded.type, category = excluded.category, \
+         file_name = excluded.file_name, title = excluded.title, tags = excluded.tags, \
+         body = excluded.body, date = excluded.date, status = NULL, scheduled = NULL, \
+         deadline = NULL, closed = NULL, \
+         index_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         RETURNING (index_updated_at IS NULL) AS is_new",
+    )?;
+
+    let mut heading_meta_stmt = db.prepare(
+        "INSERT INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET type = excluded.type, category = excluded.category, \
+         file_name = excluded.file_name, title = excluded.title, tags = excluded.tags, \
+         body = excluded.body, status = NULL, scheduled = NULL, deadline = NULL, \
+         closed = NULL, date = NULL, index_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         RETURNING (index_updated_at IS NULL) AS is_new",
+    )?;
+
+    let mut task_meta_stmt = db.prepare(
+        "INSERT INTO note_meta(id, type, category, file_name, title, tags, body, status, scheduled, deadline, closed) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET type = excluded.type, category = excluded.category, \
+         file_name = excluded.file_name, title = excluded.title, tags = excluded.tags, \
+         body = excluded.body, status = excluded.status, scheduled = excluded.scheduled, \
+         deadline = excluded.deadline, closed = excluded.closed, date = NULL, \
+         index_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         RETURNING (index_updated_at IS NULL) AS is_new",
+    )?;
+
+    let mut new_ids = Vec::new();
 
     // Archive files share the source note's ID, so skip the note-level row to
     // avoid clobbering the source's row and to keep archives out of the
     // project listing. Only their meetings/headings/tasks are indexed.
     if !is_archive {
-        note_meta_stmt
-            .execute(tokio_rusqlite::params![
-                note.id,
-                "note",
-                note.category,
-                file_name,
-                note.title,
-                note.tags,
-                note.body
-            ])
+        let is_new: bool = note_meta_stmt
+            .query_row(
+                tokio_rusqlite::params![
+                    note.id,
+                    "note",
+                    note.category,
+                    file_name,
+                    note.title,
+                    note.tags,
+                    note.body
+                ],
+                |row| row.get(0),
+            )
             .expect("Note meta upsert failed");
+        if is_new {
+            new_ids.push(note.id.clone());
+        }
     }
-
-    let mut meeting_meta_stmt = db.prepare(
-        "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )?;
-
-    let mut heading_meta_stmt = db.prepare(
-        "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )?;
-
-    let mut task_meta_stmt = db.prepare(
-        "REPLACE INTO note_meta(id, type, category, file_name, title, tags, body, status, scheduled, deadline, closed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )?;
 
     for m in note.meetings.iter() {
-        meeting_meta_stmt
-            .execute(tokio_rusqlite::params![
-                m.id, "meeting", m.category, file_name, m.title, m.tags, m.body, m.date
-            ])
+        let is_new: bool = meeting_meta_stmt
+            .query_row(
+                tokio_rusqlite::params![
+                    m.id, "meeting", m.category, file_name, m.title, m.tags, m.body, m.date
+                ],
+                |row| row.get(0),
+            )
             .expect("Note meta upsert failed for meeting");
+        if is_new {
+            new_ids.push(m.id.clone());
+        }
     }
 
-    for t in note.headings.iter() {
-        heading_meta_stmt
-            .execute(tokio_rusqlite::params![
-                t.id, "heading", t.category, file_name, t.title, t.tags, t.body
-            ])
+    for h in note.headings.iter() {
+        let is_new: bool = heading_meta_stmt
+            .query_row(
+                tokio_rusqlite::params![
+                    h.id, "heading", h.category, file_name, h.title, h.tags, h.body
+                ],
+                |row| row.get(0),
+            )
             .expect("Note meta upsert failed for heading");
+        if is_new {
+            new_ids.push(h.id.clone());
+        }
     }
 
     for t in note.tasks.iter() {
-        task_meta_stmt
-            .execute(tokio_rusqlite::params![
-                t.id,
-                "task",
-                t.category,
-                file_name,
-                t.title,
-                t.tags,
-                t.body,
-                t.status,
-                t.scheduled,
-                t.deadline,
-                t.closed
-            ])
+        let is_new: bool = task_meta_stmt
+            .query_row(
+                tokio_rusqlite::params![
+                    t.id,
+                    "task",
+                    t.category,
+                    file_name,
+                    t.title,
+                    t.tags,
+                    t.body,
+                    t.status,
+                    t.scheduled,
+                    t.deadline,
+                    t.closed
+                ],
+                |row| row.get(0),
+            )
             .expect("Note meta upsert failed for task");
+        if is_new {
+            new_ids.push(t.id.clone());
+        }
     }
 
-    Ok(is_new_note)
+    Ok(new_ids)
 }
 
 /// This is the primary function to call for indexing. Coordinates
@@ -693,18 +737,19 @@ pub async fn index_all(
         let file_name_inner = Arc::clone(&file_name);
 
         // First, store the note meta in the database
-        let is_new_note = db
+        let new_ids = db
             .call(move |conn| {
-                let is_new = index_note_meta(conn, &file_name_inner, &note_inner)
+                let new_ids = index_note_meta(conn, &file_name_inner, &note_inner)
                     .expect("Upserting note meta failed");
-                Ok(is_new)
+                Ok(new_ids)
             })
             .await
             .expect("DB work failed");
 
-        // Announce newly indexed notes on the `new-notes` channel so loops can
-        // react to them. A no-op unless a server publisher is registered.
-        if is_new_note {
+        // Announce newly indexed entries (note, task, meeting, heading) on the
+        // `new-notes` channel so loops can react to them. A no-op unless a
+        // server publisher is registered.
+        if !new_ids.is_empty() {
             crate::channels::notes::publish_new_note(&file_name, &note.title, &note.body);
         }
 
@@ -787,12 +832,21 @@ pub async fn index_single_file(
     // Index metadata in SQLite (backs tasks list / projects list)
     let file_name_for_db = file_name.clone();
     let note_for_db = note.clone();
-    db.call(move |conn| {
-        index_note_meta(conn, &file_name_for_db, &note_for_db).expect("Upserting note meta failed");
-        Ok(())
-    })
-    .await
-    .expect("DB work failed");
+    let new_ids = db
+        .call(move |conn| {
+            let new_ids = index_note_meta(conn, &file_name_for_db, &note_for_db)
+                .expect("Upserting note meta failed");
+            Ok(new_ids)
+        })
+        .await
+        .expect("DB work failed");
+
+    // Announce newly indexed entries (note, task, meeting, heading) on the
+    // `new-notes` channel so loops can react to them. A no-op unless a server
+    // publisher is registered.
+    if !new_ids.is_empty() {
+        crate::channels::notes::publish_new_note(&file_name, &note.title, &note.body);
+    }
 
     // Index full text in Tantivy. Serialize writer creation with the periodic
     // sync job and other writers: Tantivy's directory lock is exclusive and a
@@ -1299,10 +1353,10 @@ mod tests {
         assert!(tagged > 0, "expected at least one tagged archived entry");
     }
 
-    /// `index_note_meta` reports a note as new only on its first insert, and
+    /// `index_note_meta` reports every row as new only on its first insert, and
     /// never reports an archive (which has no note-level row) as new.
     #[tokio::test]
-    async fn test_index_note_meta_reports_new_notes_once() {
+    async fn test_index_note_meta_reports_new_rows_once() {
         let (db, _db_dir) = test_db().await;
 
         let note = Note {
@@ -1311,33 +1365,65 @@ mod tests {
             category: "note".to_string(),
             body: "body".to_string(),
             tags: None,
-            tasks: Vec::new(),
-            meetings: Vec::new(),
-            headings: Vec::new(),
+            tasks: vec![Task {
+                id: "task-1".to_string(),
+                title: "Task".to_string(),
+                category: "task".to_string(),
+                body: String::new(),
+                status: "todo".to_string(),
+                tags: None,
+                scheduled: None,
+                deadline: None,
+                closed: None,
+            }],
+            meetings: vec![Meeting {
+                id: "meeting-1".to_string(),
+                title: "Meeting".to_string(),
+                category: "meeting".to_string(),
+                body: String::new(),
+                tags: None,
+                date: "2026-10-29".to_string(),
+            }],
+            headings: vec![Heading {
+                id: "heading-1".to_string(),
+                title: "Heading".to_string(),
+                category: "heading".to_string(),
+                body: String::new(),
+                tags: None,
+            }],
         };
 
         let note_for_db = note.clone();
-        let is_new = db
+        let new_ids = db
             .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
             .await
             .unwrap();
-        assert!(is_new, "first index should report a new note");
+        assert_eq!(
+            new_ids,
+            vec![
+                "note-1".to_string(),
+                "meeting-1".to_string(),
+                "heading-1".to_string(),
+                "task-1".to_string()
+            ],
+            "first index should report every row as new"
+        );
 
         let note_for_db = note.clone();
-        let is_new = db
+        let new_ids = db
             .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
             .await
             .unwrap();
-        assert!(!is_new, "re-indexing should not report a new note");
+        assert!(new_ids.is_empty(), "re-indexing should not report new rows");
 
         let archive_for_db = note.clone();
-        let is_new = db
+        let new_ids = db
             .call(move |conn| {
                 Ok(index_note_meta(conn, "notes/first.org_archive", &archive_for_db).unwrap())
             })
             .await
             .unwrap();
-        assert!(!is_new, "archives should not report as new");
+        assert!(new_ids.is_empty(), "archives should not report new rows");
     }
 
     /// ===== Tests for `delete_chat_session_index` =====
