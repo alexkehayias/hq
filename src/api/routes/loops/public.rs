@@ -1,10 +1,15 @@
 //! Public types for the loops API
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 pub struct LoopListResponse {
     pub loops: Vec<LoopSummaryResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct LoopSystemPromptUpdateRequest {
+    pub system_prompt: String,
 }
 
 #[derive(Serialize)]

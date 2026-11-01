@@ -4,7 +4,7 @@
 // changes: the new bytes make the browser install this worker, and `activate`
 // deletes the stale cache. This is how installed PWAs get updates without a
 // reinstall.
-const CACHE_NAME = 'my-pwa-cache-v10';
+const CACHE_NAME = 'my-pwa-cache-v13';
 
 // Everything the app shell needs, precached on install. `cache.addAll` is
 // all-or-nothing — a single 404 aborts the install — so keep this in sync with
@@ -32,6 +32,7 @@ const urlsToCache = [
   '/components/hq-badge.js',
   '/components/hq-button.js',
   '/components/hq-card.js',
+  '/components/hq-code-editor.js',
   '/components/hq-empty-state.js',
   '/components/hq-file-tree.js',
   '/components/hq-icon.js',
@@ -81,7 +82,6 @@ const urlsToCache = [
   '/skills/',
   '/skills/index.html',
   '/skills/index.js',
-  '/skills/code-editor.js',
 
   // Components gallery
   '/components-gallery/',

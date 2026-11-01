@@ -100,6 +100,24 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
     Ok(record.await?)
 }
 
+/// Replace a loop's system prompt. Returns the number of rows updated (0 if no
+/// loop with `id` exists).
+pub async fn update_loop_system_prompt(
+    db: &Connection,
+    id: &str,
+    system_prompt: &str,
+) -> Result<usize> {
+    let id = id.to_string();
+    let system_prompt = system_prompt.to_string();
+    let updated = db.call(move |conn| {
+        Ok(conn.execute(
+            "UPDATE loop SET system_prompt = ?1 WHERE id = ?2",
+            rusqlite::params![system_prompt, id],
+        )?)
+    });
+    Ok(updated.await?)
+}
+
 /// Whether loop `loop_id` is permitted to emit to `channel_id`, independent of
 /// channel ownership. `false` if the loop has no such grant (or does not exist).
 pub async fn loop_may_emit(db: &Connection, loop_id: &str, channel_id: &str) -> Result<bool> {
@@ -322,5 +340,29 @@ mod tests {
         let (_dir, db) = setup_db().await;
         let deleted = delete_loop(&db, "does-not-exist").await.unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    #[tokio::test]
+    async fn update_loop_system_prompt_changes_prompt() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+
+        let updated = update_loop_system_prompt(&db, "loop-1", "New instructions.")
+            .await
+            .unwrap();
+        assert_eq!(updated, 1);
+
+        let found = find_loop(&db, "loop-1").await.unwrap().unwrap();
+        assert_eq!(found.system_prompt, "New instructions.");
+        // Unrelated fields are untouched.
+        assert_eq!(found.tools, sample_loop().tools);
+        assert_eq!(found.subscribe_channels, sample_loop().subscribe_channels);
+
+        let missing = update_loop_system_prompt(&db, "does-not-exist", "x")
+            .await
+            .unwrap();
+        assert_eq!(missing, 0);
     }
 }

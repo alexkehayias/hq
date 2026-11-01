@@ -4,15 +4,19 @@ use std::sync::{Arc, RwLock};
 
 use axum::{
     Router,
-    extract::State,
+    extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Json},
+    routing::{get, put},
 };
+use serde_json::json;
 
-use super::public::{LoopListResponse, LoopSummaryResponse};
+use super::public::{LoopListResponse, LoopSummaryResponse, LoopSystemPromptUpdateRequest};
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
-use crate::loops::db::find_all_loops;
-use crate::loops::supervisor;
+use crate::core::AppConfig;
+use crate::loops::db::{find_all_loops, find_loop, update_loop_system_prompt};
+use crate::loops::supervisor::{self, LoopSupervisorConfig};
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -43,7 +47,72 @@ async fn list_loops(State(state): State<SharedState>) -> Result<impl IntoRespons
     Ok(Json(LoopListResponse { loops }))
 }
 
+/// Replace a loop's system prompt, restarting it if it is currently running so
+/// the new prompt applies to subsequent events.
+async fn update_loop_prompt(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<LoopSystemPromptUpdateRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if body.system_prompt.trim().is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "System prompt cannot be empty"})),
+        )
+            .into_response());
+    }
+
+    let (db, loop_config) = {
+        let state = state.read().expect("Unable to read shared state");
+        let AppConfig {
+            note_search_api_url,
+            storage_path,
+            openai_api_hostname,
+            openai_api_key,
+            openai_model,
+            vapid_key_path,
+            ..
+        } = &state.config;
+
+        let config = LoopSupervisorConfig {
+            db: state.db.clone(),
+            api_base_url: note_search_api_url.clone(),
+            api_hostname: openai_api_hostname.clone(),
+            api_key: openai_api_key.clone(),
+            model: openai_model.clone(),
+            storage_path: storage_path.clone(),
+            vapid_key_path: vapid_key_path.clone(),
+        };
+        (state.db.clone(), config)
+    };
+
+    let updated = update_loop_system_prompt(&db, &id, &body.system_prompt).await?;
+    if updated == 0 {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("Loop '{}' not found", id)})),
+        )
+            .into_response());
+    }
+
+    // The running task holds its own copy of the prompt, so restart it to pick
+    // up the change. A failed restart is logged but does not undo the save —
+    // the loop respawns from the DB on the next server boot.
+    if supervisor::running_ids()
+        .iter()
+        .any(|running| running == &id)
+        && let Some(record) = find_loop(&db, &id).await?
+        && let Err(e) = supervisor::start(record, loop_config).await
+    {
+        tracing::warn!("failed to restart loop '{}' after prompt update: {}", id, e);
+    }
+
+    Ok(Json(json!({"success": true})).into_response())
+}
+
 /// Create the loops router.
 pub fn router() -> Router<SharedState> {
-    Router::new().route("/", axum::routing::get(list_loops))
+    Router::new()
+        .route("/", get(list_loops))
+        .route("/{id}/system_prompt", put(update_loop_prompt))
 }

@@ -1,10 +1,13 @@
 /**
  * <hq-code-editor> — CodeMirror-backed file editor with a save toolbar.
  *
- * Page-specific to the skills page; CodeMirror is a global loaded via <script>
- * tags by the page (see skills/index.html), so this module only imports hq-button.
+ * CodeMirror is a global loaded via <script> tags by the page (see
+ * skills/index.html and loops/index.html), so this module only imports
+ * hq-button.
  *
- * @method open(filename, value) - load a file; resets dirty state
+ * @method open(filename, value, mode?) - load a file; resets dirty state.
+ *   An empty filename hides the toolbar label; `mode` defaults to the mode
+ *   inferred from the filename.
  * @method getValue() - current editor content
  * @method setSaving() - disable Save + show "Saving..." (during network save)
  * @method setSaved() - mark content saved, show "Saved!"; restores after 2s
@@ -40,6 +43,9 @@ class HqCodeEditor extends HTMLElement {
     this.style.minHeight = '0';
 
     this.innerHTML = `
+      <style>
+        hq-code-editor[padded] .CodeMirror-lines { padding: 12px 16px; }
+      </style>
       <div class="flex items-center justify-between px-4 py-2 bg-mist border-b border-line">
         <span data-hq-filename class="text-sm font-medium text-body truncate"></span>
         <hq-button data-hq-save variant="primary" disabled><span data-hq-save-label>Save</span></hq-button>
@@ -60,10 +66,10 @@ class HqCodeEditor extends HTMLElement {
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
   }
 
-  open(filename, value) {
+  open(filename, value, mode = modeForPath(filename)) {
     this.#filenameEl.textContent = filename;
     this.#ensureEditor();
-    this.#editor.setOption('mode', modeForPath(filename));
+    this.#editor.setOption('mode', mode);
     this.#savedValue = value || '';
     this.#editor.setValue(value || '');
     this.#dirty = false;
