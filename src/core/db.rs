@@ -33,7 +33,10 @@ pub fn initialize_db(db: &rusqlite::Connection) -> Result<()> {
     -- Task closed date yyyy-mm-dd
     closed TEXT NULLABLE,
     -- Meeting date yyyy-mm-dd
-    date TEXT NULLABLE
+    date TEXT NULLABLE,
+    -- When the indexer last updated the row; NULL until the row is
+    -- re-indexed, which lets the indexing upserts report newness
+    index_updated_at TEXT NULLABLE
 );",
         [],
     );
@@ -347,6 +350,23 @@ COMMIT;",
         match migrated_note_meta_table {
             Ok(_) => (),
             Err(e) => println!("Create updated note meta table failed: {}", e),
+        }
+    }
+
+    // 2026-10-29 Add column for index update timestamps. NULL means the row
+    // has not been re-indexed since it was inserted.
+    let has_index_updated_at_column: bool = db
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('note_meta') WHERE name = 'index_updated_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !has_index_updated_at_column {
+        match db.execute("ALTER TABLE note_meta ADD COLUMN index_updated_at TEXT", []) {
+            Ok(_) => (),
+            Err(e) => println!("Add note_meta.index_updated_at column failed: {}", e),
         }
     }
 
