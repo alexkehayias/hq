@@ -1,6 +1,5 @@
 // Skills page: list view and detail view with CodeMirror editor
 import { html } from '/components/lib/html.js';
-import './code-editor.js';
 
 /* ===== State ===== */
 let currentSkill = null;

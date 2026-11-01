@@ -7,6 +7,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#FAFBF8">
     <link href="/output.css" rel="stylesheet">
+    <link href="/vendor/codemirror/codemirror.min.css" rel="stylesheet">
+    <link href="/vendor/codemirror/theme/dracula.min.css" rel="stylesheet" id="cm-theme">
     <title>Loops</title>
     <script src="/theme-init.js"></script>
     <script type="module" src="/components/index.js"></script>
@@ -80,6 +82,12 @@
             </div>
           </div>
           <div id="loop-detail-body"></div>
+          <div id="loop-detail-prompt" class="mt-8 hidden">
+            <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-body">System prompt</h2>
+            <div class="overflow-hidden rounded-[14px] border border-line">
+              <hq-code-editor id="prompt-editor" padded></hq-code-editor>
+            </div>
+          </div>
         </hq-card>
       </div>
 
@@ -101,6 +109,13 @@
 
     </hq-page-shell>
 
+    <script src="/vendor/codemirror/codemirror.min.js"></script>
+    <script src="/vendor/codemirror/mode/markdown.min.js"></script>
+    <script src="/vendor/codemirror/mode/javascript.min.js"></script>
+    <script src="/vendor/codemirror/mode/python.min.js"></script>
+    <script src="/vendor/codemirror/mode/shell.min.js"></script>
+    <script src="/vendor/codemirror/mode/yaml.min.js"></script>
+    <script src="/vendor/codemirror/mode/xml.min.js"></script>
     <script type="module" src="index.js"></script>
   </body>
 </html>

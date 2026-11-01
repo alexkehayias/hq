@@ -4,6 +4,7 @@ import { html } from '/components/lib/html.js';
 /* ===== State ===== */
 let loops = [];
 let channels = [];
+let currentLoop = null;
 
 /* ===== Elements ===== */
 const pageShell = document.getElementById('page-shell');
@@ -20,6 +21,19 @@ const loopsErrorMsg = document.getElementById('loops-error-msg');
 const channelsErrorMsg = document.getElementById('channels-error-msg');
 const loopGrid = document.getElementById('loop-grid');
 const channelGrid = document.getElementById('channel-grid');
+const promptSection = document.getElementById('loop-detail-prompt');
+const promptEditor = document.getElementById('prompt-editor');
+
+// Dark mode sync for CodeMirror
+const darkMode = window.matchMedia('(prefers-color-scheme: dark)');
+darkMode.addEventListener('change', syncTheme);
+syncTheme();
+
+function syncTheme() {
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const themeLink = document.getElementById('cm-theme');
+  if (themeLink) themeLink.disabled = !isDark;
+}
 
 /* ===== Data ===== */
 async function loadData() {
@@ -166,6 +180,8 @@ async function showLoopDetail(id) {
   pageShell.setAttribute('back-href', '/loops/');
   pageShell.setAttribute('back-label', 'Loops');
 
+  currentLoop = null;
+  promptSection.classList.add('hidden');
   document.getElementById('loop-detail-id').textContent = id;
   document.getElementById('loop-detail-status').innerHTML = '';
   const body = document.getElementById('loop-detail-body');
@@ -219,12 +235,42 @@ async function showLoopDetail(id) {
         ? html`<div class="flex flex-wrap gap-2">${loop.tools.map((tool) => html`<hq-badge tone="gray">${tool}</hq-badge>`)}</div>`
         : html`<p class="text-sm text-muted">Using the default tools (bash, notify).</p>`,
     )}
-    ${section(
-      'System prompt',
-      html`<pre class="overflow-auto rounded-[14px] bg-code p-4 font-mono text-[12.5px] leading-relaxed text-teal-tint">${loop.system_prompt}</pre>`,
-    )}
     ${section('Created', html`<p class="text-sm text-body">${loop.created_at}</p>`)}
   </div>`.value;
+
+  currentLoop = loop;
+  promptSection.classList.remove('hidden');
+  promptEditor.open('', loop.system_prompt, 'markdown');
+}
+
+/* ===== Prompt Save ===== */
+promptEditor.addEventListener('save-request', savePrompt);
+
+async function savePrompt() {
+  if (!currentLoop) return;
+
+  promptEditor.setSaving();
+
+  try {
+    const res = await fetch(
+      `/api/loops/${encodeURIComponent(currentLoop.id)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ system_prompt: promptEditor.getValue() }),
+      },
+    );
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${res.status}`);
+    }
+
+    currentLoop.system_prompt = promptEditor.getValue();
+    promptEditor.setSaved();
+  } catch (err) {
+    promptEditor.setSaveError(err.message);
+  }
 }
 
 /* ===== Channel Detail ===== */
