@@ -767,7 +767,7 @@ pub async fn index_all(
         // `new-notes` channel so loops can react to them. A no-op unless a
         // server publisher is registered.
         if !new_entries.is_empty() {
-            publish_new_note(&file_name, &note.title, &new_entries);
+            publish_new_note(&file_name, &note.title, &note.id, &new_entries);
         }
 
         // If vector indexing is enabled, generate embeddings asynchronously
@@ -862,7 +862,7 @@ pub async fn index_single_file(
     // `new-notes` channel so loops can react to them. A no-op unless a server
     // publisher is registered.
     if !new_entries.is_empty() {
-        publish_new_note(&file_name, &note.title, &new_entries);
+        publish_new_note(&file_name, &note.title, &note.id, &new_entries);
     }
 
     // Index full text in Tantivy. Serialize writer creation with the periodic

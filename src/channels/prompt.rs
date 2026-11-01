@@ -54,8 +54,8 @@ pub fn system_prompt_section() -> String {
          The `{errors}` channel publishes every ERROR-level server log event, so a loop \
          subscribed to it can react to failures.\n\n\
          The `{notes}` channel publishes an event whenever new entries are indexed, \
-         carrying the note's title and path plus the type, title, and id of each new \
-         note, task, meeting, or heading.\n\n\
+         carrying the note's title, id, and path plus the type, title, and id of each \
+         new task, meeting, or heading.\n\n\
          To run something on a schedule, create a loop subscribed to the matching timer channel.{channel_tools}",
         errors = SERVER_ERROR_CHANNEL,
         notes = NEW_NOTE_CHANNEL,

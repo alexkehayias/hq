@@ -34,18 +34,26 @@ pub fn register() {
 ///
 /// Returns `false` when no publisher is registered (e.g. indexing from the
 /// CLI), in which case nothing is emitted.
-pub fn publish_new_note(file_name: &str, note_title: &str, entries: &[NewEntry]) -> bool {
+pub fn publish_new_note(
+    file_name: &str,
+    note_title: &str,
+    note_id: &str,
+    entries: &[NewEntry],
+) -> bool {
     registry::publish(
         NEW_NOTE_CHANNEL,
-        format_event(file_name, note_title, entries),
+        format_event(file_name, note_title, note_id, entries),
     )
 }
 
-/// Render a new-note event as a single channel message: the note's title and
-/// path, followed by one line per newly indexed entry.
-fn format_event(file_name: &str, note_title: &str, entries: &[NewEntry]) -> String {
-    let mut message = format!("new note: {note_title} ({file_name})");
-    for entry in entries {
+/// Render a new-note event as a single channel message: the note's title, id,
+/// and path, followed by one line per newly indexed entry.
+///
+/// The note-level row is represented by the header, so it is left out of the
+/// list even when it was itself newly inserted.
+fn format_event(file_name: &str, note_title: &str, note_id: &str, entries: &[NewEntry]) -> String {
+    let mut message = format!("new note: {note_title} ({note_id}) ({file_name})");
+    for entry in entries.iter().filter(|e| e.kind != "note") {
         message.push_str(&format!(
             "\n- {}: {} ({})",
             entry.kind, entry.title, entry.id
@@ -59,7 +67,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_event_includes_title_path_and_entries() {
+    fn format_event_includes_title_id_path_and_entries() {
         let entries = vec![
             NewEntry {
                 id: "id-1".to_string(),
@@ -72,17 +80,17 @@ mod tests {
                 kind: "task",
             },
         ];
-        let msg = format_event("notes/foo.org", "Foo", &entries);
+        let msg = format_event("notes/foo.org", "Foo", "id-1", &entries);
         assert_eq!(
             msg,
-            "new note: Foo (notes/foo.org)\n- note: Foo (id-1)\n- task: Buy milk (id-2)"
+            "new note: Foo (id-1) (notes/foo.org)\n- task: Buy milk (id-2)"
         );
     }
 
     #[test]
     fn format_event_without_entries_is_just_the_note() {
-        let msg = format_event("notes/foo.org", "Foo", &[]);
-        assert_eq!(msg, "new note: Foo (notes/foo.org)");
+        let msg = format_event("notes/foo.org", "Foo", "id-1", &[]);
+        assert_eq!(msg, "new note: Foo (id-1) (notes/foo.org)");
     }
 
     #[test]
@@ -91,16 +99,16 @@ mod tests {
         let mut rx = registry::subscribe(NEW_NOTE_CHANNEL).expect("channel is registered");
 
         let entries = vec![NewEntry {
-            id: "id-1".to_string(),
+            id: "id-2".to_string(),
             title: "Buy milk".to_string(),
             kind: "task",
         }];
-        assert!(publish_new_note("notes/foo.org", "Foo", &entries));
+        assert!(publish_new_note("notes/foo.org", "Foo", "id-1", &entries));
 
         let event = rx.try_recv().expect("an event was published");
         assert_eq!(
             event,
-            "new note: Foo (notes/foo.org)\n- task: Buy milk (id-1)"
+            "new note: Foo (id-1) (notes/foo.org)\n- task: Buy milk (id-2)"
         );
     }
 }
