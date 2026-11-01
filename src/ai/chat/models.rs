@@ -3,6 +3,10 @@ use crate::openai::Message;
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 
+/// Session tag marking machine-generated sessions (agents, loops, jobs).
+/// Background sessions are hidden from the session list and chat search.
+pub const BACKGROUND_TAG: &str = "background";
+
 // TODO: Should there be an app specific `Message` object instead of
 // building around OpenAI?
 

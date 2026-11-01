@@ -4,18 +4,21 @@ use std::sync::{Arc, RwLock};
 
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, put},
 };
 use serde_json::json;
 
-use super::public::{LoopListResponse, LoopSummaryResponse, UpdateLoopRequest, UpdateLoopResponse};
+use super::public::{
+    LoopListResponse, LoopRunResponse, LoopRunsQuery, LoopRunsResponse, LoopSummaryResponse,
+    UpdateLoopRequest, UpdateLoopResponse,
+};
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 use crate::core::AppConfig;
-use crate::loops::db::{find_all_loops, find_loop, update_loop_system_prompt};
+use crate::loops::db::{find_all_loops, find_loop, find_loop_runs, update_loop_system_prompt};
 use crate::loops::supervisor::{self, LoopSupervisorConfig};
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -110,9 +113,49 @@ async fn update_loop(
     Ok(Json(UpdateLoopResponse { success: true }).into_response())
 }
 
+/// Recent runs for a loop, newest first.
+async fn list_loop_runs(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Query(params): Query<LoopRunsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let db = state
+        .read()
+        .expect("Unable to read shared state")
+        .db
+        .clone();
+
+    if find_loop(&db, &id).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "Loop not found").into_response());
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    let runs = find_loop_runs(&db, &id, limit)
+        .await?
+        .into_iter()
+        .map(|run| LoopRunResponse {
+            id: run.id,
+            loop_id: run.loop_id,
+            channel_id: run.channel_id,
+            event: run.event,
+            status: run.status.to_string(),
+            session_id: run.session_id,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            duration_ms: run.duration_ms,
+            response: run.response,
+            error: run.error,
+            has_transcript: run.has_transcript,
+        })
+        .collect();
+
+    Ok(Json(LoopRunsResponse { runs }).into_response())
+}
+
 /// Create the loops router.
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", get(list_loops))
         .route("/{id}", put(update_loop))
+        .route("/{id}/runs", get(list_loop_runs))
 }

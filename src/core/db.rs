@@ -298,6 +298,47 @@ embedding float[384]
         Err(e) => println!("Create loop_emit_channel table failed: {}", e),
     };
 
+    // Create loop_run table: one row per event a loop processes, pointing at
+    // the background chat session holding that run's transcript.
+    let create_loop_run_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop_run (
+    -- UUID identifying this run
+    id TEXT PRIMARY KEY,
+    -- Foreign key to loop table
+    loop_id TEXT NOT NULL REFERENCES loop(id),
+    -- Channel that delivered the event
+    channel_id TEXT NOT NULL,
+    -- The event payload the loop received
+    event TEXT NOT NULL,
+    -- running | success | error | interrupted
+    status TEXT NOT NULL,
+    -- Chat session holding this run's transcript
+    session_id TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    finished_at TEXT,
+    duration_ms INTEGER,
+    response TEXT,
+    error TEXT
+);",
+        [],
+    );
+
+    match create_loop_run_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_run table failed: {}", e),
+    };
+
+    let create_loop_run_index = db.execute(
+        "CREATE INDEX IF NOT EXISTS loop_run_loop_started_idx
+    ON loop_run(loop_id, started_at DESC);",
+        [],
+    );
+
+    match create_loop_run_index {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_run index failed: {}", e),
+    };
+
     Ok(())
 }
 
@@ -720,6 +761,48 @@ COMMIT;",
     match create_loop_emit_channel_table {
         Ok(_) => (),
         Err(e) => println!("Create loop_emit_channel table failed: {}", e),
+    };
+
+    // 2026-11-01 Add loop_run: one row per event a loop processes, pointing at
+    // the background chat session holding that run's transcript. New table, so
+    // CREATE IF NOT EXISTS covers fresh and pre-existing databases.
+    let create_loop_run_table = db.execute(
+        "CREATE TABLE IF NOT EXISTS loop_run (
+    -- UUID identifying this run
+    id TEXT PRIMARY KEY,
+    -- Foreign key to loop table
+    loop_id TEXT NOT NULL REFERENCES loop(id),
+    -- Channel that delivered the event
+    channel_id TEXT NOT NULL,
+    -- The event payload the loop received
+    event TEXT NOT NULL,
+    -- running | success | error | interrupted
+    status TEXT NOT NULL,
+    -- Chat session holding this run's transcript
+    session_id TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    finished_at TEXT,
+    duration_ms INTEGER,
+    response TEXT,
+    error TEXT
+);",
+        [],
+    );
+
+    match create_loop_run_table {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_run table failed: {}", e),
+    };
+
+    let create_loop_run_index = db.execute(
+        "CREATE INDEX IF NOT EXISTS loop_run_loop_started_idx
+    ON loop_run(loop_id, started_at DESC);",
+        [],
+    );
+
+    match create_loop_run_index {
+        Ok(_) => (),
+        Err(e) => println!("Create loop_run index failed: {}", e),
     };
 
     // 2026-10-16 Make loop.system_prompt required. It used to be nullable with a
