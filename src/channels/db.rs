@@ -71,6 +71,25 @@ pub async fn insert_channel(
     .map_err(anyhow::Error::new)
 }
 
+/// Delete a channel and every loop link that references it.
+///
+/// `loop_channel` and `loop_emit_channel` both reference `channel(id)` without
+/// `ON DELETE CASCADE`, so their rows are removed in the same transaction before
+/// the `channel` row. Returns the number of channel rows deleted (0 if no
+/// channel had that id).
+pub async fn delete_channel(db: &Connection, id: &str) -> Result<usize> {
+    let id = id.to_string();
+    let deleted = db.call(move |conn| {
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM loop_channel WHERE channel_id = ?1", [&id])?;
+        tx.execute("DELETE FROM loop_emit_channel WHERE channel_id = ?1", [&id])?;
+        let count = tx.execute("DELETE FROM channel WHERE id = ?1", [&id])?;
+        tx.commit()?;
+        Ok(count)
+    });
+    Ok(deleted.await?)
+}
+
 /// Ids of agent-created channels (those with a `created_by` owner). Their
 /// in-process publishers must be re-registered on boot; see
 /// [`crate::channels::default::register_agent_channels`].
@@ -245,5 +264,72 @@ mod tests {
                 ("gamma".to_string(), "server".to_string()),
             ]
         );
+    }
+
+    /// Insert a loop subscribed to `subscribe` and permitted to emit to `emit`.
+    async fn insert_loop(db: &Connection, id: &str, subscribe: &str, emit: &str) {
+        let id = id.to_string();
+        let subscribe = subscribe.to_string();
+        let emit = emit.to_string();
+        db.call(move |conn| {
+            conn.execute(
+                "INSERT INTO loop (id, system_prompt, tools) VALUES (?1, 'prompt', '[]')",
+                [&id],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_channel (loop_id, channel_id, position) VALUES (?1, ?2, 0)",
+                rusqlite::params![id, subscribe],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_emit_channel (loop_id, channel_id) VALUES (?1, ?2)",
+                rusqlite::params![id, emit],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_channel_removes_row_and_loop_links() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "doomed", "socket").await;
+        insert_raw_channel(&db, "other", "socket").await;
+        insert_loop(&db, "loop-a", "doomed", "doomed").await;
+        insert_loop(&db, "loop-b", "other", "other").await;
+
+        let deleted = delete_channel(&db, "doomed").await.unwrap();
+        assert_eq!(deleted, 1);
+        assert!(find_channel(&db, "doomed").await.unwrap().is_none());
+
+        // The deleted channel's links are gone; the other channel's survive.
+        let links = db
+            .call(|conn| {
+                let subscribe: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM loop_channel WHERE channel_id = 'doomed'",
+                    [],
+                    |i| i.get(0),
+                )?;
+                let emit: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM loop_emit_channel WHERE channel_id = 'doomed'",
+                    [],
+                    |i| i.get(0),
+                )?;
+                let other: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM loop_channel WHERE channel_id = 'other'",
+                    [],
+                    |i| i.get(0),
+                )?;
+                Ok((subscribe, emit, other))
+            })
+            .await
+            .unwrap();
+        assert_eq!(links, (0, 0, 1));
+    }
+
+    #[tokio::test]
+    async fn delete_channel_missing_returns_zero() {
+        let (_dir, db) = setup_db().await;
+        assert_eq!(delete_channel(&db, "missing").await.unwrap(), 0);
     }
 }

@@ -385,6 +385,21 @@ pub async fn run(storage_path: &str, id: &str, debounce: Duration) -> Result<()>
     }
 }
 
+/// Delete a channel and every loop subscription or emit grant that references it.
+///
+/// Bails if no channel with `id` exists, matching the delete commands for
+/// sessions and tasks. A running socket publisher is unaffected — it keeps its
+/// socket until it exits. Loops that referenced the channel are unlinked but
+/// left in place, and re-creating a loop with this id will re-insert the row.
+pub async fn run_delete(db: tokio_rusqlite::Connection, id: &str) -> Result<()> {
+    let deleted = crate::channels::db::delete_channel(&db, id).await?;
+    if deleted == 0 {
+        bail!("channel '{id}' not found");
+    }
+    println!("Deleted channel '{id}'.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,5 +603,48 @@ mod tests {
             let events: Vec<String> = stream.collect().await;
             assert_eq!(events, vec!["line1", "line2"]);
         });
+    }
+
+    /// A temp DB with the schema initialized, for delete tests.
+    async fn test_db() -> (TempDir, tokio_rusqlite::Connection) {
+        let dir = TempDir::new().unwrap();
+        let db = crate::core::db::async_db(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        db.call(|conn| {
+            crate::core::db::initialize_db(conn)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (dir, db)
+    }
+
+    #[tokio::test]
+    async fn test_run_delete_removes_existing_channel() {
+        let (_dir, db) = test_db().await;
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO channel (id, source) VALUES ('doomed', 'socket')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        run_delete(db.clone(), "doomed").await.unwrap();
+
+        let found = crate::channels::db::find_channel(&db, "doomed")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_run_delete_missing_channel_errors() {
+        let (_dir, db) = test_db().await;
+        let err = run_delete(db, "missing").await.unwrap_err().to_string();
+        assert!(err.contains("not found"), "{err}");
     }
 }
