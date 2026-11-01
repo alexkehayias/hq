@@ -71,17 +71,37 @@ pub async fn insert_channel(
     .map_err(anyhow::Error::new)
 }
 
-/// Delete a channel and every loop link that references it.
+/// Ids of loops subscribed to `channel_id`, ordered by loop id.
 ///
-/// `loop_channel` and `loop_emit_channel` both reference `channel(id)` without
-/// `ON DELETE CASCADE`, so their rows are removed in the same transaction before
-/// the `channel` row. Returns the number of channel rows deleted (0 if no
-/// channel had that id).
+/// A channel with subscribers cannot be deleted outright — that would silently
+/// break the loops. See [`delete_channel`] and
+/// [`crate::cli::channel::run_delete`], which refuse unless the loops are
+/// deleted too.
+pub async fn find_channel_subscribers(db: &Connection, channel_id: &str) -> Result<Vec<String>> {
+    let channel_id = channel_id.to_string();
+    let ids = db.call(move |conn| {
+        let mut stmt = conn
+            .prepare("SELECT loop_id FROM loop_channel WHERE channel_id = ?1 ORDER BY loop_id")?;
+        let ids = stmt
+            .query_map([&channel_id], |i| i.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .collect::<Vec<String>>();
+        Ok(ids)
+    });
+    Ok(ids.await?)
+}
+
+/// Delete a channel row and any emit grants that reference it.
+///
+/// Does not touch `loop_channel` subscriptions: callers must first delete (or
+/// refuse to delete) loops subscribed to the channel — see
+/// [`find_channel_subscribers`]. Emit grants are permissions for a channel that
+/// is about to disappear, so they are cleared here. Returns the number of
+/// channel rows deleted (0 if no channel had that id).
 pub async fn delete_channel(db: &Connection, id: &str) -> Result<usize> {
     let id = id.to_string();
     let deleted = db.call(move |conn| {
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM loop_channel WHERE channel_id = ?1", [&id])?;
         tx.execute("DELETE FROM loop_emit_channel WHERE channel_id = ?1", [&id])?;
         let count = tx.execute("DELETE FROM channel WHERE id = ?1", [&id])?;
         tx.commit()?;
@@ -266,24 +286,29 @@ mod tests {
         );
     }
 
-    /// Insert a loop subscribed to `subscribe` and permitted to emit to `emit`.
-    async fn insert_loop(db: &Connection, id: &str, subscribe: &str, emit: &str) {
+    /// Insert a loop, optionally subscribed to `subscribe` and permitted to
+    /// emit to `emit`.
+    async fn insert_loop(db: &Connection, id: &str, subscribe: Option<&str>, emit: Option<&str>) {
         let id = id.to_string();
-        let subscribe = subscribe.to_string();
-        let emit = emit.to_string();
+        let subscribe = subscribe.map(str::to_string);
+        let emit = emit.map(str::to_string);
         db.call(move |conn| {
             conn.execute(
                 "INSERT INTO loop (id, system_prompt, tools) VALUES (?1, 'prompt', '[]')",
                 [&id],
             )?;
-            conn.execute(
-                "INSERT INTO loop_channel (loop_id, channel_id, position) VALUES (?1, ?2, 0)",
-                rusqlite::params![id, subscribe],
-            )?;
-            conn.execute(
-                "INSERT INTO loop_emit_channel (loop_id, channel_id) VALUES (?1, ?2)",
-                rusqlite::params![id, emit],
-            )?;
+            if let Some(channel_id) = &subscribe {
+                conn.execute(
+                    "INSERT INTO loop_channel (loop_id, channel_id, position) VALUES (?1, ?2, 0)",
+                    rusqlite::params![id, channel_id],
+                )?;
+            }
+            if let Some(channel_id) = &emit {
+                conn.execute(
+                    "INSERT INTO loop_emit_channel (loop_id, channel_id) VALUES (?1, ?2)",
+                    rusqlite::params![id, channel_id],
+                )?;
+            }
             Ok(())
         })
         .await
@@ -291,40 +316,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_channel_removes_row_and_loop_links() {
+    async fn find_channel_subscribers_returns_subscribed_loops_only() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "shared", "socket").await;
+        insert_raw_channel(&db, "other", "socket").await;
+        insert_loop(&db, "sub-b", Some("shared"), None).await;
+        insert_loop(&db, "sub-a", Some("shared"), Some("shared")).await;
+        insert_loop(&db, "emit-only", None, Some("shared")).await;
+        insert_loop(&db, "other-sub", Some("other"), None).await;
+
+        let ids = find_channel_subscribers(&db, "shared").await.unwrap();
+        assert_eq!(ids, vec!["sub-a", "sub-b"]);
+    }
+
+    #[tokio::test]
+    async fn delete_channel_removes_row_and_emit_grants() {
         let (_dir, db) = setup_db().await;
         insert_raw_channel(&db, "doomed", "socket").await;
-        insert_raw_channel(&db, "other", "socket").await;
-        insert_loop(&db, "loop-a", "doomed", "doomed").await;
-        insert_loop(&db, "loop-b", "other", "other").await;
+        insert_loop(&db, "emitter", None, Some("doomed")).await;
 
         let deleted = delete_channel(&db, "doomed").await.unwrap();
         assert_eq!(deleted, 1);
         assert!(find_channel(&db, "doomed").await.unwrap().is_none());
 
-        // The deleted channel's links are gone; the other channel's survive.
-        let links = db
+        let (emit_grants, loops) = db
             .call(|conn| {
-                let subscribe: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM loop_channel WHERE channel_id = 'doomed'",
-                    [],
-                    |i| i.get(0),
-                )?;
                 let emit: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM loop_emit_channel WHERE channel_id = 'doomed'",
                     [],
                     |i| i.get(0),
                 )?;
-                let other: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM loop_channel WHERE channel_id = 'other'",
-                    [],
-                    |i| i.get(0),
-                )?;
-                Ok((subscribe, emit, other))
+                let loops: i64 = conn.query_row("SELECT COUNT(*) FROM loop", [], |i| i.get(0))?;
+                Ok((emit, loops))
             })
             .await
             .unwrap();
-        assert_eq!(links, (0, 0, 1));
+        // The emit grant is cleared; the emit-only loop itself survives.
+        assert_eq!((emit_grants, loops), (0, 1));
     }
 
     #[tokio::test]

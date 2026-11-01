@@ -192,10 +192,16 @@ enum ChannelCommand {
         #[arg(long, default_value_t = 250)]
         debounce_ms: u64,
     },
-    /// Delete a channel and its loop subscriptions/emit grants
+    /// Delete a channel, refusing if any loop is subscribed to it
     Delete {
         /// Channel ID to delete
         id: String,
+        /// Also delete loops subscribed to the channel (asks for confirmation)
+        #[arg(long)]
+        delete_loops: bool,
+        /// Skip the confirmation prompt when deleting loops
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -383,9 +389,13 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             ChannelCommand::Publish { id, debounce_ms } => {
                 channel::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
             }
-            ChannelCommand::Delete { id } => {
+            ChannelCommand::Delete {
+                id,
+                delete_loops,
+                yes,
+            } => {
                 let db = crate::core::db::async_db(&vec_db_path).await?;
-                channel::run_delete(db, &id).await?;
+                channel::run_delete(db, &id, delete_loops, yes).await?;
             }
         },
         Some(Command::Loop {
