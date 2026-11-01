@@ -11,7 +11,7 @@ use axum::{
 };
 use serde_json::json;
 
-use super::public::{LoopListResponse, LoopSummaryResponse, LoopSystemPromptUpdateRequest};
+use super::public::{LoopListResponse, LoopSummaryResponse, UpdateLoopRequest, UpdateLoopResponse};
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 use crate::core::AppConfig;
@@ -49,10 +49,10 @@ async fn list_loops(State(state): State<SharedState>) -> Result<impl IntoRespons
 
 /// Replace a loop's system prompt, restarting it if it is currently running so
 /// the new prompt applies to subsequent events.
-async fn update_loop_prompt(
+async fn update_loop(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-    Json(body): Json<LoopSystemPromptUpdateRequest>,
+    Json(body): Json<UpdateLoopRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if body.system_prompt.trim().is_empty() {
         return Ok((
@@ -107,12 +107,12 @@ async fn update_loop_prompt(
         tracing::warn!("failed to restart loop '{}' after prompt update: {}", id, e);
     }
 
-    Ok(Json(json!({"success": true})).into_response())
+    Ok(Json(UpdateLoopResponse { success: true }).into_response())
 }
 
 /// Create the loops router.
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", get(list_loops))
-        .route("/{id}", put(update_loop_prompt))
+        .route("/{id}", put(update_loop))
 }

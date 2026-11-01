@@ -8,8 +8,13 @@ pub struct LoopListResponse {
 }
 
 #[derive(Deserialize)]
-pub struct LoopSystemPromptUpdateRequest {
+pub struct UpdateLoopRequest {
     pub system_prompt: String,
+}
+
+#[derive(Serialize)]
+pub struct UpdateLoopResponse {
+    pub success: bool,
 }
 
 #[derive(Serialize)]
