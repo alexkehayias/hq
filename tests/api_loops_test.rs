@@ -113,7 +113,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/loops/loop-1/system_prompt")
+                    .uri("/api/loops/loop-1")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"system_prompt": "New prompt."}"#))
                     .unwrap(),
@@ -148,7 +148,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/loops/missing/system_prompt")
+                    .uri("/api/loops/missing")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"system_prompt": "New prompt."}"#))
                     .unwrap(),
@@ -181,7 +181,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/loops/loop-1/system_prompt")
+                    .uri("/api/loops/loop-1")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"system_prompt": "   "}"#))
                     .unwrap(),

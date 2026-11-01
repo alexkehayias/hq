@@ -114,5 +114,5 @@ async fn update_loop_prompt(
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", get(list_loops))
-        .route("/{id}/system_prompt", put(update_loop_prompt))
+        .route("/{id}", put(update_loop_prompt))
 }

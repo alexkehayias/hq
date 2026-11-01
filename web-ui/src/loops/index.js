@@ -253,7 +253,7 @@ async function savePrompt() {
 
   try {
     const res = await fetch(
-      `/api/loops/${encodeURIComponent(currentLoop.id)}/system_prompt`,
+      `/api/loops/${encodeURIComponent(currentLoop.id)}`,
       {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
