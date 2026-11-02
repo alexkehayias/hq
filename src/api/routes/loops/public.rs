@@ -27,3 +27,29 @@ pub struct LoopSummaryResponse {
     pub created_at: String,
     pub running: bool,
 }
+
+#[derive(Deserialize)]
+pub struct LoopRunsQuery {
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct LoopRunsResponse {
+    pub runs: Vec<LoopRunResponse>,
+}
+
+#[derive(Serialize)]
+pub struct LoopRunResponse {
+    pub id: String,
+    pub loop_id: String,
+    pub channel_id: String,
+    pub event: String,
+    pub status: String,
+    pub session_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub response: Option<String>,
+    pub error: Option<String>,
+    pub has_transcript: bool,
+}

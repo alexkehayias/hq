@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use tokio_rusqlite::Connection;
 
-use super::models::Loop;
+use super::models::{Loop, LoopRun, RunStatus};
 
 pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
     let loops = db.call(|conn| {
@@ -172,6 +172,9 @@ pub async fn delete_loop(db: &Connection, id: &str) -> Result<usize> {
     let id = id.to_string();
     let deleted = db.call(move |conn| {
         let tx = conn.transaction()?;
+        let session_ids = select_run_session_ids(&tx, &id)?;
+        delete_transcript_sessions(&tx, &session_ids)?;
+        tx.execute("DELETE FROM loop_run WHERE loop_id = ?1", [&id])?;
         tx.execute("DELETE FROM loop_channel WHERE loop_id = ?1", [&id])?;
         tx.execute("DELETE FROM loop_emit_channel WHERE loop_id = ?1", [&id])?;
         let count = tx.execute("DELETE FROM loop WHERE id = ?1", [&id])?;
@@ -179,6 +182,202 @@ pub async fn delete_loop(db: &Connection, id: &str) -> Result<usize> {
         Ok(count)
     });
     Ok(deleted.await?)
+}
+
+/// Record a new run. The run id doubles as the transcript session id.
+pub async fn insert_loop_run(
+    db: &Connection,
+    id: &str,
+    loop_id: &str,
+    channel_id: &str,
+    event: &str,
+) -> Result<()> {
+    let id = id.to_string();
+    let loop_id = loop_id.to_string();
+    let channel_id = channel_id.to_string();
+    let event = event.to_string();
+    db.call(move |conn| {
+        conn.execute(
+            "INSERT INTO loop_run (id, loop_id, channel_id, event, status, session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?1)",
+            rusqlite::params![id, loop_id, channel_id, event, RunStatus::Running.as_str()],
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(anyhow::Error::new)
+}
+
+pub async fn finish_loop_run(
+    db: &Connection,
+    id: &str,
+    status: RunStatus,
+    response: Option<&str>,
+    error: Option<&str>,
+    duration_ms: i64,
+) -> Result<()> {
+    let id = id.to_string();
+    let status = status.to_string();
+    let response = response.map(str::to_string);
+    let error = error.map(str::to_string);
+    db.call(move |conn| {
+        conn.execute(
+            "UPDATE loop_run
+             SET status = ?2,
+                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 duration_ms = ?3,
+                 response = ?4,
+                 error = ?5
+             WHERE id = ?1",
+            rusqlite::params![id, status, duration_ms, response, error],
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(anyhow::Error::new)
+}
+
+/// Most recent runs for a loop, newest first.
+pub async fn find_loop_runs(db: &Connection, loop_id: &str, limit: usize) -> Result<Vec<LoopRun>> {
+    let loop_id = loop_id.to_string();
+    let runs = db.call(move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.loop_id, r.channel_id, r.event, r.status, r.session_id,
+                    r.started_at, r.finished_at, r.duration_ms, r.response, r.error,
+                    EXISTS(SELECT 1 FROM session s WHERE s.id = r.session_id)
+             FROM loop_run r
+             WHERE r.loop_id = ?1
+             ORDER BY r.started_at DESC, r.rowid DESC
+             LIMIT ?2",
+        )?;
+        let runs = stmt
+            .query_map(rusqlite::params![loop_id, limit as i64], |i| {
+                let status: String = i.get(4)?;
+                Ok(LoopRun {
+                    id: i.get(0)?,
+                    loop_id: i.get(1)?,
+                    channel_id: i.get(2)?,
+                    event: i.get(3)?,
+                    status: status.parse().unwrap_or(RunStatus::Error),
+                    session_id: i.get(5)?,
+                    started_at: i.get(6)?,
+                    finished_at: i.get(7)?,
+                    duration_ms: i.get(8)?,
+                    response: i.get(9)?,
+                    error: i.get(10)?,
+                    has_transcript: i.get(11)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect::<Vec<LoopRun>>();
+        Ok(runs)
+    });
+    Ok(runs.await?)
+}
+
+/// Mark runs left in `running` by a previous process as interrupted.
+pub async fn mark_running_loop_runs_interrupted(db: &Connection) -> Result<usize> {
+    let updated = db.call(|conn| {
+        let count = conn.execute(
+            "UPDATE loop_run
+             SET status = ?1,
+                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE status = ?2",
+            rusqlite::params![RunStatus::Interrupted.as_str(), RunStatus::Running.as_str()],
+        )?;
+        Ok(count)
+    });
+    Ok(updated.await?)
+}
+
+/// Delete all but the newest `keep` runs for a loop, along with their
+/// transcript sessions. Returns the number of runs removed.
+pub async fn prune_loop_runs(db: &Connection, loop_id: &str, keep: usize) -> Result<usize> {
+    let loop_id = loop_id.to_string();
+    let removed = db.call(move |conn| {
+        let tx = conn.transaction()?;
+        let stale_ids: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM loop_run
+                 WHERE loop_id = ?1
+                   AND id NOT IN (
+                       SELECT id FROM loop_run
+                       WHERE loop_id = ?1
+                       ORDER BY started_at DESC, rowid DESC
+                       LIMIT ?2
+                   )",
+            )?;
+            stmt.query_map(rusqlite::params![loop_id, keep as i64], |i| i.get(0))?
+                .filter_map(Result::ok)
+                .collect()
+        };
+
+        if stale_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let session_ids = select_session_ids_for_runs(&tx, &stale_ids)?;
+        delete_transcript_sessions(&tx, &session_ids)?;
+        let ids_json = serde_json::to_string(&stale_ids).unwrap();
+        let count = tx.execute(
+            "DELETE FROM loop_run WHERE id IN (SELECT value FROM json_each(?1))",
+            [&ids_json],
+        )?;
+        tx.commit()?;
+        Ok(count)
+    });
+    Ok(removed.await?)
+}
+
+fn select_run_session_ids(
+    tx: &rusqlite::Transaction,
+    loop_id: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = tx.prepare("SELECT session_id FROM loop_run WHERE loop_id = ?1")?;
+    let ids = stmt
+        .query_map([loop_id], |i| i.get(0))?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(ids)
+}
+
+fn select_session_ids_for_runs(
+    tx: &rusqlite::Transaction,
+    run_ids: &[String],
+) -> rusqlite::Result<Vec<String>> {
+    let ids_json = serde_json::to_string(run_ids).unwrap();
+    let mut stmt = tx
+        .prepare("SELECT session_id FROM loop_run WHERE id IN (SELECT value FROM json_each(?1))")?;
+    let ids = stmt
+        .query_map([&ids_json], |i| i.get(0))?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(ids)
+}
+
+/// Delete transcript sessions in dependency order. Foreign keys are ON, so
+/// child rows must go before the `session` parent.
+fn delete_transcript_sessions(
+    tx: &rusqlite::Transaction,
+    session_ids: &[String],
+) -> rusqlite::Result<()> {
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+    let ids_json = serde_json::to_string(session_ids).unwrap();
+    tx.execute(
+        "DELETE FROM chat_message WHERE session_id IN (SELECT value FROM json_each(?1))",
+        [&ids_json],
+    )?;
+    tx.execute(
+        "DELETE FROM session_tag WHERE session_id IN (SELECT value FROM json_each(?1))",
+        [&ids_json],
+    )?;
+    tx.execute(
+        "DELETE FROM session WHERE id IN (SELECT value FROM json_each(?1))",
+        [&ids_json],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -231,7 +430,7 @@ mod tests {
             .call(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT name FROM sqlite_master WHERE type = 'table'
-                    AND name IN ('channel', 'loop', 'loop_channel', 'loop_emit_channel')",
+                    AND name IN ('channel', 'loop', 'loop_channel', 'loop_emit_channel', 'loop_run')",
                 )?;
                 let names = stmt
                     .query_map([], |row| row.get::<_, String>(0))?
@@ -245,6 +444,7 @@ mod tests {
         assert!(tables.contains(&"loop".to_string()));
         assert!(tables.contains(&"loop_channel".to_string()));
         assert!(tables.contains(&"loop_emit_channel".to_string()));
+        assert!(tables.contains(&"loop_run".to_string()));
     }
 
     #[tokio::test]
@@ -364,5 +564,148 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing, 0);
+    }
+
+    async fn insert_raw_session(db: &Connection, id: &str) {
+        let id = id.to_string();
+        db.call(move |conn| {
+            conn.execute("INSERT INTO session (id) VALUES (?1)", [&id])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn count_runs(db: &Connection, loop_id: &str) -> i64 {
+        let loop_id = loop_id.to_string();
+        db.call(move |conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM loop_run WHERE loop_id = ?1",
+                [&loop_id],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn loop_run_round_trip() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+
+        insert_loop_run(&db, "run-1", "loop-1", "alpha", "hello")
+            .await
+            .unwrap();
+
+        let runs = find_loop_runs(&db, "loop-1", 10).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "run-1");
+        assert_eq!(runs[0].session_id, "run-1");
+        assert_eq!(runs[0].status, RunStatus::Running);
+        assert_eq!(runs[0].event, "hello");
+        assert!(!runs[0].has_transcript);
+
+        insert_raw_session(&db, "run-1").await;
+        finish_loop_run(&db, "run-1", RunStatus::Success, Some("done"), None, 42)
+            .await
+            .unwrap();
+
+        let runs = find_loop_runs(&db, "loop-1", 10).await.unwrap();
+        assert_eq!(runs[0].status, RunStatus::Success);
+        assert_eq!(runs[0].duration_ms, Some(42));
+        assert_eq!(runs[0].response.as_deref(), Some("done"));
+        assert!(runs[0].finished_at.is_some());
+        assert!(runs[0].has_transcript);
+    }
+
+    #[tokio::test]
+    async fn mark_running_runs_interrupted_only_touches_running() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+        insert_loop_run(&db, "run-1", "loop-1", "alpha", "one")
+            .await
+            .unwrap();
+        insert_loop_run(&db, "run-2", "loop-1", "alpha", "two")
+            .await
+            .unwrap();
+        finish_loop_run(&db, "run-2", RunStatus::Success, Some("ok"), None, 10)
+            .await
+            .unwrap();
+
+        let updated = mark_running_loop_runs_interrupted(&db).await.unwrap();
+        assert_eq!(updated, 1);
+
+        let runs = find_loop_runs(&db, "loop-1", 10).await.unwrap();
+        let interrupted = runs.iter().find(|r| r.id == "run-1").unwrap();
+        let success = runs.iter().find(|r| r.id == "run-2").unwrap();
+        assert_eq!(interrupted.status, RunStatus::Interrupted);
+        assert_eq!(success.status, RunStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn prune_loop_runs_keeps_newest_and_deletes_transcripts() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+        for i in 0..5 {
+            let id = format!("run-{i}");
+            insert_raw_session(&db, &id).await;
+            insert_loop_run(&db, &id, "loop-1", "alpha", "event")
+                .await
+                .unwrap();
+        }
+
+        let removed = prune_loop_runs(&db, "loop-1", 2).await.unwrap();
+        assert_eq!(removed, 3);
+        assert_eq!(count_runs(&db, "loop-1").await, 2);
+
+        let runs = find_loop_runs(&db, "loop-1", 10).await.unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["run-4", "run-3"]);
+
+        let remaining_sessions: i64 = db
+            .call(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM session WHERE id LIKE 'run-%'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(remaining_sessions, 2);
+    }
+
+    #[tokio::test]
+    async fn delete_loop_removes_runs_and_transcripts() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+        insert_raw_session(&db, "run-1").await;
+        insert_loop_run(&db, "run-1", "loop-1", "alpha", "event")
+            .await
+            .unwrap();
+
+        delete_loop(&db, "loop-1").await.unwrap();
+
+        assert_eq!(count_runs(&db, "loop-1").await, 0);
+        let sessions: i64 = db
+            .call(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM session WHERE id = 'run-1'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
     }
 }

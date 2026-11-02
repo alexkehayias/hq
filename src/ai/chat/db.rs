@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::json;
 use tokio_rusqlite::Connection;
 
-use crate::ai::chat::models::{Session, SessionMode};
+use crate::ai::chat::models::{BACKGROUND_TAG, Session, SessionMode};
 use crate::openai::Message;
 
 #[derive(Serialize)]
@@ -200,12 +200,12 @@ pub async fn get_non_background_sessions(db: &Connection) -> Result<Vec<SessionW
             WHERE NOT EXISTS (
                 SELECT 1 FROM session_tag st
                 JOIN tag t ON st.tag_id = t.id
-                WHERE st.session_id = s.id AND t.name = 'background'
+                WHERE st.session_id = s.id AND t.name = ?1
             )
             "#,
         )?;
         let rows = stmt
-            .query_map([], |i| {
+            .query_map([BACKGROUND_TAG], |i| {
                 let id: String = i.get(0)?;
                 let title: Option<String> = i.get(1)?;
                 Ok(SessionWithTitle { id, title })
@@ -258,9 +258,9 @@ pub async fn session_has_background_tag(db: &Connection, session_id: &str) -> Re
             r#"
             SELECT COUNT(*) FROM session_tag st
             JOIN tag t ON st.tag_id = t.id
-            WHERE st.session_id = ? AND t.name = 'background'
+            WHERE st.session_id = ?1 AND t.name = ?2
             "#,
-            [s_id],
+            rusqlite::params![s_id, BACKGROUND_TAG],
             |row| row.get(0),
         );
         Ok(result.unwrap_or(0) > 0)
@@ -484,7 +484,7 @@ mod tests {
         get_or_create_session(
             &db,
             "test-session-2",
-            &["background", "custom-tag"],
+            &[BACKGROUND_TAG, "custom-tag"],
             SessionMode::Chat,
         )
         .await

@@ -12,5 +12,6 @@ pub use middleware::{
     ToolSecurityMiddleware,
 };
 pub mod models;
+pub use models::BACKGROUND_TAG;
 pub mod summarize;
 pub use core::{Chat, ChatBuilder};

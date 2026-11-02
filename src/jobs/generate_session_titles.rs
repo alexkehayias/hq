@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tokio_rusqlite::Connection;
 
+use crate::ai::chat::BACKGROUND_TAG;
 use crate::ai::chat::db::find_chat_session_by_id;
 use crate::ai::chat::summarize::generate_and_update_session_info;
 use crate::core::AppConfig;
@@ -28,11 +29,16 @@ impl crate::jobs::PeriodicJob for GenerateSessionTitles {
                  LEFT JOIN chat_message cm ON s.id = cm.session_id
                  WHERE (s.title IS NULL OR s.title = '')
                  AND (s.summary IS NULL OR s.summary = '')
-                 AND cm.session_id IS NOT NULL",
+                 AND cm.session_id IS NOT NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM session_tag st
+                     JOIN tag t ON st.tag_id = t.id
+                     WHERE st.session_id = s.id AND t.name = ?1
+                 )",
                 )?;
 
                 let rows = stmt
-                    .query_map([], |row| {
+                    .query_map([BACKGROUND_TAG], |row| {
                         let session_id: String = row.get(0)?;
                         Ok(session_id)
                     })?

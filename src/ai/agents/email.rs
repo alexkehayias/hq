@@ -1,7 +1,7 @@
 use tokio_rusqlite::Connection;
 
 use crate::ai::chat::{
-    ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
+    BACKGROUND_TAG, ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{EmailSearchTool, EmailUnreadTool};
 use crate::openai::{BoxedToolCall, Message, Role};
@@ -27,7 +27,7 @@ pub async fn email_chat_response(
 
     let mut chat = ChatBuilder::new(openai_api_hostname, openai_api_key, openai_model)
         .transcript(vec![Message::new(Role::System, &system_msg)])
-        .database(db, None, Some(vec![String::from("background")]))
+        .database(db, None, Some(vec![BACKGROUND_TAG.to_string()]))
         .tools(tools)
         .middleware(vec![
             Box::new(InfiniteLoopDetector::new(3)),

@@ -296,8 +296,10 @@ impl ToolCall for DeleteLoopTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: DeleteLoopArgs = parse_tool_args(args)?;
 
-        let deleted = delete_loop(&self.config.db, &fn_args.id).await?;
+        // Stop before deleting so an in-flight run cannot write messages after
+        // its transcript session rows are removed.
         let stopped = supervisor::stop(&fn_args.id);
+        let deleted = delete_loop(&self.config.db, &fn_args.id).await?;
 
         if deleted == 0 && !stopped {
             return Err(Error::from(RecoverableToolError::new(&format!(

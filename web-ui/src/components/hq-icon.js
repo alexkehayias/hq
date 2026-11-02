@@ -3,7 +3,8 @@
  *
  * @attr {string} name - required. One of:
  *   chevron-left, chevron-right, chevron-down, search, chat, sessions, skills,
- *   loops, metrics, close, alert, plus, folder, file, book, bell
+ *   loops, metrics, close, alert, plus, folder, file, book, bell, check,
+ *   spinner
  *
  * Uses HTM to build the SVG string. Single source for the SVG library;
  * replaces repeated inline SVG paths across pages (home page repeats
@@ -62,6 +63,12 @@ const ICONS = {
   ),
   bell: new SafeHtml(
     '<path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />',
+  ),
+  check: new SafeHtml(
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />',
+  ),
+  spinner: new SafeHtml(
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 109 9" />',
   ),
 };
 

@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use anyhow::Result;
 use futures::StreamExt;
@@ -20,13 +21,17 @@ use futures::stream::BoxStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_rusqlite::Connection;
+use uuid::Uuid;
 
-use super::db::find_all_loops;
-use super::models::Loop;
+use super::db::{
+    find_all_loops, finish_loop_run, insert_loop_run, mark_running_loop_runs_interrupted,
+    prune_loop_runs,
+};
+use super::models::{Loop, RunStatus};
 use super::prompt::build_system_prompt;
 use super::tools::resolve_loop_tools;
 use crate::ai::chat::{
-    ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
+    BACKGROUND_TAG, ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{ToolConfig, ToolRegistry};
 use crate::channels::subscribe::subscribe;
@@ -45,6 +50,10 @@ pub struct LoopSupervisorConfig {
     pub storage_path: String,
     pub vapid_key_path: String,
 }
+
+/// How many runs to retain per loop. Loop events arrive continuously, so the
+/// history is trimmed after every run.
+const MAX_RUNS_PER_LOOP: usize = 100;
 
 /// Process-wide registry of running loops, keyed by loop id.
 static RUNNING: OnceLock<Mutex<HashMap<String, JoinHandle<()>>>> = OnceLock::new();
@@ -104,6 +113,10 @@ pub fn running_ids() -> Vec<String> {
 /// Start every persisted loop. Failures for individual loops are logged and
 /// skipped; an `Err` is returned only if the loop list itself cannot be read.
 pub async fn respawn_all(config: LoopSupervisorConfig) -> Result<()> {
+    // Runs left in `running` belong to a previous process that died mid-event.
+    if let Err(e) = mark_running_loop_runs_interrupted(&config.db).await {
+        tracing::warn!("failed to mark interrupted loop runs: {}", e);
+    }
     let records = find_all_loops(&config.db).await?;
     for record in records {
         let id = record.id.clone();
@@ -170,9 +183,23 @@ async fn run_loop(
             }
         };
 
+        // One run id per event, also used as the transcript session id. The
+        // stable `record.id` remains the bash workspace (see ToolConfig above).
+        let run_id = Uuid::new_v4().to_string();
+        if let Err(e) = insert_loop_run(&config.db, &run_id, &record.id, &channel_id, &event).await
+        {
+            tracing::warn!("loop '{}': failed to record run: {}", record.id, e);
+        }
+        let started = Instant::now();
+
         let mut chat = ChatBuilder::new(&config.api_hostname, &config.api_key, &config.model)
             .transcript(vec![Message::new(Role::System, &system_prompt)])
             .tools(tools)
+            .database(
+                &config.db,
+                Some(&run_id),
+                Some(vec![BACKGROUND_TAG.to_string()]),
+            )
             .middleware(vec![
                 Box::new(InfiniteLoopDetector::new(3)),
                 Box::new(ToolSecurityMiddleware::default()),
@@ -180,13 +207,46 @@ async fn run_loop(
             ])
             .build();
 
-        match chat.next_msg(Message::new(Role::User, &user_msg)).await {
+        let result = chat.next_msg(Message::new(Role::User, &user_msg)).await;
+        let duration_ms = started.elapsed().as_millis() as i64;
+        match result {
             Ok(resp) => {
-                if let Some(content) = resp.last().and_then(|msg| msg.text()) {
+                let content = resp.last().and_then(|msg| msg.text());
+                if let Some(content) = &content {
                     tracing::info!("loop '{}': {}", record.id, content);
                 }
+                if let Err(e) = finish_loop_run(
+                    &config.db,
+                    &run_id,
+                    RunStatus::Success,
+                    content,
+                    None,
+                    duration_ms,
+                )
+                .await
+                {
+                    tracing::warn!("loop '{}': failed to finish run: {}", record.id, e);
+                }
             }
-            Err(e) => tracing::warn!("loop '{}': chat error: {}", record.id, e),
+            Err(e) => {
+                tracing::warn!("loop '{}': chat error: {}", record.id, e);
+                if let Err(e) = finish_loop_run(
+                    &config.db,
+                    &run_id,
+                    RunStatus::Error,
+                    None,
+                    Some(&e.to_string()),
+                    duration_ms,
+                )
+                .await
+                {
+                    tracing::warn!("loop '{}': failed to finish run: {}", record.id, e);
+                }
+            }
+        }
+
+        if let Err(e) = prune_loop_runs(&config.db, &record.id, MAX_RUNS_PER_LOOP).await {
+            tracing::warn!("loop '{}': failed to prune runs: {}", record.id, e);
         }
     }
 }
