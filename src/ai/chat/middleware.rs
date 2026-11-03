@@ -237,12 +237,13 @@ impl Default for ToolSecurityMiddleware {
                 ],
             },
             // Don't let email/calendar content steer the agent into
-            // fetching an arbitrary URL.
+            // fetching an arbitrary URL. Notes and meeting search are
+            // intentionally excluded: they return the user's own
+            // content and commonly contain links the user wants the
+            // agent to follow.
             ToolCallRule {
                 target: "view_website".to_string(),
                 blocked_after: vec![
-                    "search_notes".to_string(),
-                    "search_meetings".to_string(),
                     "get_unread_emails".to_string(),
                     "search_emails".to_string(),
                     "get_calendar_events".to_string(),
@@ -598,6 +599,17 @@ mod tests {
         }
     }
 
+    fn search_emails_call(id: &str) -> FunctionCall {
+        FunctionCall {
+            function: crate::openai::FunctionCallFn {
+                name: "search_emails".into(),
+                arguments: r#"{"query":"test"}"#.into(),
+            },
+            id: id.into(),
+            r#type: "function".into(),
+        }
+    }
+
     #[tokio::test]
     async fn test_security_allows_view_website_when_no_notes_used() {
         let mw = ToolSecurityMiddleware::default();
@@ -614,14 +626,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_security_rejects_view_website_after_search_notes() {
+    async fn test_security_allows_view_website_after_search_notes() {
         let mw = ToolSecurityMiddleware::default();
-        // First batch: search_notes was called and responded to
+        // Notes are the user's own content, so following a link found
+        // in a note must not be blocked.
         let transcript = vec![
             Message::new(Role::User, "find my notes about X"),
             Message::new_tool_call_request(vec![search_notes_call("call_1")]),
             Message::new_tool_call_response("notes result", "call_1"),
-            // Second batch: now the model wants to view a website
+            Message::new_tool_call_request(vec![view_website_call("call_2")]),
+        ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(
+            matches!(action, MiddlewareAction::Continue),
+            "Expected Continue for view_website after search_notes, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_security_allows_view_website_after_search_meetings() {
+        let mw = ToolSecurityMiddleware::default();
+        // Meeting search returns the user's own content, so following a
+        // link found there must not be blocked.
+        let transcript = vec![
+            Message::new(Role::User, "find my meetings about X"),
+            Message::new_tool_call_request(vec![tool_call("search_meetings", "call_1")]),
+            Message::new_tool_call_response("meeting result", "call_1"),
+            Message::new_tool_call_request(vec![view_website_call("call_2")]),
+        ];
+        let action = mw.before_tool_calls(&transcript).await;
+        assert!(
+            matches!(action, MiddlewareAction::Continue),
+            "Expected Continue for view_website after search_meetings, got {action:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_security_rejects_view_website_after_search_emails() {
+        let mw = ToolSecurityMiddleware::default();
+        let transcript = vec![
+            Message::new(Role::User, "check my email"),
+            Message::new_tool_call_request(vec![search_emails_call("call_1")]),
+            Message::new_tool_call_response("email result", "call_1"),
             Message::new_tool_call_request(vec![view_website_call("call_2")]),
         ];
         let action = mw.before_tool_calls(&transcript).await;
@@ -667,12 +713,12 @@ mod tests {
     #[tokio::test]
     async fn test_security_concurrent_batch_does_not_trigger() {
         let mw = ToolSecurityMiddleware::default();
-        // search_notes and view_website in the same pending batch —
-        // notes hasn't been "used" yet, so view_website should pass.
+        // search_emails and view_website in the same pending batch —
+        // email hasn't been "used" yet, so view_website should pass.
         let transcript = vec![
             Message::new(Role::User, "do both at once"),
             Message::new_tool_call_request(vec![
-                search_notes_call("call_1"),
+                search_emails_call("call_1"),
                 view_website_call("call_2"),
             ]),
         ];
@@ -690,8 +736,8 @@ mod tests {
         // unrelated tool. Only the matching call should be rejected.
         let transcript = vec![
             Message::new(Role::User, "go"),
-            Message::new_tool_call_request(vec![search_notes_call("call_1")]),
-            Message::new_tool_call_response("notes result", "call_1"),
+            Message::new_tool_call_request(vec![search_emails_call("call_1")]),
+            Message::new_tool_call_response("email result", "call_1"),
             Message::new_tool_call_request(vec![
                 view_website_call("call_2"),
                 FunctionCall {
