@@ -295,6 +295,72 @@ function statCardDemo(c) {
 }
 sections.push({ title: 'hq-stat-card', render: statCardDemo });
 
+function terminalDemo(c) {
+  c.innerHTML = `
+    <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">&lt;hq-terminal&gt;</h2>
+    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+      Monospace terminal with a scrolling output log. ↑/↓ recall history, Ctrl/Cmd-L clears.
+      <code class="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">attrs: prompt, welcome, height, disabled</code>
+      <span class="ml-2">Emits <code>command</code> with <code>detail.line</code>; call <code>print(text, tone)</code> with the results.</span>
+    </p>
+    <hq-terminal id="terminal-demo" prompt="hq&gt;" welcome="Type 'help' and press Enter." height="360px"></hq-terminal>
+  `;
+
+  const term = c.querySelector('#terminal-demo');
+
+  const commands = {
+    help() {
+      term.print('Available commands:');
+      term.print('  help          show this list', 'muted');
+      term.print('  echo <text>   print text back', 'muted');
+      term.print('  date          print the current time', 'muted');
+      term.print('  ls            list files', 'muted');
+      term.print('  ping          simulate an async request', 'muted');
+      term.print('  whoami        print the current user', 'muted');
+      term.print('  clear         clear the output', 'muted');
+    },
+    echo(args) {
+      term.print(args.join(' '));
+    },
+    date() {
+      term.print(new Date().toString());
+    },
+    ls() {
+      term.print('notes/');
+      term.print('chat/');
+      term.print('README.md');
+    },
+    ping() {
+      term.setAttribute('disabled', '');
+      term.print('pinging...', 'muted');
+      setTimeout(() => {
+        term.print('pong (42 ms)', 'success');
+        term.removeAttribute('disabled');
+        term.focus();
+      }, 500);
+    },
+    whoami() {
+      term.print('guest');
+    },
+    clear() {
+      term.clear();
+    },
+  };
+
+  term.addEventListener('command', (e) => {
+    const line = e.detail.line.trim();
+    const [name, ...args] = line.split(/\s+/);
+    const command = Object.hasOwn(commands, name) ? commands[name] : null;
+    if (!command) {
+      term.print(`command not found: ${name}`, 'error');
+      term.print("type 'help' for a list of commands", 'muted');
+      return;
+    }
+    command(args);
+  });
+}
+sections.push({ title: 'hq-terminal', render: terminalDemo });
+
 // Render all sections
 function renderAll() {
   const root = document.getElementById('gallery-root');

@@ -81,6 +81,13 @@ For visual review, see `/components-gallery/`.
 - **Events:** `page-change` with `{ detail: { page } }`
 - Page navigation with 5-page window. Replaces inline `onclick=` globals.
 
+#### `<hq-terminal>`
+- **File:** `./hq-terminal.js`
+- **Attrs:** `prompt` (default `$`), `welcome` (muted line printed on connect), `height` (CSS length, default `320px`), `disabled`
+- **Events:** `command` with `{ detail: { line } }` (bubbles) — fired on Enter, after the line is echoed
+- **Methods:** `print(text, tone?)` (`default|muted|error|success`), `clear()`, `focus()`, `setPrompt(text)`
+- Monospace terminal with a scrolling output log and ↑/↓ command history. Ctrl/Cmd-L clears. The page owns command handling: listen for `command`, then call `print()` with the results.
+
 ### Tier 3 — Page-Specific
 
 #### `<hq-file-tree>`
@@ -117,6 +124,7 @@ Every page that uses them must load two things in `<head>`:
    - `hq-select` → `change` with `detail.value`
    - `hq-pagination` → `page-change` with `detail.page`
    - `hq-file-tree` → `file-select` with `detail.path`
+   - `hq-terminal` → `command` with `detail.line`
    - `hq-modal` → `close`
 4. **Read state back from attributes** (e.g. `filter.getAttribute('value')`) and
    **drive state by setting attributes** (e.g. `view.setAttribute('state', 'loading')`).
