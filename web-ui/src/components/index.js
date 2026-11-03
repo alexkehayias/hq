@@ -13,3 +13,4 @@ import './hq-select.js';
 import './hq-file-tree.js';
 import './hq-code-editor.js';
 import './hq-stat-card.js';
+import './hq-terminal.js';
