@@ -166,6 +166,13 @@ pub fn down(_conn: &Connection) -> Result<()> {{
 
     fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))?;
 
+    // Keep the HEAD pointer in sync. Because every new migration touches this
+    // same file, two branches that add migrations conflict on merge instead of
+    // silently diverging.
+    let head_path = dir.join("HEAD");
+    fs::write(&head_path, format!("{module}\n"))
+        .with_context(|| format!("failed to write {}", head_path.display()))?;
+
     Ok((path, module, version))
 }
 
@@ -241,6 +248,9 @@ mod tests {
         assert!(contents.contains("pub fn up"));
         assert!(contents.contains("pub fn down"));
         assert!(contents.contains("migration 2 (add_user_table)"));
+
+        let head = fs::read_to_string(dir.path().join("HEAD")).unwrap();
+        assert_eq!(head, "migration_0002_add_user_table\n");
     }
 
     #[test]

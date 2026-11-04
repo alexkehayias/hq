@@ -256,3 +256,25 @@ fn with_foreign_keys_disabled<T>(conn: &Connection, f: impl FnOnce() -> Result<T
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The HEAD file must point at the newest registered migration. Two
+    /// branches that add migrations both edit this file, so merging them
+    /// conflicts instead of leaving two diverging heads.
+    #[test]
+    fn head_matches_latest_migration() {
+        let head = include_str!("HEAD").trim();
+        let latest = all()
+            .into_iter()
+            .max_by_key(|migration| migration.version)
+            .expect("at least one migration");
+        let expected = format!("migration_{:04}_{}", latest.version, latest.name);
+        assert_eq!(
+            head, expected,
+            "update src/core/db/migrations/HEAD to point at the newest migration"
+        );
+    }
+}

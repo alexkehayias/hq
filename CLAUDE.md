@@ -112,6 +112,10 @@ migration in its own transaction, and runs `down` in reverse for rollbacks.
 - `migration_0001_initial_schema.rs` — baseline schema plus idempotent upgrades for
   databases created before the framework existed. Do not add new schema changes
   here.
+- `HEAD` — points at the newest migration module. `hq migrate new` updates it,
+  and a test keeps it in sync with `all()`. Every migration changes this file,
+  so two branches that add migrations conflict on merge instead of silently
+  diverging.
 - To change the schema, add a new `migration_NNNN_<name>.rs` module with `pub fn up` and
   `pub fn down` and append it to `all()` in `mod.rs`. Use a new version number
   and keep `down` a true inverse where possible (set it to `None` only for
