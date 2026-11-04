@@ -39,6 +39,15 @@ cargo run -- index --all
 # Rebuild indices from scratch
 cargo run -- rebuild
 
+# Apply pending database migrations
+cargo run -- migrate
+# Roll back the most recent migration (or --steps N)
+cargo run -- migrate down
+# Show applied and pending migrations
+cargo run -- migrate status
+# Generate a new migration module
+cargo run -- migrate new add_user_table
+
 # Query notes (default: full-text search)
 cargo run -- query "search term"
 # With vector similarity
@@ -91,6 +100,26 @@ docker run -p 2222:2222 -d hq:latest
 - SQLite via `rusqlite` and `tokio-rusqlite`
 - Vector search via `sqlite-vec` (384-dimensional embeddings from Fastembed)
 - Tables: `note_meta`, `vec_items`, `auth`, `push_subscription`, `chat_message`
+
+#### Database Migrations (`src/core/db/migrations/`)
+
+Schema changes are Rust modules with `up` and optional `down` functions. The
+framework records applied versions in the `schema_migrations` table, runs each
+migration in its own transaction, and runs `down` in reverse for rollbacks.
+
+- `mod.rs` — the `Migration` type, registry (`all()`), and `migrate` /
+  `rollback` / `status` runners.
+- `migration_0001_initial_schema.rs` — baseline schema plus idempotent upgrades for
+  databases created before the framework existed. Do not add new schema changes
+  here.
+- To change the schema, add a new `migration_NNNN_<name>.rs` module with `pub fn up` and
+  `pub fn down` and append it to `all()` in `mod.rs`. Use a new version number
+  and keep `down` a true inverse where possible (set it to `None` only for
+  irreversible migrations). `hq migrate new <snake_case_name>` generates the
+  file with the next version number and prints the registry entry to add.
+
+`initialize_db` runs all pending migrations, so `hq init --db` and tests get the
+latest schema.
 
 ### Search (`src/search/`)
 - **Tantivy** for full-text search (FTS) indexing of notes
