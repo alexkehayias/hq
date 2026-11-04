@@ -799,4 +799,214 @@ mod tests {
         let body = body_to_string(response.into_body()).await;
         assert!(body.contains("\"in_progress\":true"), "body was: {body}");
     }
+
+    /// Runs a command through the session terminal endpoint and returns the
+    /// decoded JSON response.
+    async fn run_terminal(
+        app: &axum::Router,
+        session_id: &str,
+        command: &str,
+    ) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/terminal"))
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "command": command }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        serde_json::from_str(&body_to_string(response.into_body()).await).unwrap()
+    }
+
+    /// The terminal starts at the session workspace root and returns output.
+    #[tokio::test]
+    #[serial]
+    async fn it_runs_terminal_command_in_session_workspace() {
+        let app = test_app().await;
+
+        let output = run_terminal(&app, "terminal-session", "echo hello").await;
+        assert_eq!(output["exit_code"], 0);
+        assert_eq!(output["stdout"], "hello\n");
+        assert_eq!(output["cwd"], "/");
+    }
+
+    /// Shell state and files persist across terminal commands, and files land
+    /// in the session workspace on the host.
+    #[tokio::test]
+    #[serial]
+    async fn it_persists_terminal_state_and_workspace_files() {
+        let (app, state) = test_app_with_state().await;
+        let session_id = "terminal-persist";
+
+        let output = run_terminal(&app, session_id, "mkdir -p notes && cd notes").await;
+        assert_eq!(output["cwd"], "/notes");
+
+        // A prompt refresh reports the persisted working directory.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/terminal"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        assert_eq!(body["cwd"], "/notes");
+
+        // `cwd` persisted into the next command.
+        let output = run_terminal(&app, session_id, "echo hello > note.txt").await;
+        assert_eq!(output["exit_code"], 0);
+
+        let output = run_terminal(&app, session_id, "cat note.txt").await;
+        assert_eq!(output["stdout"], "hello\n");
+
+        // The same file exists in the session workspace on disk.
+        let path = std::path::PathBuf::from(&state.config.storage_path)
+            .join("workspace")
+            .join(session_id)
+            .join("notes")
+            .join("note.txt");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "hello\n");
+    }
+
+    /// Session IDs are used as path segments, so unsafe IDs are rejected.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_unsafe_terminal_session_id() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/bad.session/terminal")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "command": "echo hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The workspace endpoints list files and preview text content.
+    #[tokio::test]
+    #[serial]
+    async fn it_lists_and_previews_workspace_files() {
+        let app = test_app().await;
+        let session_id = "workspace-files";
+
+        run_terminal(
+            &app,
+            session_id,
+            "mkdir -p notes && echo hello > notes/todo.txt",
+        )
+        .await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/workspace"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"path\":\"notes\""), "body was: {body}");
+        assert!(
+            body.contains("\"path\":\"notes/todo.txt\""),
+            "body was: {body}"
+        );
+        assert!(body.contains("\"is_directory\":true"), "body was: {body}");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/workspace/notes/todo.txt"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        assert_eq!(body["path"], "notes/todo.txt");
+        assert_eq!(body["content"], "hello\n");
+        assert_eq!(body["truncated"], false);
+    }
+
+    /// Missing files return 404 instead of an empty preview.
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_not_found_for_missing_workspace_file() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/workspace-missing/workspace/nope.txt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Path traversal and unsafe session IDs are rejected.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_unsafe_workspace_paths() {
+        let app = test_app().await;
+        let session_id = "workspace-traversal";
+
+        // Create the workspace root so the traversal is rejected by the path
+        // check, not by a missing directory.
+        run_terminal(&app, session_id, "echo hello > note.txt").await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/chat/{session_id}/workspace/%2e%2e/secret.txt"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/bad.session/workspace")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

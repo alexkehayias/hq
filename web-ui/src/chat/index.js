@@ -1,4 +1,7 @@
+import '/components/hq-file-tree.js';
+import '/components/hq-icon.js';
 import '/components/hq-nav-rail.js';
+import '/components/hq-terminal.js';
 import AttachmentBubble from './attachment-bubble.js';
 import MessageBubble from './message-bubble.js';
 
@@ -143,6 +146,349 @@ document.addEventListener('DOMContentLoaded', () => {
   const attachButton = document.getElementById('attach-button');
   const fileInput = document.getElementById('file-input');
   const chipsContainer = document.getElementById('attachment-chips');
+
+  // Session workspace: a file browser and a persistent bashkit shell mounted
+  // on this session's workspace.
+  const terminal = document.getElementById('session-terminal');
+  const workspaceTabFiles = document.getElementById('workspace-tab-files');
+  const workspaceTabTerminal = document.getElementById(
+    'workspace-tab-terminal',
+  );
+  const workspaceFilesPane = document.getElementById('workspace-files-pane');
+  const workspaceTerminalPane = document.getElementById(
+    'workspace-terminal-pane',
+  );
+  const workspacePanel = document.getElementById('workspace-panel');
+  const workspaceFullscreen = document.getElementById('workspace-fullscreen');
+  const workspaceRefresh = document.getElementById('workspace-refresh');
+  const workspaceFileTree = document.getElementById('workspace-file-tree');
+  const workspaceTreeView = document.getElementById('workspace-tree-view');
+  const workspacePreview = document.getElementById('workspace-preview');
+  const workspacePreviewBack = document.getElementById(
+    'workspace-preview-back',
+  );
+  const workspacePreviewPath = document.getElementById(
+    'workspace-preview-path',
+  );
+  const workspacePreviewContent = document.getElementById(
+    'workspace-preview-content',
+  );
+  const workspacePreviewTruncated = document.getElementById(
+    'workspace-preview-truncated',
+  );
+
+  let workspaceTab = 'files';
+  let workspaceIsFullscreen = false;
+
+  const setWorkspaceFullscreen = (fullscreen) => {
+    workspaceIsFullscreen = fullscreen;
+    workspacePanel.classList.toggle('fullscreen', fullscreen);
+    // Keep the conversation from scrolling behind the fixed panel.
+    document.body.classList.toggle('overflow-hidden', fullscreen);
+
+    const label = fullscreen ? 'Exit full screen' : 'Full screen';
+    workspaceFullscreen.setAttribute('aria-pressed', String(fullscreen));
+    workspaceFullscreen.title = label;
+    workspaceFullscreen.setAttribute('aria-label', label);
+    workspaceFullscreen
+      .querySelector('hq-icon')
+      ?.setAttribute('name', fullscreen ? 'collapse' : 'expand');
+
+    if (fullscreen && usesSplitFilesLayout() && !currentWorkspaceFile) {
+      const editor = ensurePreviewEditor();
+      editor.setOption('mode', null);
+      editor.setValue('Select a file to preview.');
+    }
+    syncWorkspaceFilesLayout();
+    previewEditor?.refresh();
+  };
+
+  workspaceFullscreen.addEventListener('click', () =>
+    setWorkspaceFullscreen(!workspaceIsFullscreen),
+  );
+
+  const encodeWorkspacePath = (path) =>
+    path.split('/').map(encodeURIComponent).join('/');
+
+  // The shell lives on the server, so after a reload its working directory may
+  // differ from the initial prompt.
+  const refreshTerminalPrompt = async () => {
+    try {
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(sessionId)}/terminal`,
+      );
+      if (!response.ok) return;
+      const { cwd } = await response.json();
+      if (cwd) terminal.setPrompt(`hq:${cwd}$`);
+    } catch (error) {
+      console.warn('Failed to load terminal prompt:', error);
+    }
+  };
+
+  const setWorkspaceTab = (tab) => {
+    workspaceTab = tab;
+    const filesActive = tab === 'files';
+    workspaceTabFiles.setAttribute('aria-selected', String(filesActive));
+    workspaceTabTerminal.setAttribute('aria-selected', String(!filesActive));
+    workspaceFilesPane.classList.toggle('hidden', !filesActive);
+    workspaceTerminalPane.classList.toggle('hidden', filesActive);
+    if (filesActive) {
+      loadWorkspaceFiles();
+      // The editor was display:none while the terminal tab was active.
+      previewEditor?.refresh();
+    } else {
+      refreshTerminalPrompt();
+      terminal.focus();
+    }
+  };
+
+  workspaceTabFiles.addEventListener('click', () => setWorkspaceTab('files'));
+  workspaceTabTerminal.addEventListener('click', () =>
+    setWorkspaceTab('terminal'),
+  );
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && workspaceIsFullscreen) {
+      event.preventDefault();
+      setWorkspaceFullscreen(false);
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === '`') {
+      event.preventDefault();
+      setWorkspaceTab('terminal');
+    }
+  });
+
+  // ---- Files ----
+
+  // Map a filename to one of the CodeMirror modes vendored under
+  // /vendor/codemirror/mode. Unknown extensions fall back to plain text.
+  const modeForPath = (path) => {
+    const name = path.toLowerCase();
+    if (name.endsWith('.md') || name.endsWith('.markdown')) return 'markdown';
+    if (name.endsWith('.py')) return 'python';
+    if (name.endsWith('.json')) return { name: 'javascript', json: true };
+    if (
+      name.endsWith('.js') ||
+      name.endsWith('.mjs') ||
+      name.endsWith('.cjs') ||
+      name.endsWith('.jsx') ||
+      name.endsWith('.ts') ||
+      name.endsWith('.tsx')
+    ) {
+      return 'javascript';
+    }
+    if (
+      name.endsWith('.sh') ||
+      name.endsWith('.bash') ||
+      name.endsWith('.zsh')
+    ) {
+      return 'shell';
+    }
+    if (name.endsWith('.yaml') || name.endsWith('.yml')) return 'yaml';
+    if (
+      name.endsWith('.html') ||
+      name.endsWith('.htm') ||
+      name.endsWith('.xml') ||
+      name.endsWith('.svg')
+    ) {
+      return 'xml';
+    }
+    return null;
+  };
+
+  let previewEditor = null;
+
+  // CodeMirror is a global loaded by index.html before this module runs.
+  const ensurePreviewEditor = () => {
+    if (previewEditor) return previewEditor;
+    previewEditor = CodeMirror(workspacePreviewContent, {
+      value: '',
+      mode: null,
+      readOnly: true,
+      lineNumbers: true,
+      lineWrapping: true,
+    });
+    previewEditor.setSize('100%', '100%');
+    return previewEditor;
+  };
+
+  const isWideWorkspace = () =>
+    window.matchMedia('(min-width: 1024px)').matches;
+
+  // Full screen on a wide viewport keeps the picker and preview side by side.
+  const usesSplitFilesLayout = () => workspaceIsFullscreen && isWideWorkspace();
+
+  let currentWorkspaceFile = null;
+
+  const syncWorkspaceFilesLayout = () => {
+    if (usesSplitFilesLayout()) {
+      workspaceTreeView.classList.remove('hidden');
+      workspacePreview.classList.remove('hidden');
+      return;
+    }
+    workspaceTreeView.classList.toggle('hidden', !!currentWorkspaceFile);
+    workspacePreview.classList.toggle('hidden', !currentWorkspaceFile);
+  };
+
+  const showWorkspaceTree = () => {
+    if (usesSplitFilesLayout()) return;
+    currentWorkspaceFile = null;
+    workspaceFileTree.removeAttribute('selected');
+    // Removing the attribute re-renders the tree, but call render() as well so
+    // the highlight is cleared even if the attribute was already absent.
+    workspaceFileTree.render?.();
+    workspacePreview.classList.add('hidden');
+    workspaceTreeView.classList.remove('hidden');
+  };
+
+  const loadWorkspaceFiles = async () => {
+    try {
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(sessionId)}/workspace`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { files } = await response.json();
+      workspaceFileTree.setAttribute('files', JSON.stringify(files || []));
+    } catch (error) {
+      console.warn('Failed to load workspace files:', error);
+    }
+  };
+
+  // Guards against an earlier file's response overwriting a newer selection.
+  let previewRequest = 0;
+
+  const openWorkspaceFile = async (path) => {
+    const requestId = ++previewRequest;
+
+    currentWorkspaceFile = path;
+    workspaceFileTree.setAttribute('selected', path);
+    workspacePreviewPath.textContent = path;
+    workspacePreviewTruncated.classList.add('hidden');
+    syncWorkspaceFilesLayout();
+
+    const editor = ensurePreviewEditor();
+    editor.setOption('mode', null);
+    editor.setValue('Loading…');
+
+    try {
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(sessionId)}/workspace/${encodeWorkspacePath(path)}`,
+      );
+      if (!response.ok) {
+        const message =
+          response.status === 415
+            ? 'Binary files can’t be previewed.'
+            : (await response.text()) || `Request failed (${response.status})`;
+        throw new Error(message);
+      }
+      const result = await response.json();
+      if (requestId !== previewRequest) return;
+
+      workspacePreviewPath.textContent = result.path || path;
+      editor.setOption('mode', modeForPath(result.path || path));
+      editor.setValue(result.content || '');
+      workspacePreviewTruncated.classList.toggle('hidden', !result.truncated);
+    } catch (error) {
+      if (requestId !== previewRequest) return;
+      editor.setOption('mode', null);
+      editor.setValue(error.message || String(error));
+    }
+    editor.refresh();
+  };
+
+  workspaceFileTree.addEventListener('file-select', (event) => {
+    openWorkspaceFile(event.detail.path);
+  });
+
+  workspacePreviewBack.addEventListener('click', showWorkspaceTree);
+
+  window.addEventListener('resize', () => {
+    syncWorkspaceFilesLayout();
+    previewEditor?.refresh();
+  });
+
+  workspaceRefresh.addEventListener('click', () => {
+    loadWorkspaceFiles();
+    if (workspaceTab === 'terminal') refreshTerminalPrompt();
+  });
+
+  loadWorkspaceFiles();
+  refreshTerminalPrompt();
+
+  // Drop the trailing newline so command output doesn't leave a blank line.
+  const formatTerminalOutput = (text) =>
+    text.replace(/\r\n/g, '\n').replace(/\n$/, '');
+
+  // bashkit caps output at 1 MB, but that can still be hundreds of thousands
+  // of short lines. Render only the newest slice so the page stays responsive.
+  const MAX_OUTPUT_CHARS = 100_000;
+  const MAX_OUTPUT_LINES = 2_000;
+
+  const printTerminalOutput = (text, tone) => {
+    let output = formatTerminalOutput(text);
+    let truncated = false;
+
+    // Trim by characters first so splitting can't explode on huge output.
+    if (output.length > MAX_OUTPUT_CHARS) {
+      output = output.slice(-MAX_OUTPUT_CHARS);
+      truncated = true;
+    }
+
+    const lines = output.split('\n');
+    if (lines.length > MAX_OUTPUT_LINES) {
+      output = lines.slice(-MAX_OUTPUT_LINES).join('\n');
+      truncated = true;
+    }
+
+    if (truncated) {
+      terminal.print('… output truncated for display …', 'muted');
+    }
+    terminal.print(output, tone);
+  };
+
+  terminal.addEventListener('command', async (event) => {
+    const line = event.detail.line;
+
+    // `clear` is a display concern, not a shell command.
+    if (line.trim() === 'clear') {
+      terminal.clear();
+      return;
+    }
+
+    terminal.setAttribute('disabled', '');
+    try {
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(sessionId)}/terminal`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: line }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) || `Request failed (${response.status})`,
+        );
+      }
+
+      const result = await response.json();
+      if (result.stdout) printTerminalOutput(result.stdout);
+      if (result.stderr) printTerminalOutput(result.stderr, 'error');
+      if (result.exit_code !== 0) {
+        terminal.print(`[exit ${result.exit_code}]`, 'muted');
+      }
+      if (result.truncated) terminal.print('[output truncated]', 'muted');
+      if (result.cwd) terminal.setPrompt(`hq:${result.cwd}$`);
+    } catch (error) {
+      terminal.print(error.message || String(error), 'error');
+    } finally {
+      terminal.removeAttribute('disabled');
+      terminal.focus();
+      // Commands can create or remove files; keep the browser in sync.
+      loadWorkspaceFiles();
+    }
+  });
 
   const scrollToBottom = () => {
     chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -342,6 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (error) {
       console.warn('Failed to delete attachment:', error);
     }
+    loadWorkspaceFiles();
   };
 
   const removeAttachment = (attachment) => {
@@ -416,6 +763,7 @@ document.addEventListener('DOMContentLoaded', () => {
       attachment.error = error.message;
     }
     renderChips();
+    loadWorkspaceFiles();
   };
 
   attachButton.addEventListener('click', () => fileInput.click());
