@@ -12,13 +12,16 @@ use axum::{
 use serde_json::json;
 
 use super::public::{
-    LoopListResponse, LoopRunResponse, LoopRunsQuery, LoopRunsResponse, LoopSummaryResponse,
-    UpdateLoopRequest, UpdateLoopResponse,
+    LoopListResponse, LoopRunResponse, LoopRunsPageQuery, LoopRunsPageResponse, LoopRunsQuery,
+    LoopRunsResponse, LoopSummaryResponse, UpdateLoopRequest, UpdateLoopResponse,
 };
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 use crate::core::AppConfig;
-use crate::loops::db::{find_all_loops, find_loop, find_loop_runs, update_loop_system_prompt};
+use crate::loops::db::{
+    count_loop_runs, find_all_loops, find_loop, find_loop_runs, find_loop_runs_page,
+    update_loop_system_prompt,
+};
 use crate::loops::supervisor::{self, LoopSupervisorConfig};
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -133,29 +136,50 @@ async fn list_loop_runs(
     let runs = find_loop_runs(&db, &id, limit)
         .await?
         .into_iter()
-        .map(|run| LoopRunResponse {
-            id: run.id,
-            loop_id: run.loop_id,
-            channel_id: run.channel_id,
-            event: run.event,
-            status: run.status.to_string(),
-            session_id: run.session_id,
-            started_at: run.started_at,
-            finished_at: run.finished_at,
-            duration_ms: run.duration_ms,
-            response: run.response,
-            error: run.error,
-            has_transcript: run.has_transcript,
-        })
+        .map(LoopRunResponse::from)
         .collect();
 
     Ok(Json(LoopRunsResponse { runs }).into_response())
+}
+
+/// A page of runs across every loop, newest first.
+async fn list_all_loop_runs(
+    State(state): State<SharedState>,
+    Query(params): Query<LoopRunsPageQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let db = state
+        .read()
+        .expect("Unable to read shared state")
+        .db
+        .clone();
+
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1) * limit;
+
+    let total_runs = count_loop_runs(&db).await?;
+    let runs = find_loop_runs_page(&db, limit, offset)
+        .await?
+        .into_iter()
+        .map(LoopRunResponse::from)
+        .collect();
+    let total_pages = (total_runs as f64 / limit as f64).ceil() as i64;
+
+    Ok(Json(LoopRunsPageResponse {
+        runs,
+        page,
+        limit,
+        total_runs,
+        total_pages,
+    })
+    .into_response())
 }
 
 /// Create the loops router.
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", get(list_loops))
+        .route("/runs", get(list_all_loop_runs))
         .route("/{id}", put(update_loop))
         .route("/{id}/runs", get(list_loop_runs))
 }

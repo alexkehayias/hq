@@ -5,6 +5,8 @@ import { html } from '/components/lib/html.js';
 let loops = [];
 let channels = [];
 let currentLoop = null;
+let activityPage = 1;
+let activityLoaded = false;
 
 /* ===== Elements ===== */
 const pageShell = document.getElementById('page-shell');
@@ -15,12 +17,17 @@ const channelDetailView = document.getElementById('channel-detail-view');
 const tabs = document.getElementById('tabs');
 const loopsPanel = document.getElementById('loops-panel');
 const channelsPanel = document.getElementById('channels-panel');
+const activityPanel = document.getElementById('activity-panel');
 const loopsState = document.getElementById('loops-state');
 const channelsState = document.getElementById('channels-state');
+const activityState = document.getElementById('activity-state');
 const loopsErrorMsg = document.getElementById('loops-error-msg');
 const channelsErrorMsg = document.getElementById('channels-error-msg');
+const activityErrorMsg = document.getElementById('activity-error-msg');
 const loopGrid = document.getElementById('loop-grid');
 const channelGrid = document.getElementById('channel-grid');
+const activityList = document.getElementById('activity-list');
+const activityPagination = document.getElementById('activity-pagination');
 const promptSection = document.getElementById('loop-detail-prompt');
 const promptEditor = document.getElementById('prompt-editor');
 
@@ -68,17 +75,23 @@ const TAB_BASE =
 const TAB_ACTIVE = `${TAB_BASE} bg-card text-ink shadow-sm`;
 const TAB_IDLE = `${TAB_BASE} text-muted hover:text-ink`;
 
-function selectTab(tab) {
-  const isLoops = tab !== 'channels';
-  loopsPanel.classList.toggle('hidden', !isLoops);
-  channelsPanel.classList.toggle('hidden', isLoops);
+const TAB_PANELS = {
+  loops: loopsPanel,
+  channels: channelsPanel,
+  activity: activityPanel,
+};
 
-  const loopsTab = document.getElementById('tab-loops');
-  const channelsTab = document.getElementById('tab-channels');
-  loopsTab.className = isLoops ? TAB_ACTIVE : TAB_IDLE;
-  channelsTab.className = isLoops ? TAB_IDLE : TAB_ACTIVE;
-  loopsTab.setAttribute('aria-selected', String(isLoops));
-  channelsTab.setAttribute('aria-selected', String(!isLoops));
+function selectTab(tab) {
+  const active = TAB_PANELS[tab] ? tab : 'activity';
+
+  for (const [name, panel] of Object.entries(TAB_PANELS)) {
+    panel.classList.toggle('hidden', name !== active);
+    const button = document.getElementById(`tab-${name}`);
+    button.className = name === active ? TAB_ACTIVE : TAB_IDLE;
+    button.setAttribute('aria-selected', String(name === active));
+  }
+
+  if (active === 'activity' && !activityLoaded) loadActivity(activityPage);
 }
 
 tabs.addEventListener('click', (event) => {
@@ -87,9 +100,8 @@ tabs.addEventListener('click', (event) => {
   selectTab(button.dataset.tab);
 
   const url = new URL(window.location.href);
-  if (button.dataset.tab === 'channels')
-    url.searchParams.set('tab', 'channels');
-  else url.searchParams.delete('tab');
+  if (button.dataset.tab === 'activity') url.searchParams.delete('tab');
+  else url.searchParams.set('tab', button.dataset.tab);
   window.history.replaceState({}, '', url);
 });
 
@@ -110,6 +122,13 @@ async function loadList() {
 
 document.getElementById('loops-retry').addEventListener('click', loadList);
 document.getElementById('channels-retry').addEventListener('click', loadList);
+document
+  .getElementById('activity-retry')
+  .addEventListener('click', () => loadActivity(activityPage));
+
+activityPagination.addEventListener('page-change', (event) => {
+  loadActivity(event.detail.page);
+});
 
 function renderLoops() {
   if (loops.length === 0) {
@@ -127,6 +146,38 @@ function renderChannels() {
   }
   channelGrid.innerHTML = channels.map(channelCard).map(toValue).join('');
   channelsState.setAttribute('state', 'content');
+}
+
+/* ===== Activity ===== */
+const ACTIVITY_LIMIT = 20;
+
+async function loadActivity(page = 1) {
+  activityPage = page;
+  activityState.setAttribute('state', 'loading');
+  try {
+    const res = await fetch(
+      `/api/loops/runs?page=${page}&limit=${ACTIVITY_LIMIT}`,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const runs = data.runs || [];
+
+    if (runs.length === 0) {
+      activityState.setAttribute('state', 'empty');
+    } else {
+      activityList.innerHTML = runs
+        .map((run) => loopRun(run, true))
+        .map(toValue)
+        .join('');
+      activityPagination.setAttribute('page', String(data.page));
+      activityPagination.setAttribute('total-pages', String(data.total_pages));
+      activityState.setAttribute('state', 'content');
+    }
+    activityLoaded = true;
+  } catch (err) {
+    activityErrorMsg.textContent = `Failed to load activity: ${err.message}`;
+    activityState.setAttribute('state', 'error');
+  }
 }
 
 /* ===== Cards ===== */
@@ -352,62 +403,11 @@ function runsSection(runs, error) {
   if (runs.length === 0) {
     return html`<p class="text-sm text-muted">No runs yet. Runs appear when the loop receives an event.</p>`;
   }
-  return html`<div class="flex flex-col gap-2">${runs.map(runRow)}</div>`;
+  return html`<div class="flex flex-col gap-2">${runs.map((run) => loopRun(run))}</div>`;
 }
 
-function runRow(run) {
-  const detail = run.error || run.response || run.event;
-  const content = html`
-    <div class="flex items-center justify-between gap-2">
-      <div class="flex flex-wrap items-center gap-2">
-        ${statusIcon(run.status)}
-        <span class="font-mono text-xs text-muted">${run.channel_id}</span>
-        <span class="text-xs text-muted">${formatTime(run.started_at)}</span>
-        ${run.duration_ms != null ? html`<span class="text-xs text-muted">${formatDuration(run.duration_ms)}</span>` : ''}
-      </div>
-      ${
-        run.has_transcript
-          ? html`<span class="shrink-0 text-muted transition-colors group-hover:text-teal-strong"><hq-icon name="chevron-right" size="sm"></hq-icon></span>`
-          : ''
-      }
-    </div>
-    <p class="mt-2 max-h-24 overflow-hidden whitespace-pre-wrap break-words font-mono text-xs text-body">${detail}</p>
-  `;
-
-  if (!run.has_transcript) {
-    return html`<div class="rounded-[14px] border border-line bg-card p-3">${content}</div>`;
-  }
-
-  return html`<a href="/chat/index.html?session_id=${encodeURIComponent(run.session_id)}"
-               class="group block rounded-[14px] border border-line bg-card p-3 transition-shadow hover:shadow-lg/5 focus:outline-none focus:ring-2 focus:ring-teal">${content}</a>`;
-}
-
-const STATUS_ICON = {
-  success: { name: 'check', tone: 'text-moss' },
-  error: { name: 'alert', tone: 'text-rust' },
-  interrupted: { name: 'close', tone: 'text-muted' },
-  running: { name: 'spinner', tone: 'text-teal animate-spin' },
-};
-
-function statusIcon(status) {
-  const { name, tone } = STATUS_ICON[status] || STATUS_ICON.running;
-  return html`<span class="shrink-0 ${tone}" role="img" aria-label="${status}" title="${status}"><hq-icon name="${name}" size="sm"></hq-icon></span>`;
-}
-
-function formatTime(iso) {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString();
-}
-
-function formatDuration(ms) {
-  if (ms < 1000) return `${ms} ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)} s`;
-  const minutes = Math.floor(seconds / 60);
-  const remaining = Math.round(seconds % 60);
-  return `${minutes}m ${remaining}s`;
+function loopRun(run, showLoop = false) {
+  return html`<hq-loop-run run=${JSON.stringify(run)} show-loop=${showLoop}></hq-loop-run>`;
 }
 
 /* ===== Helpers ===== */
@@ -457,5 +457,6 @@ if (loopId) {
 } else if (channelId) {
   showChannelDetail(channelId);
 } else {
-  showList(params.get('tab') === 'channels' ? 'channels' : 'loops');
+  const tab = params.get('tab');
+  showList(TAB_PANELS[tab] ? tab : 'activity');
 }

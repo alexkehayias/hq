@@ -289,4 +289,81 @@ mod tests {
         assert!(body.contains("\"run-2\""), "{body}");
         assert!(!body.contains("\"run-1\""), "{body}");
     }
+
+    /// Tests that the activity feed pages runs across every loop, newest first.
+    #[tokio::test]
+    #[serial]
+    async fn it_pages_all_loop_runs() {
+        let (app, state) = test_app_with_state().await;
+        let db = state.db.clone();
+
+        db.call(|conn| {
+            for id in ["loop-1", "loop-2"] {
+                conn.execute(
+                    "INSERT INTO loop (id, system_prompt, tools)
+                     VALUES (?1, 'You are a loop.', '[\"bash\"]')",
+                    [id],
+                )?;
+            }
+            conn.execute(
+                "INSERT INTO loop_run
+                 (id, loop_id, channel_id, event, status, session_id, started_at)
+                 VALUES ('run-1', 'loop-1', 'alpha', 'first', 'success', 'run-1',
+                         '2026-01-01T00:00:00.000Z')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_run
+                 (id, loop_id, channel_id, event, status, session_id, started_at)
+                 VALUES ('run-2', 'loop-2', 'alpha', 'second', 'success', 'run-2',
+                         '2026-01-02T00:00:00.000Z')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_run
+                 (id, loop_id, channel_id, event, status, session_id, started_at)
+                 VALUES ('run-3', 'loop-1', 'alpha', 'third', 'success', 'run-3',
+                         '2026-01-03T00:00:00.000Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/loops/runs?page=1&limit=2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"total_runs\":3"), "{body}");
+        assert!(body.contains("\"total_pages\":2"), "{body}");
+        assert!(body.contains("\"page\":1"), "{body}");
+        assert!(body.contains("\"run-3\""), "{body}");
+        assert!(body.contains("\"run-2\""), "{body}");
+        assert!(!body.contains("\"run-1\""), "{body}");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/loops/runs?page=2&limit=2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"run-1\""), "{body}");
+        assert!(!body.contains("\"run-2\""), "{body}");
+    }
 }
