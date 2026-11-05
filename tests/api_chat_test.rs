@@ -12,6 +12,9 @@ mod tests {
     use tower::util::ServiceExt;
 
     use crate::test_utils::{body_to_string, test_app, test_app_with_skills, test_app_with_state};
+    use hq::ai::chat::db::get_or_create_session;
+    use hq::ai::chat::models::SessionMode;
+    use hq::api::AppState;
 
     /// Tests getting chat sessions returns empty list initially
     #[tokio::test]
@@ -800,6 +803,28 @@ mod tests {
         assert!(body.contains("\"in_progress\":true"), "body was: {body}");
     }
 
+    /// Create a chat session record. The terminal and workspace endpoints
+    /// require the session to already exist.
+    async fn create_session(state: &AppState, session_id: &str) {
+        get_or_create_session(&state.db, session_id, &[], SessionMode::Chat)
+            .await
+            .unwrap();
+    }
+
+    /// Create the session's workspace directory on the host. The endpoints no
+    /// longer create it on demand.
+    fn create_workspace(state: &AppState, session_id: &str) -> std::path::PathBuf {
+        let path = workspace_path(state, session_id);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn workspace_path(state: &AppState, session_id: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(&state.config.storage_path)
+            .join("workspace")
+            .join(session_id)
+    }
+
     /// Runs a command through the session terminal endpoint and returns the
     /// decoded JSON response.
     async fn run_terminal(
@@ -830,7 +855,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn it_runs_terminal_command_in_session_workspace() {
-        let app = test_app().await;
+        let (app, state) = test_app_with_state().await;
+        create_session(&state, "terminal-session").await;
+        create_workspace(&state, "terminal-session");
 
         let output = run_terminal(&app, "terminal-session", "echo hello").await;
         assert_eq!(output["exit_code"], 0);
@@ -845,6 +872,8 @@ mod tests {
     async fn it_persists_terminal_state_and_workspace_files() {
         let (app, state) = test_app_with_state().await;
         let session_id = "terminal-persist";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
 
         let output = run_terminal(&app, session_id, "mkdir -p notes && cd notes").await;
         assert_eq!(output["cwd"], "/notes");
@@ -908,8 +937,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn it_lists_and_previews_workspace_files() {
-        let app = test_app().await;
+        let (app, state) = test_app_with_state().await;
         let session_id = "workspace-files";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
 
         run_terminal(
             &app,
@@ -958,12 +989,15 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn it_returns_not_found_for_missing_workspace_file() {
-        let app = test_app().await;
+        let (app, state) = test_app_with_state().await;
+        let session_id = "workspace-missing";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/chat/workspace-missing/workspace/nope.txt")
+                    .uri(format!("/api/chat/{session_id}/workspace/nope.txt"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -977,8 +1011,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn it_rejects_unsafe_workspace_paths() {
-        let app = test_app().await;
+        let (app, state) = test_app_with_state().await;
         let session_id = "workspace-traversal";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
 
         // Create the workspace root so the traversal is rejected by the path
         // check, not by a missing directory.
@@ -1008,5 +1044,84 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The terminal endpoint rejects sessions that do not exist.
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_not_found_for_unknown_terminal_session() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/no-such-session/terminal")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "command": "echo hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// The workspace endpoints reject sessions that do not exist.
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_not_found_for_unknown_workspace_session() {
+        let app = test_app().await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/no-such-session/workspace")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/no-such-session/workspace/note.txt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// A terminal command never creates the workspace directory on demand.
+    #[tokio::test]
+    #[serial]
+    async fn it_does_not_create_workspace_for_existing_session() {
+        let (app, state) = test_app_with_state().await;
+        let session_id = "terminal-no-workspace";
+        create_session(&state, session_id).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/terminal"))
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "command": "echo hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!workspace_path(&state, session_id).exists());
     }
 }

@@ -3,6 +3,7 @@
 mod db;
 pub mod public;
 mod router;
+mod session;
 pub mod stream;
 mod terminal;
 mod workspace;

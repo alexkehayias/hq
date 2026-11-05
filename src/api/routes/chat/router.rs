@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
 use super::stream::{self, SessionStream};
+use super::terminal::{terminal_cwd_handler, terminal_handler};
+use super::workspace::{list_workspace_files, read_workspace_file};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
 use crate::ai::chat::{
@@ -862,15 +864,9 @@ pub fn router() -> Router<SharedState> {
         .route("/{id}/stream", get(chat_stream_handler))
         .route(
             "/{id}/terminal",
-            get(super::terminal::terminal_cwd_handler).post(super::terminal::terminal_handler),
+            get(terminal_cwd_handler).post(terminal_handler),
         )
-        .route(
-            "/{id}/workspace",
-            get(super::workspace::list_workspace_files),
-        )
-        .route(
-            "/{id}/workspace/{*path}",
-            get(super::workspace::read_workspace_file),
-        )
+        .route("/{id}/workspace", get(list_workspace_files))
+        .route("/{id}/workspace/{*path}", get(read_workspace_file))
         .route("/sessions", get(chat_list))
 }

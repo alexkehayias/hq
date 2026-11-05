@@ -119,16 +119,14 @@ impl BashTool {
 
 /// Build a bashkit shell with `workspace_path` mounted at the sandbox root.
 ///
-/// The workspace directory is created if it doesn't exist. `cwd` is the
-/// initial working directory inside the sandbox; pass `/` to start at the top
-/// of the mounted workspace.
+/// The workspace directory must already exist. `cwd` is the initial working
+/// directory inside the sandbox; pass `/` to start at the top of the mounted
+/// workspace.
 pub async fn new_sandbox(
     storage_path: &str,
     workspace_path: &Path,
     cwd: impl Into<PathBuf>,
 ) -> Result<Bash> {
-    fs::create_dir_all(workspace_path).await?;
-
     let backend = RealFs::new(workspace_path, RealFsMode::ReadWrite)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
@@ -159,6 +157,7 @@ pub async fn run_in_sandbox(
     command: &str,
 ) -> Result<BashOutput> {
     // Preserve bashkit's default starting directory for the agent's bash tool.
+    fs::create_dir_all(workspace_path).await?;
     let mut bash = new_sandbox(storage_path, workspace_path, "/home/user").await?;
 
     let output = bash.exec(command).await.map_err(|e| {

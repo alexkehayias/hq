@@ -16,6 +16,7 @@ use axum::{
 use tokio::io::AsyncReadExt;
 
 use super::public::{WorkspaceFileEntry, WorkspaceFileResponse, WorkspaceFilesResponse};
+use super::session::{is_valid_session_id, session_exists, workspace_root};
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 
@@ -29,22 +30,6 @@ const MAX_DEPTH: usize = 8;
 
 /// Maximum bytes returned when previewing a file.
 const MAX_PREVIEW_BYTES: usize = 256 * 1024;
-
-/// Session IDs are used as a path segment (`workspace/{session_id}`), so
-/// restrict them to a safe character set to prevent path traversal.
-fn is_valid_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-fn workspace_root(storage_path: &str, session_id: &str) -> PathBuf {
-    PathBuf::from(storage_path)
-        .join("workspace")
-        .join(session_id)
-}
 
 /// Reduce a client-supplied path to a relative path with no `..`, root, or
 /// prefix components. Returns `None` for anything that could escape the
@@ -124,12 +109,15 @@ pub async fn list_workspace_files(
         return Ok((StatusCode::BAD_REQUEST, "Invalid session_id").into_response());
     }
 
-    let storage_path = state
-        .read()
-        .expect("Unable to read shared state")
-        .config
-        .storage_path
-        .clone();
+    let (db, storage_path) = {
+        let state = state.read().expect("Unable to read shared state");
+        (state.db.clone(), state.config.storage_path.clone())
+    };
+
+    if !session_exists(&db, &session_id).await? {
+        return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
+    }
+
     let root = workspace_root(&storage_path, &session_id);
 
     let files = tokio::task::spawn_blocking(move || {
@@ -155,12 +143,15 @@ pub async fn read_workspace_file(
         return Ok((StatusCode::BAD_REQUEST, "Invalid path").into_response());
     };
 
-    let storage_path = state
-        .read()
-        .expect("Unable to read shared state")
-        .config
-        .storage_path
-        .clone();
+    let (db, storage_path) = {
+        let state = state.read().expect("Unable to read shared state");
+        (state.db.clone(), state.config.storage_path.clone())
+    };
+
+    if !session_exists(&db, &session_id).await? {
+        return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
+    }
+
     let root = workspace_root(&storage_path, &session_id);
     let target = root.join(&relative);
 

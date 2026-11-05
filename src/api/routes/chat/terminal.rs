@@ -5,7 +5,7 @@
 //! the session workspace (`{storage}/workspace/{session_id}`) mounted at `/`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -18,6 +18,7 @@ use axum::{
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::public::{TerminalCwdResponse, TerminalRequest, TerminalResponse};
+use super::session::{is_valid_session_id, session_exists, workspace_root};
 use crate::ai::tools::new_sandbox;
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
@@ -79,18 +80,8 @@ impl TerminalRegistry {
     }
 }
 
-/// Session IDs are used as a path segment (`workspace/{session_id}`), so
-/// restrict them to a safe character set to prevent path traversal.
-fn is_valid_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-/// Look up a session's shell, creating it (and its workspace mount) on first
-/// use. Concurrent first requests may build two shells; the loser is dropped.
+/// Look up a session's shell, creating it on first use. Concurrent first
+/// requests may build two shells; the loser is dropped.
 async fn get_or_create_shell(
     registry: &TerminalRegistry,
     storage_path: &str,
@@ -117,11 +108,14 @@ pub async fn terminal_cwd_handler(
         return Ok((StatusCode::BAD_REQUEST, "Invalid session_id").into_response());
     }
 
-    let registry = state
-        .read()
-        .expect("Unable to read shared state")
-        .terminals
-        .clone();
+    let (db, registry) = {
+        let state = state.read().expect("Unable to read shared state");
+        (state.db.clone(), state.terminals.clone())
+    };
+
+    if !session_exists(&db, &session_id).await? {
+        return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
+    }
 
     let cwd = match registry.get(&session_id) {
         Some(shell) => {
@@ -144,14 +138,28 @@ pub async fn terminal_handler(
         return Ok((StatusCode::BAD_REQUEST, "Invalid session_id").into_response());
     }
 
-    let (storage_path, registry) = {
+    let (storage_path, db, registry) = {
         let state = state.read().expect("Unable to read shared state");
-        (state.config.storage_path.clone(), state.terminals.clone())
+        (
+            state.config.storage_path.clone(),
+            state.db.clone(),
+            state.terminals.clone(),
+        )
     };
 
-    let workspace_path = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&session_id);
+    if !session_exists(&db, &session_id).await? {
+        return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
+    }
+
+    let workspace_path = workspace_root(&storage_path, &session_id);
+    let workspace_exists = tokio::fs::metadata(&workspace_path)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false);
+    if !workspace_exists {
+        return Ok((StatusCode::NOT_FOUND, "Workspace not found").into_response());
+    }
+
     let shell = get_or_create_shell(&registry, &storage_path, &workspace_path, &session_id).await?;
 
     let mut bash = shell.lock().await;
