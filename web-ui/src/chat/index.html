@@ -7,55 +7,206 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#FAFBF8">
   <link href="/output.css" rel="stylesheet">
+  <link href="/vendor/codemirror/codemirror.min.css" rel="stylesheet">
+  <style>
+    #workspace-preview-content .CodeMirror {
+      height: 100%;
+      font-size: 12px;
+      line-height: 1.5;
+      background: transparent;
+    }
+    #workspace-preview-content .CodeMirror-lines {
+      padding: 8px 0;
+    }
+    #workspace-preview-content .CodeMirror-gutters {
+      background: transparent;
+      border-right: 1px solid var(--color-line);
+    }
+    /* The workspace shell is the container; the terminal fills it edge to edge. */
+    #workspace-terminal-pane hq-terminal [data-hq-root] {
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    #workspace-panel.fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      width: 100%;
+      height: 100%;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      border: 0;
+    }
+    /* Full screen on wide viewports: file picker left, preview right. */
+    @media (min-width: 1024px) {
+      #workspace-panel.fullscreen #workspace-files-pane {
+        flex-direction: row;
+      }
+      #workspace-panel.fullscreen #workspace-tree-view {
+        display: flex;
+        flex: none;
+        width: 280px;
+        border-right: 1px solid var(--color-line);
+        background: var(--color-mist);
+      }
+      #workspace-panel.fullscreen #workspace-preview {
+        display: flex;
+        min-width: 0;
+      }
+      #workspace-panel.fullscreen #workspace-preview-back {
+        display: none;
+      }
+    }
+  </style>
   <title>Chat</title>
   <script src="/theme-init.js"></script>
 </head>
 <body class="bg-canvas text-ink" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
   <div class="flex h-dvh bg-canvas">
     <hq-nav-rail active="chat"></hq-nav-rail>
-    <div class="flex min-w-0 flex-1 flex-col">
-      <div id="chat-container" class="grow overflow-y-auto scrollbar-none" style="scrollbar-gutter: stable both-edges;">
-        <div id="chat-display" class="mx-auto flex w-full max-w-[720px] flex-col-reverse px-6 py-6"></div>
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
+      <!-- Conversation -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div id="chat-container" class="grow overflow-y-auto scrollbar-none" style="scrollbar-gutter: stable both-edges;">
+          <div id="chat-display" class="mx-auto flex w-full max-w-[720px] flex-col-reverse px-6 py-6"></div>
+        </div>
+        <div class="mx-auto w-full max-w-[720px] px-6 pb-6" style="margin-top: -14px;">
+          <div class="rounded-[18px] border border-line bg-mist p-1.5 md:bg-card">
+            <div id="attachment-chips" class="flex flex-wrap gap-2 empty:hidden px-2.5 pt-1.5"></div>
+            <textarea id="chat-input"
+                      class="block max-h-[11.5rem] min-h-12 w-full resize-none overflow-auto bg-transparent px-2.5 py-1.5 text-ink placeholder:text-muted outline-none"
+                      placeholder="Type a message..."
+                      rows="1"
+                      autofocus></textarea>
+            <div class="flex items-center justify-between gap-2 px-1 pb-1">
+              <button id="attach-button"
+                      type="button"
+                      title="Attach files"
+                      aria-label="Attach files"
+                      class="flex size-8 shrink-0 items-center justify-center rounded-full bg-line text-muted hover:bg-mist hover:text-ink">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
+                </svg>
+              </button>
+              <button id="send-button"
+                      type="button"
+                      aria-label="Send message"
+                      disabled
+                      class="flex size-8 shrink-0 items-center justify-center rounded-full bg-teal-strong text-white hover:bg-teal disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-teal-strong">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <input type="file"
+                 id="file-input"
+                 class="hidden"
+                 multiple
+                 accept="image/*">
+        </div>
       </div>
-      <div class="mx-auto w-full max-w-[720px] px-6 pb-6" style="margin-top: -14px;">
-        <div class="rounded-[18px] border border-line bg-mist p-1.5 md:bg-card">
-          <div id="attachment-chips" class="flex flex-wrap gap-2 empty:hidden px-2.5 pt-1.5"></div>
-          <textarea id="chat-input"
-                    class="block max-h-[11.5rem] min-h-12 w-full resize-none overflow-auto bg-transparent px-2.5 py-1.5 text-ink placeholder:text-muted outline-none"
-                    placeholder="Type a message..."
-                    rows="1"
-                    autofocus></textarea>
-          <div class="flex items-center justify-between gap-2 px-1 pb-1">
-            <button id="attach-button"
+
+      <!-- Session workspace: files and a persistent shell -->
+      <aside id="workspace-panel"
+             class="hidden min-h-0 shrink-0 flex-col border-line bg-card lg:flex lg:h-auto lg:w-[420px] lg:border-l xl:w-[480px]">
+        <div class="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+          <div class="flex min-w-0 items-center gap-2">
+            <hq-icon name="folder" size="sm" tone="text-muted"></hq-icon>
+            <h2 class="truncate text-sm font-semibold text-ink">Workspace</h2>
+          </div>
+          <div class="flex shrink-0 items-center gap-1">
+            <button id="workspace-fullscreen"
                     type="button"
-                    title="Attach files"
-                    aria-label="Attach files"
-                    class="flex size-8 shrink-0 items-center justify-center rounded-full bg-line text-muted hover:bg-mist hover:text-ink">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
-              </svg>
+                    title="Full screen"
+                    aria-label="Full screen"
+                    aria-pressed="false"
+                    class="flex size-7 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
+              <hq-icon name="expand" size="sm"></hq-icon>
             </button>
-            <button id="send-button"
+            <button id="workspace-refresh"
                     type="button"
-                    aria-label="Send message"
-                    disabled
-                    class="flex size-8 shrink-0 items-center justify-center rounded-full bg-teal-strong text-white hover:bg-teal disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-teal-strong">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
-              </svg>
+                    title="Refresh files"
+                    aria-label="Refresh files"
+                    class="flex size-7 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
+              <hq-icon name="refresh" size="sm"></hq-icon>
             </button>
           </div>
         </div>
-        <input type="file"
-               id="file-input"
-               class="hidden"
-               multiple
-               accept="image/*">
-      </div>
+
+        <div class="flex items-center gap-1 border-b border-line px-2 py-1.5" role="tablist" aria-label="Workspace panels">
+          <button id="workspace-tab-files"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="workspace-files-pane"
+                  class="rounded-[10px] px-3 py-1.5 text-sm font-medium text-muted hover:text-ink aria-selected:bg-mist aria-selected:text-ink">
+            Files
+          </button>
+          <button id="workspace-tab-terminal"
+                  type="button"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="workspace-terminal-pane"
+                  class="rounded-[10px] px-3 py-1.5 text-sm font-medium text-muted hover:text-ink aria-selected:bg-mist aria-selected:text-ink">
+            Terminal
+          </button>
+        </div>
+
+        <div id="workspace-files-pane"
+             class="flex min-h-0 flex-1 flex-col"
+             role="tabpanel"
+             aria-labelledby="workspace-tab-files">
+          <div id="workspace-tree-view" class="flex min-h-0 flex-1 flex-col">
+            <div class="min-h-0 flex-1 overflow-y-auto p-2">
+              <hq-file-tree id="workspace-file-tree" class="block" files="[]"></hq-file-tree>
+            </div>
+          </div>
+          <div id="workspace-preview"
+               class="hidden flex min-h-0 flex-1 flex-col"
+               role="region"
+               aria-label="File preview">
+            <div class="flex items-center gap-2 border-b border-line px-3 py-2">
+              <button id="workspace-preview-back"
+                      type="button"
+                      title="Back to files"
+                      aria-label="Back to files"
+                      class="flex size-7 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
+                <hq-icon name="chevron-left" size="sm"></hq-icon>
+              </button>
+              <span id="workspace-preview-path" class="min-w-0 flex-1 truncate text-xs font-medium text-body"></span>
+              <span id="workspace-preview-truncated"
+                    class="hidden shrink-0 rounded-full bg-amber-tint px-2 py-0.5 text-[10px] font-medium text-amber">truncated</span>
+            </div>
+            <div id="workspace-preview-content"
+                 class="min-h-0 flex-1 overflow-hidden"></div>
+          </div>
+        </div>
+
+        <div id="workspace-terminal-pane"
+             class="hidden flex min-h-0 flex-1 flex-col"
+             role="tabpanel"
+             aria-labelledby="workspace-tab-terminal">
+          <hq-terminal
+            id="session-terminal"
+            prompt="hq:/$"
+            welcome="Commands run in this session's workspace."
+            height="100%"
+            max-lines="3000"></hq-terminal>
+        </div>
+      </aside>
     </div>
   </div>
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/highlight.min.js"></script>
+  <script src="/vendor/codemirror/codemirror.min.js"></script>
+  <script src="/vendor/codemirror/mode/markdown.min.js"></script>
+  <script src="/vendor/codemirror/mode/javascript.min.js"></script>
+  <script src="/vendor/codemirror/mode/python.min.js"></script>
+  <script src="/vendor/codemirror/mode/shell.min.js"></script>
+  <script src="/vendor/codemirror/mode/yaml.min.js"></script>
+  <script src="/vendor/codemirror/mode/xml.min.js"></script>
   <script src="index.js" type="module"></script>
 </body>
 </html>
