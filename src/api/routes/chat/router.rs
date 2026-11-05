@@ -860,5 +860,17 @@ pub fn router() -> Router<SharedState> {
         .route("/", post(chat_handler))
         .route("/{id}", get(chat_session))
         .route("/{id}/stream", get(chat_stream_handler))
+        .route(
+            "/{id}/terminal",
+            get(super::terminal::terminal_cwd_handler).post(super::terminal::terminal_handler),
+        )
+        .route(
+            "/{id}/workspace",
+            get(super::workspace::list_workspace_files),
+        )
+        .route(
+            "/{id}/workspace/{*path}",
+            get(super::workspace::read_workspace_file),
+        )
         .route("/sessions", get(chat_list))
 }
