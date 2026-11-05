@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::loops::models::LoopRun;
+
 #[derive(Serialize)]
 pub struct LoopListResponse {
     pub loops: Vec<LoopSummaryResponse>,
@@ -38,6 +40,21 @@ pub struct LoopRunsResponse {
     pub runs: Vec<LoopRunResponse>,
 }
 
+#[derive(Deserialize)]
+pub struct LoopRunsPageQuery {
+    pub page: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct LoopRunsPageResponse {
+    pub runs: Vec<LoopRunResponse>,
+    pub page: usize,
+    pub limit: usize,
+    pub total_runs: i64,
+    pub total_pages: i64,
+}
+
 #[derive(Serialize)]
 pub struct LoopRunResponse {
     pub id: String,
@@ -52,4 +69,23 @@ pub struct LoopRunResponse {
     pub response: Option<String>,
     pub error: Option<String>,
     pub has_transcript: bool,
+}
+
+impl From<LoopRun> for LoopRunResponse {
+    fn from(run: LoopRun) -> Self {
+        Self {
+            id: run.id,
+            loop_id: run.loop_id,
+            channel_id: run.channel_id,
+            event: run.event,
+            status: run.status.to_string(),
+            session_id: run.session_id,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            duration_ms: run.duration_ms,
+            response: run.response,
+            error: run.error,
+            has_transcript: run.has_transcript,
+        }
+    }
 }

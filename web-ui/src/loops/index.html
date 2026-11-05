@@ -16,7 +16,7 @@
   <body class="bg-canvas text-ink">
     <hq-page-shell id="page-shell" meta-title="Loops" nav-rail="loops" back-href="/" back-label="Home">
 
-      <!-- ===== List View (tabs: Loops | Channels) ===== -->
+      <!-- ===== List View (tabs: Loops | Channels | Activity) ===== -->
       <div id="list-view">
         <div class="mx-auto w-full max-w-[1000px]">
           <header class="mb-6">
@@ -25,11 +25,12 @@
           </header>
 
           <div id="tabs" role="tablist" class="mb-6 inline-flex rounded-[12px] border border-line bg-mist p-1">
-            <button id="tab-loops" type="button" role="tab" data-tab="loops" class="rounded-[9px] px-4 py-1.5 text-sm font-medium transition-colors">Loops</button>
-            <button id="tab-channels" type="button" role="tab" data-tab="channels" class="rounded-[9px] px-4 py-1.5 text-sm font-medium transition-colors">Channels</button>
+            <button id="tab-activity" type="button" role="tab" data-tab="activity" aria-selected="true" class="rounded-[9px] px-4 py-1.5 text-sm font-medium transition-colors bg-card text-ink shadow-sm">Activity</button>
+            <button id="tab-loops" type="button" role="tab" data-tab="loops" aria-selected="false" class="rounded-[9px] px-4 py-1.5 text-sm font-medium transition-colors text-muted hover:text-ink">Loops</button>
+            <button id="tab-channels" type="button" role="tab" data-tab="channels" aria-selected="false" class="rounded-[9px] px-4 py-1.5 text-sm font-medium transition-colors text-muted hover:text-ink">Channels</button>
           </div>
 
-          <div id="loops-panel">
+          <div id="loops-panel" class="hidden">
             <hq-state-view id="loops-state" state="loading">
               <div slot="empty">
                 <hq-empty-state icon="loops" title="No loops yet">
@@ -63,6 +64,26 @@
               </div>
               <div slot="content">
                 <div id="channel-grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3"></div>
+              </div>
+            </hq-state-view>
+          </div>
+
+          <div id="activity-panel">
+            <hq-state-view id="activity-state" state="loading">
+              <div slot="empty">
+                <hq-empty-state icon="loops" title="No activity yet">
+                  Loop runs will show up here as loops process events.
+                </hq-empty-state>
+              </div>
+              <div slot="error">
+                <hq-empty-state icon="alert" title="Failed to load activity">
+                  <span id="activity-error-msg">Failed to load activity</span>
+                  <hq-button id="activity-retry" slot="action" variant="secondary">Retry</hq-button>
+                </hq-empty-state>
+              </div>
+              <div slot="content">
+                <div id="activity-list" class="flex flex-col gap-2"></div>
+                <hq-pagination id="activity-pagination" page="1" total-pages="1"></hq-pagination>
               </div>
             </hq-state-view>
           </div>

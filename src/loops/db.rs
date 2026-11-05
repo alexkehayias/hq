@@ -237,42 +237,76 @@ pub async fn finish_loop_run(
     .map_err(anyhow::Error::new)
 }
 
+/// Columns selected for a run row, shared by the per-loop and global queries.
+const RUN_COLUMNS: &str = "r.id, r.loop_id, r.channel_id, r.event, r.status, r.session_id,
+        r.started_at, r.finished_at, r.duration_ms, r.response, r.error,
+        EXISTS(SELECT 1 FROM session s WHERE s.id = r.session_id)";
+
+fn map_loop_run(i: &rusqlite::Row) -> rusqlite::Result<LoopRun> {
+    let status: String = i.get(4)?;
+    Ok(LoopRun {
+        id: i.get(0)?,
+        loop_id: i.get(1)?,
+        channel_id: i.get(2)?,
+        event: i.get(3)?,
+        status: status.parse().unwrap_or(RunStatus::Error),
+        session_id: i.get(5)?,
+        started_at: i.get(6)?,
+        finished_at: i.get(7)?,
+        duration_ms: i.get(8)?,
+        response: i.get(9)?,
+        error: i.get(10)?,
+        has_transcript: i.get(11)?,
+    })
+}
+
 /// Most recent runs for a loop, newest first.
 pub async fn find_loop_runs(db: &Connection, loop_id: &str, limit: usize) -> Result<Vec<LoopRun>> {
     let loop_id = loop_id.to_string();
     let runs = db.call(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT r.id, r.loop_id, r.channel_id, r.event, r.status, r.session_id,
-                    r.started_at, r.finished_at, r.duration_ms, r.response, r.error,
-                    EXISTS(SELECT 1 FROM session s WHERE s.id = r.session_id)
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RUN_COLUMNS}
              FROM loop_run r
              WHERE r.loop_id = ?1
              ORDER BY r.started_at DESC, r.rowid DESC
-             LIMIT ?2",
-        )?;
+             LIMIT ?2"
+        ))?;
         let runs = stmt
-            .query_map(rusqlite::params![loop_id, limit as i64], |i| {
-                let status: String = i.get(4)?;
-                Ok(LoopRun {
-                    id: i.get(0)?,
-                    loop_id: i.get(1)?,
-                    channel_id: i.get(2)?,
-                    event: i.get(3)?,
-                    status: status.parse().unwrap_or(RunStatus::Error),
-                    session_id: i.get(5)?,
-                    started_at: i.get(6)?,
-                    finished_at: i.get(7)?,
-                    duration_ms: i.get(8)?,
-                    response: i.get(9)?,
-                    error: i.get(10)?,
-                    has_transcript: i.get(11)?,
-                })
-            })?
+            .query_map(rusqlite::params![loop_id, limit as i64], map_loop_run)?
             .filter_map(Result::ok)
             .collect::<Vec<LoopRun>>();
         Ok(runs)
     });
     Ok(runs.await?)
+}
+
+/// A page of runs across every loop, newest first.
+pub async fn find_loop_runs_page(
+    db: &Connection,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<LoopRun>> {
+    let runs = db.call(move |conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RUN_COLUMNS}
+             FROM loop_run r
+             ORDER BY r.started_at DESC, r.rowid DESC
+             LIMIT ?1 OFFSET ?2"
+        ))?;
+        let runs = stmt
+            .query_map(rusqlite::params![limit as i64, offset as i64], map_loop_run)?
+            .filter_map(Result::ok)
+            .collect::<Vec<LoopRun>>();
+        Ok(runs)
+    });
+    Ok(runs.await?)
+}
+
+/// Total number of runs across every loop.
+pub async fn count_loop_runs(db: &Connection) -> Result<i64> {
+    let count =
+        db.call(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM loop_run", [], |row| row.get(0))?));
+    Ok(count.await?)
 }
 
 /// Mark runs left in `running` by a previous process as interrupted.
@@ -619,6 +653,38 @@ mod tests {
         assert_eq!(runs[0].response.as_deref(), Some("done"));
         assert!(runs[0].finished_at.is_some());
         assert!(runs[0].has_transcript);
+    }
+
+    #[tokio::test]
+    async fn find_loop_runs_page_orders_newest_first_across_loops() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+        let mut second = sample_loop();
+        second.id = "loop-2".to_string();
+        insert_loop(&db, &second).await.unwrap();
+
+        insert_loop_run(&db, "run-1", "loop-1", "alpha", "one")
+            .await
+            .unwrap();
+        insert_loop_run(&db, "run-2", "loop-2", "alpha", "two")
+            .await
+            .unwrap();
+        insert_loop_run(&db, "run-3", "loop-1", "alpha", "three")
+            .await
+            .unwrap();
+
+        assert_eq!(count_loop_runs(&db).await.unwrap(), 3);
+
+        let all = find_loop_runs_page(&db, 10, 0).await.unwrap();
+        let ids: Vec<&str> = all.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["run-3", "run-2", "run-1"]);
+
+        let page = find_loop_runs_page(&db, 1, 1).await.unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "run-2");
+        assert_eq!(page[0].loop_id, "loop-2");
     }
 
     #[tokio::test]
