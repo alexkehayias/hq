@@ -46,7 +46,7 @@ For visual review, see `/components-gallery/`.
 #### `<hq-icon>`
 - **File:** `./hq-icon.js`
 - **Attrs:** `name` (required), `size` (`sm|md|lg`, default `md`), `tone` (optional color class, e.g. `text-red-400`)
-- Inline SVG icon library. Names: `chevron-left`, `chevron-right`, `chevron-down`, `search`, `chat`, `sessions`, `skills`, `metrics`, `close`, `alert`, `plus`, `folder`, `file`. Uses HTM.
+- Inline SVG icon library. Names: `chevron-left`, `chevron-right`, `chevron-down`, `search`, `chat`, `sessions`, `skills`, `metrics`, `close`, `alert`, `plus`, `folder`, `file`, `terminal`, `refresh`, `expand`, `collapse`. Uses HTM.
 
 ### Tier 2 — Composites
 
@@ -83,7 +83,7 @@ For visual review, see `/components-gallery/`.
 
 #### `<hq-terminal>`
 - **File:** `./hq-terminal.js`
-- **Attrs:** `prompt` (default `$`), `welcome` (muted line printed on connect), `height` (CSS length, default `320px`), `disabled`
+- **Attrs:** `prompt` (default `$`), `welcome` (muted line printed on connect), `height` (CSS length, default `320px`), `max-lines` (keep only the newest N rows; default unlimited), `disabled`
 - **Events:** `command` with `{ detail: { line } }` (bubbles) — fired on Enter, after the line is echoed
 - **Methods:** `print(text, tone?)` (`default|muted|error|success`), `clear()`, `focus()`, `setPrompt(text)`
 - Monospace terminal with a scrolling output log and ↑/↓ command history. Ctrl/Cmd-L clears. The page owns command handling: listen for `command`, then call `print()` with the results.
