@@ -385,6 +385,82 @@ pub async fn run(storage_path: &str, id: &str, debounce: Duration) -> Result<()>
     }
 }
 
+/// Delete a channel.
+///
+/// A channel with loops subscribed to it is not deleted by default: this bails
+/// and lists them, so a subscription is never silently broken. Pass
+/// `delete_loops` to delete the subscribed loops as well; unless `yes` is set,
+/// the user is prompted to confirm first. Emit-only grants are cleared
+/// automatically (a loop that merely had permission to emit to the channel keeps
+/// running).
+///
+/// Bails if no channel with `id` exists, matching the delete commands for
+/// sessions and tasks. A running socket publisher is unaffected — it keeps its
+/// socket until it exits.
+pub async fn run_delete(
+    db: tokio_rusqlite::Connection,
+    id: &str,
+    delete_loops: bool,
+    yes: bool,
+) -> Result<()> {
+    let subscribers = crate::channels::db::find_channel_subscribers(&db, id).await?;
+
+    if !subscribers.is_empty() {
+        if !delete_loops {
+            bail!(
+                "channel '{id}' is subscribed to by loop(s): {}. Re-run with --delete-loops to delete them, or delete the loops first.",
+                subscribers.join(", ")
+            );
+        }
+        if !yes
+            && !confirm(&format!(
+                "Deleting channel '{id}' will also delete loop(s): {}. Continue? [y/N] ",
+                subscribers.join(", ")
+            ))
+            .await?
+        {
+            bail!("aborted; channel '{id}' was not deleted");
+        }
+        for loop_id in &subscribers {
+            crate::loops::db::delete_loop(&db, loop_id).await?;
+        }
+    }
+
+    let deleted = crate::channels::db::delete_channel(&db, id).await?;
+    if deleted == 0 {
+        bail!("channel '{id}' not found");
+    }
+
+    if subscribers.is_empty() {
+        println!("Deleted channel '{id}'.");
+    } else {
+        println!(
+            "Deleted channel '{id}' and {} loop(s): {}.",
+            subscribers.len(),
+            subscribers.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Prompt on stderr and read a yes/no answer from stdin.
+///
+/// Returns `false` on EOF or anything other than `y`/`yes`, so a non-interactive
+/// invocation (no stdin) aborts rather than deleting loops.
+async fn confirm(prompt: &str) -> Result<bool> {
+    use std::io::Write;
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    BufReader::new(stdin()).read_line(&mut answer).await?;
+    Ok(is_yes(&answer))
+}
+
+/// Whether a confirmation answer counts as yes.
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,5 +664,148 @@ mod tests {
             let events: Vec<String> = stream.collect().await;
             assert_eq!(events, vec!["line1", "line2"]);
         });
+    }
+
+    /// A temp DB with the schema initialized, for delete tests.
+    async fn test_db() -> (TempDir, tokio_rusqlite::Connection) {
+        let dir = TempDir::new().unwrap();
+        let db = crate::core::db::async_db(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        db.call(|conn| {
+            crate::core::db::initialize_db(conn)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (dir, db)
+    }
+
+    #[tokio::test]
+    async fn test_run_delete_removes_existing_channel() {
+        let (_dir, db) = test_db().await;
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO channel (id, source) VALUES ('doomed', 'socket')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        run_delete(db.clone(), "doomed", false, false)
+            .await
+            .unwrap();
+
+        let found = crate::channels::db::find_channel(&db, "doomed")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_run_delete_missing_channel_errors() {
+        let (_dir, db) = test_db().await;
+        let err = run_delete(db, "missing", false, false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    /// Insert a loop subscribed to `channel_id`.
+    async fn insert_subscribed_loop(
+        db: &tokio_rusqlite::Connection,
+        loop_id: &str,
+        channel_id: &str,
+    ) {
+        let loop_id = loop_id.to_string();
+        let channel_id = channel_id.to_string();
+        db.call(move |conn| {
+            conn.execute(
+                "INSERT INTO loop (id, system_prompt, tools) VALUES (?1, 'prompt', '[]')",
+                [&loop_id],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_channel (loop_id, channel_id, position) VALUES (?1, ?2, 0)",
+                rusqlite::params![loop_id, channel_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    /// Insert a channel row with the given id.
+    async fn insert_channel_row(db: &tokio_rusqlite::Connection, id: &str) {
+        let id = id.to_string();
+        db.call(move |conn| {
+            conn.execute(
+                "INSERT INTO channel (id, source) VALUES (?1, 'socket')",
+                [&id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_delete_refuses_when_subscribed() {
+        let (_dir, db) = test_db().await;
+        insert_channel_row(&db, "doomed").await;
+        insert_subscribed_loop(&db, "loop-a", "doomed").await;
+
+        let err = run_delete(db.clone(), "doomed", false, false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("subscribed to by loop(s): loop-a"), "{err}");
+
+        // Neither the channel nor the loop was touched.
+        assert!(
+            crate::channels::db::find_channel(&db, "doomed")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let loops: i64 = db
+            .call(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM loop", [], |i| i.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(loops, 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_delete_with_delete_loops_removes_loops_and_channel() {
+        let (_dir, db) = test_db().await;
+        insert_channel_row(&db, "doomed").await;
+        insert_subscribed_loop(&db, "loop-a", "doomed").await;
+        insert_subscribed_loop(&db, "loop-b", "doomed").await;
+
+        run_delete(db.clone(), "doomed", true, true).await.unwrap();
+
+        assert!(
+            crate::channels::db::find_channel(&db, "doomed")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let loops: i64 = db
+            .call(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM loop", [], |i| i.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(loops, 0);
+    }
+
+    #[test]
+    fn test_is_yes() {
+        for answer in ["y", "Y", "yes", " YES ", "Yes\n"] {
+            assert!(is_yes(answer), "expected yes for {answer:?}");
+        }
+        for answer in ["", "n", "no", "nope", "yessir"] {
+            assert!(!is_yes(answer), "expected no for {answer:?}");
+        }
     }
 }

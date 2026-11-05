@@ -93,13 +93,10 @@ enum Command {
     },
     /// Start a chat bot session
     Chat {},
-    /// Stream events from stdin to subscribers over a Unix domain socket (pub/sub)
+    /// Publish events over a Unix domain socket, or delete a channel (pub/sub)
     Channel {
-        /// Channel ID (alphanumeric with dashes/underscores; identifies the socket path)
-        id: String,
-        /// Coalesce lines arriving within this window (ms) into a single event
-        #[arg(long, default_value_t = 250)]
-        debounce_ms: u64,
+        #[command(subcommand)]
+        command: ChannelCommand,
     },
     /// Subscribe to one or more channels and run an LLM chat on incoming events
     Loop {
@@ -182,6 +179,29 @@ enum Command {
     Session {
         #[command(subcommand)]
         command: SessionCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ChannelCommand {
+    /// Stream events from stdin to subscribers over a Unix domain socket (pub/sub)
+    Publish {
+        /// Channel ID (alphanumeric with dashes/underscores; identifies the socket path)
+        id: String,
+        /// Coalesce lines arriving within this window (ms) into a single event
+        #[arg(long, default_value_t = 250)]
+        debounce_ms: u64,
+    },
+    /// Delete a channel, refusing if any loop is subscribed to it
+    Delete {
+        /// Channel ID to delete
+        id: String,
+        /// Also delete loops subscribed to the channel (asks for confirmation)
+        #[arg(long)]
+        delete_loops: bool,
+        /// Skip the confirmation prompt when deleting loops
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -365,9 +385,19 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             )
             .await?;
         }
-        Some(Command::Channel { id, debounce_ms }) => {
-            channel::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
-        }
+        Some(Command::Channel { command }) => match command {
+            ChannelCommand::Publish { id, debounce_ms } => {
+                channel::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
+            }
+            ChannelCommand::Delete {
+                id,
+                delete_loops,
+                yes,
+            } => {
+                let db = crate::core::db::async_db(&vec_db_path).await?;
+                channel::run_delete(db, &id, delete_loops, yes).await?;
+            }
+        },
         Some(Command::Loop {
             channel,
             prompt,
