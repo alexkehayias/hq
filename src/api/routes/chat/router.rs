@@ -22,12 +22,12 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
-use super::session::ensure_workspace;
 use super::stream::{self, SessionStream};
 use super::terminal::{terminal_cwd_handler, terminal_handler};
 use super::workspace::{list_workspace_files, read_workspace_file};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
+use crate::ai::chat::workspace::ensure_workspace;
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
     find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,

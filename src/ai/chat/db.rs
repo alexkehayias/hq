@@ -109,6 +109,19 @@ RETURNING id, mode",
     Ok(Session { id, mode })
 }
 
+/// Whether a session with this id exists in the database.
+pub async fn session_exists(db: &Connection, session_id: &str) -> Result<bool> {
+    let session_id = session_id.to_owned();
+    let exists = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare("SELECT EXISTS(SELECT 1 FROM session WHERE id = ?1)")?;
+            let exists: bool = stmt.query_row([session_id], |row| row.get(0))?;
+            Ok(exists)
+        })
+        .await?;
+    Ok(exists)
+}
+
 pub async fn find_chat_session_by_id(
     db: &Connection,
     session_id: &str,

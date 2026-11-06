@@ -16,7 +16,9 @@ use axum::{
 use tokio::io::AsyncReadExt;
 
 use super::public::{WorkspaceFileEntry, WorkspaceFileResponse, WorkspaceFilesResponse};
-use super::session::{is_valid_session_id, session_exists, workspace_root};
+use crate::ai::chat::db::session_exists;
+use crate::ai::chat::models::is_valid_session_id;
+use crate::ai::chat::workspace::workspace_root;
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 
