@@ -1,4 +1,5 @@
 use super::registry::{Tool, ToolConfig};
+use crate::ai::chat::workspace::workspace_root;
 use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{
@@ -81,7 +82,7 @@ impl BashTool {
         // Only allow access to the session's directory in the
         // workspace to avoid potential security issues from
         // overwriting files in another session
-        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = workspace_root(storage_path, session_id);
 
         let parameters = Parameters {
             r#type: String::from("object"),

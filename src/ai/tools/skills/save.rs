@@ -1,3 +1,4 @@
+use crate::ai::chat::workspace::workspace_root;
 use crate::ai::skills::validation::validate_skill_name;
 use crate::ai::skills::{Skill, SkillRegistry};
 use crate::ai::tools::registry::{Tool, ToolConfig};
@@ -184,7 +185,7 @@ impl SaveSkillTool {
         session_id: &str,
         registry: Arc<RwLock<SkillRegistry>>,
     ) -> Self {
-        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = workspace_root(storage_path, session_id);
 
         let parameters = Parameters {
             r#type: String::from("object"),
