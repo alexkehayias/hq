@@ -157,25 +157,35 @@ async fn run_loop(
 
     // session_id is the loop id, fixed for the lifetime of the loop so every
     // BashTool mounts the same workspace directory across events and restarts.
-    let context = ToolConfig {
+    let base_context = ToolConfig {
         db: config.db.clone(),
         api_base_url: config.api_base_url.clone(),
         storage_path: config.storage_path.clone(),
         vapid_key_path: config.vapid_key_path.clone(),
         session_id: record.id.clone(),
+        notification_url: None,
         skill_registry: None,
         api_hostname: config.api_hostname.clone(),
         api_key: config.api_key.clone(),
         model: config.model.clone(),
     };
-    let registry = ToolRegistry::builtin(context);
 
     // Each event is processed with only the system prompt and that event — no
     // accumulated transcript. Tools and chat are rebuilt per event.
     while let Some((channel_id, event)) = event_rx.recv().await {
         let user_msg = format!("[{}] {}", channel_id, event);
 
-        let tools = match registry.from_list(&tool_names) {
+        // One run id per event, also used as the transcript session id. The
+        // stable `record.id` remains the bash workspace (see base_context).
+        let run_id = Uuid::new_v4().to_string();
+
+        // Link notifications to this run's chat session. Push notifications
+        // open outside the app, so the URL needs a hostname.
+        let context = ToolConfig {
+            notification_url: Some(format!("{}/chat/?session_id={run_id}", config.api_base_url)),
+            ..base_context.clone()
+        };
+        let tools = match ToolRegistry::builtin(context).from_list(&tool_names) {
             Ok(tools) => tools,
             Err(e) => {
                 tracing::warn!("loop '{}': failed to build tools: {}", record.id, e);
@@ -183,9 +193,6 @@ async fn run_loop(
             }
         };
 
-        // One run id per event, also used as the transcript session id. The
-        // stable `record.id` remains the bash workspace (see ToolConfig above).
-        let run_id = Uuid::new_v4().to_string();
         if let Err(e) = insert_loop_run(&config.db, &run_id, &record.id, &channel_id, &event).await
         {
             tracing::warn!("loop '{}': failed to record run: {}", record.id, e);

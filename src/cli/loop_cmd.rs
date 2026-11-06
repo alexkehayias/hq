@@ -144,6 +144,7 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
         storage_path: storage_path.to_string(),
         vapid_key_path: vapid_key_path.to_string(),
         session_id: session_id.clone(),
+        notification_url: None,
         skill_registry: None,
         api_hostname: api_hostname.to_string(),
         api_key: api_key.to_string(),
