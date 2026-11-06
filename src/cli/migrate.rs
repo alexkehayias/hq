@@ -19,6 +19,8 @@ pub enum MigrateCommand {
     },
     /// Show applied and pending migrations
     Status,
+    /// Check that the migration registry is well-formed
+    Validate,
     /// Create a new migration module
     New {
         /// Migration name in snake_case (e.g. add_user_table)
@@ -34,21 +36,18 @@ pub async fn run(
 ) -> Result<()> {
     let command = command.unwrap_or(MigrateCommand::Up);
 
+    // Checking the registry does not need a database connection.
+    if let MigrateCommand::Validate = &command {
+        migrations::validate()?;
+        println!("Migrations are valid.");
+        return Ok(());
+    }
+
     // Generating a file does not need a database connection.
     if let MigrateCommand::New { name } = &command {
-        let (path, module, version) = create_migration(name)?;
+        let (path, _, _) = create_migration(name)?;
         println!("Created {}", path.display());
-        println!();
-        println!("Register it in src/core/db/migrations/mod.rs:");
-        println!("  pub mod {module};");
-        println!();
-        println!("and add this entry to all():");
-        println!("  Migration {{");
-        println!("      version: {version},");
-        println!("      name: \"{name}\",");
-        println!("      up: {module}::up,");
-        println!("      down: Some({module}::down),");
-        println!("  }},");
+        println!("Implement `up` and `down` in that file, then run `hq migrate`.");
         return Ok(());
     }
 
@@ -87,7 +86,9 @@ pub async fn run(
                 .await?;
             print_status(&status);
         }
-        MigrateCommand::New { .. } => unreachable!("handled before opening the database"),
+        MigrateCommand::Validate | MigrateCommand::New { .. } => {
+            unreachable!("handled before opening the database")
+        }
     }
 
     // Rebuilding the search index is destructive and unrelated to the schema,
@@ -146,10 +147,14 @@ fn create_migration_in(dir: &Path, name: &str) -> Result<(PathBuf, String, i64)>
     let contents = format!(
         r#"//! Migration {version}: {name}
 //!
-//! Register this module in `all()` in `mod.rs`, then implement `up` and `down`.
+//! `build.rs` discovers this file automatically; there is no registry to edit.
+//! Implement `up` and `down`, then run `hq migrate`.
 
+use super::MigrationFn;
 use anyhow::{{Result, bail}};
 use rusqlite::Connection;
+
+pub const DOWN: Option<MigrationFn> = Some(down);
 
 pub fn up(_conn: &Connection) -> Result<()> {{
     // TODO: apply the schema change, for example:
@@ -158,7 +163,7 @@ pub fn up(_conn: &Connection) -> Result<()> {{
 }}
 
 pub fn down(_conn: &Connection) -> Result<()> {{
-    // TODO: reverse the schema change.
+    // TODO: reverse the schema change, or set `DOWN` to `None` if it cannot be undone.
     bail!("migration {version} ({name}) is not implemented yet")
 }}
 "#
@@ -247,6 +252,7 @@ mod tests {
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("pub fn up"));
         assert!(contents.contains("pub fn down"));
+        assert!(contents.contains("pub const DOWN"));
         assert!(contents.contains("migration 2 (add_user_table)"));
 
         let head = fs::read_to_string(dir.path().join("HEAD")).unwrap();

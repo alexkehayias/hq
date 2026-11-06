@@ -107,20 +107,28 @@ Schema changes are Rust modules with `up` and optional `down` functions. The
 framework records applied versions in the `schema_migrations` table, runs each
 migration in its own transaction, and runs `down` in reverse for rollbacks.
 
-- `mod.rs` — the `Migration` type, registry (`all()`), and `migrate` /
-  `rollback` / `status` runners.
+- `mod.rs` — the `Migration` type and the `migrate` / `rollback` / `status`
+  runners. `validate()` checks that versions are positive, unique, and
+  ascending, that names are snake_case, and that `HEAD` is in sync. Every
+  runner validates first, so a malformed registry fails before touching the
+  database; `hq migrate validate` runs the same check without opening a
+  database.
+- `build.rs` — scans `migration_*.rs`, parses the version and name from each
+  filename, and generates the module declarations and `all()` into `OUT_DIR`.
+  There is no registry to edit by hand. A malformed filename, duplicate
+  version, or non-snake_case name fails the build.
 - `migration_0001_initial_schema.rs` — baseline schema plus idempotent upgrades for
   databases created before the framework existed. Do not add new schema changes
   here.
 - `HEAD` — points at the newest migration module. `hq migrate new` updates it,
-  and a test keeps it in sync with `all()`. Every migration changes this file,
+  and `validate()` keeps it in sync with `all()`. Every migration changes this file,
   so two branches that add migrations conflict on merge instead of silently
   diverging.
-- To change the schema, add a new `migration_NNNN_<name>.rs` module with `pub fn up` and
-  `pub fn down` and append it to `all()` in `mod.rs`. Use a new version number
-  and keep `down` a true inverse where possible (set it to `None` only for
-  irreversible migrations). `hq migrate new <snake_case_name>` generates the
-  file with the next version number and prints the registry entry to add.
+- To change the schema, add a new `migration_NNNN_<name>.rs` file with `pub fn up`,
+  `pub fn down`, and `pub const DOWN: Option<MigrationFn> = Some(down);` (use
+  `None` for irreversible migrations). The version comes from the filename;
+  keep `down` a true inverse where possible. `hq migrate new <snake_case_name>`
+  generates the file with the next version number and updates `HEAD`.
 
 `initialize_db` runs all pending migrations, so `hq init --db` and tests get the
 latest schema.

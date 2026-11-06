@@ -8,8 +8,11 @@
 //!
 //! Future schema changes belong in new migration modules, not here.
 
+use super::MigrationFn;
 use anyhow::Result;
 use rusqlite::Connection;
+
+pub const DOWN: Option<MigrationFn> = Some(down);
 
 pub fn up(conn: &Connection) -> Result<()> {
     create_tables(conn)?;
