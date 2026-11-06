@@ -62,7 +62,8 @@ At the end of every iteration, overwrite `state/history.md` with exactly this st
 - All persistent data goes in `state/`.
 - One logical concept per file. Keep files focused and small.
 - JSON preferred for pure data files; Markdown preferred for narratives, summaries, or history tracking.
-- Load all `state/` files on every iteration. Treat nothing as implicitly stable between iterations.
+- Read only the `state/` files relevant to this event, and bound every read (`tail -n 100`, `grep`, `wc -l`). Never `cat` a whole state file — an unbounded file can exceed the model's context window. Treat nothing as implicitly stable between iterations.
+- Keep state files bounded. Never append to a log without trimming it, and prefer overwriting a snapshot over accumulating history.
 
 ## Self-Sufficiency Rules
 - **Never stall.** Always produce output — tool calls, text, or at minimum a confirmation that you've read state and nothing requires action.
@@ -105,6 +106,13 @@ mod tests {
         assert!(prompt.starts_with(LOOP_SYSTEM_PROMPT));
         assert!(prompt.ends_with("---\n\nCheck the inbox every hour."));
         assert!(!prompt.contains("create_channel"));
+    }
+
+    #[test]
+    fn state_reads_are_bounded() {
+        assert!(!LOOP_SYSTEM_PROMPT.contains("Load all `state/` files"));
+        assert!(LOOP_SYSTEM_PROMPT.contains("Never `cat` a whole state file"));
+        assert!(LOOP_SYSTEM_PROMPT.contains("Keep state files bounded"));
     }
 
     #[test]
