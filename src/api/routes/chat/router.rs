@@ -1,7 +1,6 @@
 //! Router for the chat API
 
 use std::convert::Infallible;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -27,7 +26,7 @@ use super::terminal::{terminal_cwd_handler, terminal_handler};
 use super::workspace::{list_workspace_files, read_workspace_file};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
-use crate::ai::chat::workspace::ensure_workspace;
+use crate::ai::chat::workspace::{ensure_workspace, workspace_root};
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
     find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
@@ -575,8 +574,7 @@ async fn chat_handler(
         }
         (SessionMode::Chat, SlashCommand::Bash { command }) => {
             // Run a command in the bashkit sandbox and return the output
-            let workspace_path =
-                PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
+            let workspace_path = workspace_root(&storage_path_owned, &session_id);
             let response = match run_in_sandbox(&storage_path_owned, &workspace_path, command).await
             {
                 Ok(output) => {
@@ -760,7 +758,7 @@ async fn chat_handler(
         transcript.push(system_msg);
     }
 
-    let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
+    let workspace_path = workspace_root(&storage_path_owned, &session_id);
 
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
         .database(&db, Some(&session_id), None)

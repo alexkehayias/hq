@@ -1,3 +1,4 @@
+use crate::ai::chat::workspace::workspace_root;
 use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::openai::{
     Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
@@ -93,7 +94,7 @@ impl PythonTool {
     pub fn new(storage_path: &str, session_id: &str) -> Self {
         // The same session workspace the bash tool mounts, so files written by
         // one tool are visible to the other.
-        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = workspace_root(storage_path, session_id);
 
         let parameters = Parameters {
             r#type: String::from("object"),

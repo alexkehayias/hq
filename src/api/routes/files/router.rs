@@ -1,6 +1,6 @@
 //! Router for the file uploads API
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use axum::{
@@ -13,6 +13,7 @@ use axum::{
 
 use super::public::{FileUploadResponse, UploadedFile};
 use crate::ai::chat::models::is_valid_session_id;
+use crate::ai::chat::workspace::workspace_root;
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 
@@ -175,10 +176,7 @@ async fn upload_files(
         validated.push((filename, ext, file.bytes));
     }
 
-    let files_dir = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&session_id)
-        .join("files");
+    let files_dir = workspace_root(&storage_path, &session_id).join("files");
     tokio::fs::create_dir_all(&files_dir).await?;
 
     let mut uploaded = Vec::with_capacity(validated.len());
@@ -224,9 +222,7 @@ async fn get_file(
         .storage_path
         .clone();
 
-    let path = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&session_id)
+    let path = workspace_root(&storage_path, &session_id)
         .join("files")
         .join(&filename);
 
@@ -265,9 +261,7 @@ async fn delete_file(
         .storage_path
         .clone();
 
-    let path = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&session_id)
+    let path = workspace_root(&storage_path, &session_id)
         .join("files")
         .join(&filename);
 
