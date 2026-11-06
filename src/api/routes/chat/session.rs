@@ -35,3 +35,17 @@ pub fn workspace_root(storage_path: &str, session_id: &str) -> PathBuf {
         .join("workspace")
         .join(session_id)
 }
+
+/// Create the session's workspace directory on the host if it doesn't exist.
+///
+/// Called when a session is created so the terminal and workspace endpoints
+/// always have a directory to point at.
+pub async fn ensure_workspace(storage_path: &str, session_id: &str) -> Result<()> {
+    if !is_valid_session_id(session_id) {
+        anyhow::bail!("Invalid session_id: {session_id}");
+    }
+
+    let root = workspace_root(storage_path, session_id);
+    tokio::fs::create_dir_all(&root).await?;
+    Ok(())
+}

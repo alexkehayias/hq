@@ -1124,4 +1124,33 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(!workspace_path(&state, session_id).exists());
     }
+
+    /// Creating a chat session also creates its workspace directory.
+    #[tokio::test]
+    #[serial]
+    async fn it_creates_workspace_when_session_is_created() {
+        let (app, state) = test_app_with_state().await;
+        let session_id = "session-workspace-create";
+        assert!(!workspace_path(&state, session_id).exists());
+
+        let _response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "message": "Hello"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(workspace_path(&state, session_id).is_dir());
+    }
 }
