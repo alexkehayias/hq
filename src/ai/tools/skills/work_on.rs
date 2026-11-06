@@ -1,3 +1,4 @@
+use crate::ai::chat::workspace::workspace_root;
 use crate::ai::skills::{validation::validate_skill_directory, validation::validate_skill_name};
 use crate::ai::tools::bash::SANDBOX_ROOT;
 use crate::ai::tools::registry::{Tool, ToolConfig};
@@ -90,7 +91,7 @@ impl Tool for WorkOnSkillTool {
 
 impl WorkOnSkillTool {
     pub fn new(skills_path: &str, storage_path: &str, session_id: &str) -> Self {
-        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = workspace_root(storage_path, session_id);
 
         let parameters = Parameters {
             r#type: String::from("object"),
