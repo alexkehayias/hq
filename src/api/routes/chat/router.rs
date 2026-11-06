@@ -22,6 +22,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
+use super::session::ensure_workspace;
 use super::stream::{self, SessionStream};
 use super::terminal::{terminal_cwd_handler, terminal_handler};
 use super::workspace::{list_workspace_files, read_workspace_file};
@@ -409,6 +410,7 @@ async fn chat_handler(
     // Parse message using slash command system
     let slash_cmd = payload.message.parse()?;
     let session = get_or_create_session(&db, &session_id, &[], SessionMode::Chat).await?;
+    ensure_workspace(&storage_path_owned, &session_id).await?;
     let current_mode = session.mode;
 
     // Handle mode transitions
