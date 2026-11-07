@@ -14,6 +14,7 @@ use axum::{
 use super::public::{FileUploadResponse, UploadedFile};
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
+use crate::loops::db::workspace_id_for_session;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -84,12 +85,10 @@ async fn upload_files(
     State(state): State<SharedState>,
     mut multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    let storage_path = state
-        .read()
-        .expect("Unable to read shared state")
-        .config
-        .storage_path
-        .clone();
+    let (storage_path, db) = {
+        let state = state.read().expect("Unable to read shared state");
+        (state.config.storage_path.clone(), state.db.clone())
+    };
 
     let mut session_id: Option<String> = None;
     let mut pending: Vec<PendingFile> = Vec::new();
@@ -152,6 +151,10 @@ async fn upload_files(
         }
     };
 
+    // A loop run's transcript session is keyed by the run id, but its files
+    // live in the loop's workspace (see `workspace_id_for_session`).
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
+
     if pending.is_empty() {
         return Ok((StatusCode::BAD_REQUEST, "No file provided").into_response());
     }
@@ -186,7 +189,7 @@ async fn upload_files(
 
     let files_dir = PathBuf::from(&storage_path)
         .join("workspace")
-        .join(&session_id)
+        .join(&workspace_id)
         .join("files");
     tokio::fs::create_dir_all(&files_dir).await?;
 
@@ -226,16 +229,16 @@ async fn get_file(
         return Ok((StatusCode::BAD_REQUEST, "Unsupported file type").into_response());
     }
 
-    let storage_path = state
-        .read()
-        .expect("Unable to read shared state")
-        .config
-        .storage_path
-        .clone();
+    let (storage_path, db) = {
+        let state = state.read().expect("Unable to read shared state");
+        (state.config.storage_path.clone(), state.db.clone())
+    };
+
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
 
     let path = PathBuf::from(&storage_path)
         .join("workspace")
-        .join(&session_id)
+        .join(&workspace_id)
         .join("files")
         .join(&filename);
 
@@ -267,16 +270,16 @@ async fn delete_file(
         return Ok((StatusCode::BAD_REQUEST, "Invalid filename").into_response());
     };
 
-    let storage_path = state
-        .read()
-        .expect("Unable to read shared state")
-        .config
-        .storage_path
-        .clone();
+    let (storage_path, db) = {
+        let state = state.read().expect("Unable to read shared state");
+        (state.config.storage_path.clone(), state.db.clone())
+    };
+
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
 
     let path = PathBuf::from(&storage_path)
         .join("workspace")
-        .join(&session_id)
+        .join(&workspace_id)
         .join("files")
         .join(&filename);
 
