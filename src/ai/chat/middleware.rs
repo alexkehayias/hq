@@ -214,17 +214,6 @@ impl Default for ToolSecurityMiddleware {
                     "search_emails".to_string(),
                 ],
             },
-            // Don't let untrusted content poison persistent memory,
-            // which is loaded as context in future sessions.
-            ToolCallRule {
-                target: "memory".to_string(),
-                blocked_after: vec![
-                    "view_website".to_string(),
-                    "web_search".to_string(),
-                    "get_unread_emails".to_string(),
-                    "search_emails".to_string(),
-                ],
-            },
             // Don't let a webpage or email steer the agent into pushing
             // a notification to the user's devices (phishing).
             ToolCallRule {
@@ -860,29 +849,6 @@ mod tests {
         assert!(
             matches!(action, MiddlewareAction::Reject(_)),
             "Expected Reject for notify after email, got {action:?}",
-        );
-    }
-
-    #[tokio::test]
-    async fn test_security_rejects_memory_write_after_website() {
-        let mw = ToolSecurityMiddleware::default();
-        let transcript = vec![
-            Message::new(Role::User, "look at this"),
-            Message::new_tool_call_request(vec![view_website_call("call_1")]),
-            Message::new_tool_call_response("site content", "call_1"),
-            Message::new_tool_call_request(vec![FunctionCall {
-                function: crate::openai::FunctionCallFn {
-                    name: "memory".into(),
-                    arguments: r#"{"operation":"write","content":"x"}"#.into(),
-                },
-                id: "call_2".into(),
-                r#type: "function".into(),
-            }]),
-        ];
-        let action = mw.before_tool_calls(&transcript).await;
-        assert!(
-            matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for memory after view_website, got {action:?}",
         );
     }
 

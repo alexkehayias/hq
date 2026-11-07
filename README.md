@@ -78,7 +78,7 @@ docker run -p 2222:2222 -d hq:latest
 5. Generate GitHub known hosts `sudo bash -c "ssh-keyscan -t rsa github.com >> /var/lib/dokku/data/storage/hq/.ssh/known_hosts"`
 7. Create data directory to persist indices between deploys `mkdir /var/lib/dokku/data/storage/hq/data && dokku storage:mount hq /var/lib/dokku/data/storage/hq:/root/data`
 8. Create skills directory `mkdir /var/lib/dokku/data/storage/hq/data/skills`
-9. Create workspace directory for memory `mkdir /var/lib/dokku/data/storage/hq/data/workspace`
+9. Create workspace directory for sandboxed tools `mkdir /var/lib/dokku/data/storage/hq/data/workspace`
 10. Generate a VAPID key pair, private key with `openssl ecparam -genkey -name prime256v1 -out private_key.pem`, and public key with `openssl ec -in private_key.pem -pubout -outform DER|tail -c 65|base64|tr '/+' '_-'|tr -d '\n'` (remove the trailing `=` in the public key and hard code it into `index.js`)
 11. Add the following environment variables using `dokku config:set hq {ENV_VAR}`:
 - `HQ_NOTES_REPO_URL` to the GitHub repo with notes
