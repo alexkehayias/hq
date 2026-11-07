@@ -32,6 +32,10 @@ pub struct NotifyTool {
     db: Connection,
     #[serde(skip)]
     vapid_key_path: String,
+    /// The URL to open when the notification is clicked, passed through to the
+    /// push payload verbatim.
+    #[serde(skip)]
+    url: Option<String>,
 }
 
 #[async_trait]
@@ -62,12 +66,9 @@ impl ToolCall for NotifyTool {
             fn_args.title.as_deref().unwrap_or("Notification"),
         );
 
-        let payload = PushNotificationPayload::new(
+        let payload = self.payload(
             fn_args.title.as_deref().unwrap_or("Notification"),
             &fn_args.message,
-            None,
-            None,
-            None,
         );
 
         let failed_subscriptions =
@@ -103,16 +104,20 @@ impl Tool for NotifyTool {
     const NAME: &'static str = "notify";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(conf.db.clone(), &conf.vapid_key_path))
+        Ok(Self::new(
+            conf.db.clone(),
+            &conf.vapid_key_path,
+            conf.notification_url.as_deref(),
+        ))
     }
 }
 
 impl NotifyTool {
-    pub fn new(db: Connection, vapid_key_path: &str) -> Self {
+    pub fn new(db: Connection, vapid_key_path: &str, url: Option<&str>) -> Self {
         let function = Function {
             name: Self::NAME.to_string(),
             description: String::from(
-                "Send a push notification to the user's devices. Use this to deliver important information that the user should see outside of the chat, such as completed tasks, alerts, summaries, or time-sensitive updates. The notification will appear on all devices where the web app is open and notifications are enabled.",
+                "Send a push notification to the user's devices. Use this to deliver important information that the user should see outside of the chat, such as completed tasks, alerts, summaries, or time-sensitive updates. The notification will appear on all devices where the web app is open and notifications are enabled. Clicking the notification opens the page this notification is linked to.",
             ),
             parameters: Parameters {
                 r#type: String::from("object"),
@@ -142,7 +147,13 @@ impl NotifyTool {
             function,
             db,
             vapid_key_path: vapid_key_path.to_string(),
+            url: url.map(str::to_string),
         }
+    }
+
+    /// The push payload for a notification, linking to this tool's URL.
+    fn payload(&self, title: &str, message: &str) -> PushNotificationPayload {
+        PushNotificationPayload::new(title, message, self.url.as_deref(), None, None)
     }
 }
 
@@ -175,10 +186,27 @@ mod tests {
         db
     }
 
+    /// A tool context as the loop supervisor builds it, with `notification_url`
+    /// pointing at the current run's chat session.
+    fn tool_config(db: Connection, notification_url: Option<&str>) -> ToolConfig {
+        ToolConfig {
+            db,
+            api_base_url: "http://localhost:2222".to_string(),
+            storage_path: "/tmp".to_string(),
+            vapid_key_path: "/tmp/fake-vapid.pem".to_string(),
+            session_id: "loop-workspace".to_string(),
+            notification_url: notification_url.map(str::to_string),
+            skill_registry: None,
+            api_hostname: "https://api.openai.com".to_string(),
+            api_key: "test-key".to_string(),
+            model: "gpt-4".to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn test_notify_no_subscriptions_returns_recoverable_error() {
         let db = setup_db().await;
-        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
 
         let result = tool.call(r#"{"message": "test notification"}"#).await;
 
@@ -197,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_empty_message_returns_error() {
         let db = setup_db().await;
-        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
 
         let result = tool.call(r#"{"message": ""}"#).await;
 
@@ -216,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_missing_message_returns_error() {
         let db = setup_db().await;
-        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
 
         let result = tool.call(r#"{}"#).await;
 
@@ -226,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_with_title() {
         let db = setup_db().await;
-        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
 
         let result = tool
             .call(r#"{"message": "test", "title": "My Title"}"#)
@@ -242,14 +270,54 @@ mod tests {
     #[tokio::test]
     async fn test_notify_tool_function_name() {
         let db = setup_db().await;
-        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
         assert_eq!(tool.function_name(), "notify");
+    }
+
+    #[tokio::test]
+    async fn test_payload_passes_url_through() {
+        let db = setup_db().await;
+        let url = "http://localhost:2222/chat/?session_id=session-123";
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", Some(url));
+        let payload = tool.payload("Title", "Body");
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["data"]["url"], url);
+    }
+
+    #[tokio::test]
+    async fn test_payload_without_url_defaults_to_app_base() {
+        let db = setup_db().await;
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
+        let payload = tool.payload("Title", "Body");
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["data"]["url"], "/");
+    }
+
+    #[tokio::test]
+    async fn test_from_config_uses_notification_url() {
+        let db = setup_db().await;
+        let url = "http://localhost:2222/chat/?session_id=run-1";
+        let conf = tool_config(db, Some(url));
+        let tool = NotifyTool::from_config(&conf).unwrap();
+        let payload = tool.payload("Title", "Body");
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["data"]["url"], url);
+    }
+
+    #[tokio::test]
+    async fn test_from_config_without_notification_url_defaults_to_app_base() {
+        let db = setup_db().await;
+        let conf = tool_config(db, None);
+        let tool = NotifyTool::from_config(&conf).unwrap();
+        let payload = tool.payload("Title", "Body");
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["data"]["url"], "/");
     }
 
     #[tokio::test]
     async fn test_notify_function_json_has_required_parameters() {
         let db = setup_db().await;
-        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem");
+        let tool = NotifyTool::new(db, "/tmp/fake-vapid.pem", None);
         let json = serde_json::to_string(&tool.function).expect("Failed to serialize function");
 
         let value: serde_json::Value =

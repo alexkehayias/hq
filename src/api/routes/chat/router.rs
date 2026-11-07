@@ -323,6 +323,10 @@ async fn chat_handler(
             vapid_key_path: vapid_key_path.clone(),
         };
 
+        // Push notifications are opened outside the app, so the link needs a
+        // hostname rather than a relative path.
+        let notification_url = format!("{note_search_api_url}/chat/?session_id={session_id}");
+
         (
             NoteSearchTool::new(note_search_api_url),
             MeetingSearchTool::new(note_search_api_url),
@@ -337,7 +341,7 @@ async fn chat_handler(
             DateTimeTool::new(),
             BashTool::new(storage_path, &session_id),
             PythonTool::new(storage_path, &session_id),
-            NotifyTool::new(db.clone(), vapid_key_path),
+            NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
             IterateTool::new(openai_api_hostname, openai_api_key, openai_model),
             CreateLoopTool::new(loop_config.clone()),
             ListLoopsTool::new(loop_config.clone()),
