@@ -28,9 +28,6 @@ pub use web_search::WebSearchTool;
 pub mod tasks;
 pub use tasks::{TasksDueTodayTool, TasksScheduledTodayTool};
 
-pub mod memory;
-pub use memory::MemoryTool;
-
 pub mod notify;
 pub use notify::NotifyTool;
 

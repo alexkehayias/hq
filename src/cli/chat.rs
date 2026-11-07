@@ -6,8 +6,8 @@ use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{
-    CalendarTool, DateTimeTool, EmailUnreadTool, IterateTool, MeetingSearchTool, MemoryTool,
-    NoteSearchTool, WebSearchTool,
+    CalendarTool, DateTimeTool, EmailUnreadTool, IterateTool, MeetingSearchTool, NoteSearchTool,
+    WebSearchTool,
 };
 use crate::core::db::async_db;
 use crate::core::markdown_render;
@@ -57,7 +57,6 @@ pub async fn run(
         CalendarTool::new(db.clone(), "http://localhost:2222")
     };
 
-    let memory_tool = MemoryTool::default();
     let datetime_tool = DateTimeTool::default();
     let iterate_tool = IterateTool::new(api_hostname, api_key, model);
 
@@ -67,7 +66,6 @@ pub async fn run(
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
-        Box::new(memory_tool),
         Box::new(datetime_tool),
         Box::new(iterate_tool),
     ];
