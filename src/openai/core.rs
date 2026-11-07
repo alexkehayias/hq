@@ -426,6 +426,16 @@ pub fn parse_tool_args<Args: serde::de::DeserializeOwned>(
 #[async_trait]
 pub trait ToolCall: erased_serde::Serialize {
     async fn call(&self, args: &str) -> Result<String, Error>;
+
+    /// Run the tool with the provider's ID for this invocation.
+    ///
+    /// Tools that persist artifacts name them after the ID so a saved
+    /// result can be traced back to the call that produced it. Defaults
+    /// to [`ToolCall::call`].
+    async fn call_with_id(&self, _tool_call_id: &str, args: &str) -> Result<String, Error> {
+        self.call(args).await
+    }
+
     fn function_name(&self) -> String;
 }
 erased_serde::serialize_trait_object!(ToolCall);

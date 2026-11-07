@@ -21,6 +21,22 @@ const MAX_OUTPUT_CHARS: usize = MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN;
 /// How many characters to keep in the truncated response returned to the AI.
 const TRUNCATED_PREFIX_CHARS: usize = 7_500 * CHARS_PER_TOKEN;
 
+/// Build the file name for a saved result, using the provider's tool
+/// call ID when it is usable and a timestamp otherwise.
+fn result_filename(tool_call_id: &str, timestamp: u64) -> String {
+    let id: String = tool_call_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        .take(64)
+        .collect();
+
+    if id.is_empty() {
+        format!("call_{}.md", timestamp)
+    } else {
+        format!("{}.md", id)
+    }
+}
+
 /// Cut `content` to at most `max_chars` characters, preferring a line
 /// boundary so the agent can resume from a known line number.
 ///
@@ -70,6 +86,10 @@ pub struct WebsiteViewTool {
 #[async_trait]
 impl ToolCall for WebsiteViewTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
+        self.call_with_id("", args).await
+    }
+
+    async fn call_with_id(&self, tool_call_id: &str, args: &str) -> Result<String, Error> {
         let fn_args: WebsiteViewArgs = parse_tool_args(args)?;
         // let url = fn_args.url;
 
@@ -178,22 +198,22 @@ impl ToolCall for WebsiteViewTool {
                 return Ok(content);
             }
 
-            // Ensure the workspace directory exists
-            if !self.workspace_path.exists() {
-                fs::create_dir_all(&self.workspace_path).await?;
-            }
-
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            let filename = format!("website_content_{}.md", timestamp);
-            let file_path = self.workspace_path.join(&filename);
-            fs::write(&file_path, &content).await?;
+            let filename = result_filename(tool_call_id, timestamp);
+
+            // Results live in a dedicated directory so they stay out of
+            // the workspace root, which holds stable artifacts like
+            // MEMORY.md and skill directories.
+            let results_dir = self.workspace_path.join("tool-results");
+            fs::create_dir_all(&results_dir).await?;
+            fs::write(results_dir.join(&filename), &content).await?;
 
             // The bash tool mounts the session workspace at the sandbox
             // root, so report the path the agent can actually open.
-            let sandbox_path = format!("{}{}", SANDBOX_ROOT, filename);
+            let sandbox_path = format!("{}tool-results/{}", SANDBOX_ROOT, filename);
 
             let total_lines = content.lines().count();
             let shown_lines = prefix.lines().count();
@@ -344,15 +364,27 @@ mod tests {
 
         let tool = test_tool();
         let url = format!(r#"{{"url": "{}/"}}"#, server.url());
-        let content = tool.call(&url).await.unwrap();
+        let content = tool.call_with_id("call_test123", &url).await.unwrap();
 
         assert!(content.contains("Content truncated"));
         assert!(content.contains("sed -n '"));
-        // The path must be the one the bash sandbox exposes, not a host path.
-        assert!(content.contains("/website_content_"));
+        // The file is named after the tool call ID and the path must be
+        // the one the bash sandbox exposes, not a host path.
+        assert!(content.contains("/tool-results/call_test123.md"));
         assert!(!content.contains("/workspace/"));
         // The end of the page is not part of the truncated prefix.
         assert!(!content.contains("Line 1999 of filler"));
+    }
+
+    #[test]
+    fn result_filename_uses_the_tool_call_id() {
+        assert_eq!(result_filename("call_abc123", 1), "call_abc123.md");
+    }
+
+    #[test]
+    fn result_filename_sanitizes_unusable_ids() {
+        assert_eq!(result_filename("../../etc/passwd", 7), "etcpasswd.md");
+        assert_eq!(result_filename("", 7), "call_7.md");
     }
 
     #[test]

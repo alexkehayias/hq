@@ -72,7 +72,7 @@ impl Chat {
         // tool name is reported as a recoverable error so a hallucinated
         // tool call doesn't break the loop.
         let call_result = match tools.iter().find(|i| *i.function_name() == *tool_call_name) {
-            Some(tool) => tool.call(tool_call_args).await,
+            Some(tool) => tool.call_with_id(tool_call_id, tool_call_args).await,
             None => {
                 let available = tools
                     .iter()
