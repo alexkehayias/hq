@@ -41,6 +41,7 @@ use crate::api::state::AppState;
 use crate::api::utils::DetectDisconnect;
 use crate::channels::prompt::system_prompt_section;
 use crate::core::AppConfig;
+use crate::loops::db::workspace_id_for_session;
 use crate::loops::supervisor::LoopSupervisorConfig;
 use crate::notify::{
     PushNotificationPayload, broadcast_push_notification, find_all_notification_subscriptions,
@@ -272,6 +273,11 @@ async fn chat_handler(
 
     let db = state.read().expect("Unable to read share state").db.clone();
 
+    // A loop run's transcript is keyed by the run id, but its files live in the
+    // loop's workspace. Resolve once and mount that directory for every
+    // workspace-backed tool below.
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
+
     let (
         note_search_tool,
         meeting_search_tool,
@@ -333,12 +339,12 @@ async fn chat_handler(
             EmailUnreadTool::new(note_search_api_url),
             EmailSearchTool::new(note_search_api_url),
             CalendarTool::new(db.clone(), note_search_api_url),
-            WebsiteViewTool::new(storage_path, &session_id),
+            WebsiteViewTool::new(storage_path, &workspace_id),
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
-            BashTool::new(storage_path, &session_id),
-            PythonTool::new(storage_path, &session_id),
+            BashTool::new(storage_path, &workspace_id),
+            PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
             IterateTool::new(openai_api_hostname, openai_api_key, openai_model),
             CreateLoopTool::new(loop_config.clone()),
@@ -572,7 +578,7 @@ async fn chat_handler(
         (SessionMode::Chat, SlashCommand::Bash { command }) => {
             // Run a command in the bashkit sandbox and return the output
             let workspace_path =
-                PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
+                PathBuf::from(format!("{}/workspace/{}", storage_path_owned, workspace_id));
             let response = match run_in_sandbox(&storage_path_owned, &workspace_path, command).await
             {
                 Ok(output) => {
@@ -756,7 +762,8 @@ async fn chat_handler(
         transcript.push(system_msg);
     }
 
-    let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path_owned, session_id));
+    let workspace_path =
+        PathBuf::from(format!("{}/workspace/{}", storage_path_owned, workspace_id));
 
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
         .database(&db, Some(&session_id), None)
@@ -771,7 +778,7 @@ async fn chat_handler(
         ]);
 
     // Add skill management tools if the registry is available
-    chat = chat.skills(skill_registry.clone(), &storage_path_owned, &session_id);
+    chat = chat.skills(skill_registry.clone(), &storage_path_owned, &workspace_id);
 
     let mut chat = chat.build();
 
