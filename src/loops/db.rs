@@ -134,6 +134,29 @@ pub async fn loop_may_emit(db: &Connection, loop_id: &str, channel_id: &str) -> 
     Ok(permitted.await?)
 }
 
+/// The workspace id a chat session mounts under `{storage}/workspace`.
+///
+/// A loop runs every event against one shared workspace keyed by the loop id
+/// (see [`crate::loops::supervisor`]), while each run's transcript session is
+/// keyed by the run id. Opening a run's transcript in the chat UI therefore
+/// resolves back to the loop id, so its bash/python tools mount the loop's
+/// existing files instead of an empty per-run directory. Every other session
+/// owns its workspace and resolves to itself.
+pub async fn workspace_id_for_session(db: &Connection, session_id: &str) -> Result<String> {
+    let id = session_id.to_string();
+    let loop_id: Option<String> = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare("SELECT loop_id FROM loop_run WHERE session_id = ?1")?;
+            let mut rows = stmt.query([&id])?;
+            match rows.next()? {
+                Some(row) => Ok(Some(row.get(0)?)),
+                None => Ok(None),
+            }
+        })
+        .await?;
+    Ok(loop_id.unwrap_or_else(|| session_id.to_string()))
+}
+
 pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
     let id = record.id.clone();
     let system_prompt = record.system_prompt.clone();
@@ -653,6 +676,26 @@ mod tests {
         assert_eq!(runs[0].response.as_deref(), Some("done"));
         assert!(runs[0].finished_at.is_some());
         assert!(runs[0].has_transcript);
+    }
+
+    #[tokio::test]
+    async fn workspace_id_resolves_run_sessions_to_their_loop() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+        insert_loop_run(&db, "run-1", "loop-1", "alpha", "hello")
+            .await
+            .unwrap();
+
+        // A loop run shares its loop's workspace, so files written by the
+        // supervisor are visible when the run is opened in the chat UI.
+        let id = workspace_id_for_session(&db, "run-1").await.unwrap();
+        assert_eq!(id, "loop-1");
+
+        // Any other session owns its own workspace.
+        let id = workspace_id_for_session(&db, "session-1").await.unwrap();
+        assert_eq!(id, "session-1");
     }
 
     #[tokio::test]

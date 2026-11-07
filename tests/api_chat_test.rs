@@ -1153,4 +1153,63 @@ mod tests {
 
         assert!(workspace_path(&state, session_id).is_dir());
     }
+
+    /// A loop run's transcript is keyed by the run id, but its workspace
+    /// belongs to the loop. Opening the run must mount the loop's directory so
+    /// bash (and python) can reach files written by the loop's own events.
+    #[tokio::test]
+    #[serial]
+    async fn it_mounts_the_loop_workspace_for_run_sessions() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let db = state.db.clone();
+
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO channel (id, source) VALUES ('alpha', 'socket')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop (id, system_prompt, tools)
+                 VALUES ('loop-1', 'You are a loop.', '[\"bash\"]')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_run (id, loop_id, channel_id, event, status, session_id)
+                 VALUES ('run-1', 'loop-1', 'alpha', 'event', 'success', 'run-1')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let workspace = std::path::Path::new(&storage)
+            .join("workspace")
+            .join("loop-1");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("hello.txt"), "from-the-loop").unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "session_id": "run-1",
+                            "message": "/bash cat /hello.txt"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("from-the-loop"), "body was: {body}");
+    }
 }

@@ -157,6 +157,8 @@ async fn run_loop(
 
     // session_id is the loop id, fixed for the lifetime of the loop so every
     // BashTool mounts the same workspace directory across events and restarts.
+    // `workspace_id_for_session` resolves a run's transcript session back to
+    // this id, so opening the run in the chat UI mounts the same directory.
     let base_context = ToolConfig {
         db: config.db.clone(),
         api_base_url: config.api_base_url.clone(),
