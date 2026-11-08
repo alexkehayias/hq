@@ -6,7 +6,7 @@ use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{
-    CalendarTool, DateTimeTool, EmailUnreadTool, IterateTool, MeetingSearchTool, NoteSearchTool,
+    CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, NoteSearchTool, SubagentTool,
     WebSearchTool,
 };
 use crate::core::db::async_db;
@@ -58,7 +58,7 @@ pub async fn run(
     };
 
     let datetime_tool = DateTimeTool::default();
-    let iterate_tool = IterateTool::new(api_hostname, api_key, model);
+    let subagent_tool = SubagentTool::new(api_hostname, api_key, model);
 
     let tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
@@ -67,7 +67,7 @@ pub async fn run(
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
         Box::new(datetime_tool),
-        Box::new(iterate_tool),
+        Box::new(subagent_tool),
     ];
 
     let mut chat = ChatBuilder::new(api_hostname, api_key, model)

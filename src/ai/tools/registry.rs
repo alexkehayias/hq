@@ -9,10 +9,10 @@ use crate::openai::{BoxedToolCall, ToolCall};
 
 use super::{
     BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
-    EmailSearchTool, EmailUnreadTool, EmitChannelTool, IterateTool, ListLoopsTool, ListSkillsTool,
+    EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool, ListSkillsTool,
     LoadSkillTool, MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, ReadSkillFileTool,
-    SaveSkillTool, SearchSkillsTool, TasksDueTodayTool, TasksScheduledTodayTool, WebSearchTool,
-    WebsiteViewTool, WorkOnSkillTool,
+    SaveSkillTool, SearchSkillsTool, SubagentTool, TasksDueTodayTool, TasksScheduledTodayTool,
+    WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
 };
 
 /// Shared dependencies needed to construct tools by name.
@@ -95,7 +95,7 @@ impl ToolRegistry {
         registry.register::<EmailSearchTool>();
         registry.register::<TasksDueTodayTool>();
         registry.register::<TasksScheduledTodayTool>();
-        registry.register::<IterateTool>();
+        registry.register::<SubagentTool>();
         registry.register::<CreateLoopTool>();
         registry.register::<ListLoopsTool>();
         registry.register::<DeleteLoopTool>();
@@ -184,8 +184,8 @@ mod tests {
             "datetime"
         );
         assert_eq!(
-            registry.from_str("iterate").unwrap().function_name(),
-            "iterate"
+            registry.from_str("subagent").unwrap().function_name(),
+            "subagent"
         );
     }
 

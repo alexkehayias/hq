@@ -34,8 +34,8 @@ use crate::ai::chat::{
 };
 use crate::ai::tools::{
     BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
-    EmailSearchTool, EmailUnreadTool, EmitChannelTool, IterateTool, ListLoopsTool,
-    MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, TasksDueTodayTool,
+    EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool, MeetingSearchTool,
+    NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use crate::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
@@ -294,7 +294,7 @@ async fn chat_handler(
         bash_tool,
         python_tool,
         notify_tool,
-        iterate_tool,
+        subagent_tool,
         create_loop_tool,
         list_loops_tool,
         delete_loop_tool,
@@ -348,7 +348,7 @@ async fn chat_handler(
             BashTool::new(storage_path, &workspace_id),
             PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
-            IterateTool::new(openai_api_hostname, openai_api_key, openai_model),
+            SubagentTool::new(openai_api_hostname, openai_api_key, openai_model),
             CreateLoopTool::new(loop_config.clone()),
             ListLoopsTool::new(loop_config.clone()),
             DeleteLoopTool::new(loop_config),
@@ -378,7 +378,7 @@ async fn chat_handler(
         Box::new(bash_tool),
         Box::new(python_tool),
         Box::new(notify_tool),
-        Box::new(iterate_tool),
+        Box::new(subagent_tool),
         Box::new(create_loop_tool),
         Box::new(list_loops_tool),
         Box::new(delete_loop_tool),
