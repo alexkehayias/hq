@@ -21,6 +21,12 @@ pub const DEFAULT_HOSTNAME: &str = "bashkit-sandbox";
 /// Default virtual username.
 pub const DEFAULT_USERNAME: &str = "sandbox";
 
+/// Default virtual home directory.
+///
+/// This is the directory [`InMemoryFs`](crate::bash::fs::InMemoryFs) creates and
+/// the initial working directory, so `cd ~` always lands somewhere that exists.
+pub const DEFAULT_HOME: &str = "/home/user";
+
 /// Hardcoded virtual user ID.
 pub const SANDBOX_UID: u32 = 1000;
 
