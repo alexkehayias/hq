@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::org;
 use anyhow::{Context, Result};
 use chrono::Local;
 use once_cell::sync::Lazy;
@@ -15,6 +14,8 @@ use orgize::rowan::ast::AstNode;
 use regex::Regex;
 use tokio::fs;
 use tokio_rusqlite::Connection;
+
+use crate::org;
 
 /// Suffix Org mode uses for archive files (e.g. `work.org_archive`).
 pub const ORG_ARCHIVE_SUFFIX: &str = ".org_archive";

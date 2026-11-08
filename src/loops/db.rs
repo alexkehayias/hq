@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-use super::models::{Loop, LoopRun, RunStatus};
 use anyhow::Result;
 use tokio_rusqlite::{Connection, rusqlite};
+
+use super::models::{Loop, LoopRun, RunStatus};
 
 pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
     let loops = db.call(|conn| {

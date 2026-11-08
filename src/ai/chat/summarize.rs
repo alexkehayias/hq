@@ -1,6 +1,7 @@
+use tokio_rusqlite::{Connection, rusqlite};
+
 use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
 use crate::openai::{Message, Role};
-use tokio_rusqlite::{Connection, rusqlite};
 
 /// Generate a title and summary for a chat session from its transcript and
 /// persist them to the `session` table.

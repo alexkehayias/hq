@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use crate::ai::skills::SkillRegistry;
-use crate::openai::{BoxedToolCall, ToolCall};
 use anyhow::{Result, anyhow};
 use tokio_rusqlite::Connection;
+
+use crate::ai::skills::SkillRegistry;
+use crate::openai::{BoxedToolCall, ToolCall};
 
 use super::{
     BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,

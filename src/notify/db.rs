@@ -1,6 +1,7 @@
-use super::models::PushSubscription;
 use anyhow::Result;
 use tokio_rusqlite::{Connection, rusqlite};
+
+use super::models::PushSubscription;
 
 pub async fn find_all_notification_subscriptions(db: &Connection) -> Result<Vec<PushSubscription>> {
     let subscriptions = db.call(|conn| {

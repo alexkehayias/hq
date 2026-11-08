@@ -14,17 +14,18 @@
 
 use std::time::Duration;
 
-use super::db::{ensure_channels, find_agent_channels};
-use super::errors::{SERVER_ERROR_CHANNEL, register as register_error_channel};
-use super::models::ChannelSource;
-use super::notes::{NEW_NOTE_CHANNEL, register as register_note_channel};
-use super::registry;
 use anyhow::Result;
 use async_stream::stream;
 use futures::stream::BoxStream;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, interval_at};
 use tokio_rusqlite::Connection;
+
+use super::db::{ensure_channels, find_agent_channels};
+use super::errors::{SERVER_ERROR_CHANNEL, register as register_error_channel};
+use super::models::ChannelSource;
+use super::notes::{NEW_NOTE_CHANNEL, register as register_note_channel};
+use super::registry;
 
 /// Default timer channels as `(id, interval)`.
 pub const DEFAULT_TIMER_CHANNELS: &[(&str, Duration)] = &[

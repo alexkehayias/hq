@@ -1,7 +1,8 @@
-use super::public;
 use anyhow::{Error, Result};
 use serde_json::json;
 use tokio_rusqlite::{Connection, params, rusqlite};
+
+use super::public;
 
 pub async fn chat_session_count(
     db: &Connection,

@@ -1,6 +1,7 @@
-use super::models::{Channel, ChannelSource};
 use anyhow::Result;
 use tokio_rusqlite::{Connection, rusqlite};
+
+use super::models::{Channel, ChannelSource};
 
 /// List every channel, ordered by id.
 pub async fn find_all_channels(db: &Connection) -> Result<Vec<Channel>> {

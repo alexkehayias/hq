@@ -1,9 +1,10 @@
-use crate::ai::chat::models::{BACKGROUND_TAG, Session, SessionMode};
-use crate::openai::Message;
 use anyhow::{Error, Result};
 use serde::Serialize;
 use serde_json::json;
 use tokio_rusqlite::{Connection, rusqlite};
+
+use crate::ai::chat::models::{BACKGROUND_TAG, Session, SessionMode};
+use crate::openai::Message;
 
 #[derive(Serialize)]
 pub struct SessionWithTitle {

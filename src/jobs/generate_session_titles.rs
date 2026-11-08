@@ -1,11 +1,12 @@
+use async_trait::async_trait;
+use std::time::Duration;
+use tokio_rusqlite::{Connection, rusqlite};
+
 use crate::ai::chat::BACKGROUND_TAG;
 use crate::ai::chat::db::find_chat_session_by_id;
 use crate::ai::chat::summarize::generate_and_update_session_info;
 use crate::core::AppConfig;
 use crate::openai::Message;
-use async_trait::async_trait;
-use std::time::Duration;
-use tokio_rusqlite::{Connection, rusqlite};
 
 #[derive(Debug)]
 pub struct GenerateSessionTitles;
