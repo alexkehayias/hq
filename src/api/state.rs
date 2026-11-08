@@ -4,6 +4,7 @@ use serde::Deserialize;
 use tokio_rusqlite::Connection;
 
 use crate::ai::skills::SkillRegistry;
+use crate::api::routes::chat::TerminalRegistry;
 use crate::api::routes::chat::stream::ChatStreamRegistry;
 use crate::core::AppConfig;
 
@@ -24,6 +25,9 @@ pub struct AppState {
     // In-flight (and recently finished) chat streams, keyed by session id, so
     // a reconnecting client can resume a response mid-generation.
     pub streams: ChatStreamRegistry,
+    // Interactive bashkit shells, keyed by session id, so working directory
+    // and shell state persist across terminal commands.
+    pub terminals: TerminalRegistry,
 }
 
 impl AppState {
@@ -34,6 +38,7 @@ impl AppState {
             config,
             skill_registry: Arc::new(RwLock::new(skill_registry)),
             streams: ChatStreamRegistry::default(),
+            terminals: TerminalRegistry::default(),
         }
     }
 }

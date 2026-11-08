@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
 use crate::ai::chat::db::{delete_chat_session, find_chat_session_by_id};
 use crate::ai::chat::summarize::generate_and_update_session_info;
+use crate::ai::chat::workspace::workspace_root;
 use crate::core::db::async_db;
 use crate::openai::{Message, Role};
 use crate::search::delete_chat_session_index;
@@ -68,7 +68,7 @@ pub async fn run_delete(
         .context("Failed to delete chat session from database")?;
 
     // 3. Workspace directory cleanup
-    let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+    let workspace_path = workspace_root(storage_path, session_id);
     let workspace_existed = workspace_path.exists();
     if workspace_existed {
         tokio::fs::remove_dir_all(&workspace_path)

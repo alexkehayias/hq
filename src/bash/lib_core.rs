@@ -14,7 +14,7 @@ use crate::bash::fs::{FileSystem, InMemoryFs, MountableFs};
 use crate::bash::interpreter::{ExecResult, Interpreter};
 use crate::bash::limits::{ExecutionLimits, LimitExceeded};
 use crate::bash::parser::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Default maximum input script size (1 MiB).
@@ -216,6 +216,11 @@ impl Bash {
     /// Read-only access to the virtual filesystem.
     pub fn fs(&self) -> Arc<dyn FileSystem> {
         Arc::clone(&self.fs)
+    }
+
+    /// Current working directory inside the sandbox.
+    pub fn cwd(&self) -> &Path {
+        self.interpreter.cwd()
     }
 }
 

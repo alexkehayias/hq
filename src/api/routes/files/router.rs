@@ -1,6 +1,6 @@
 //! Router for the file uploads API
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use axum::{
@@ -12,6 +12,8 @@ use axum::{
 };
 
 use super::public::{FileUploadResponse, UploadedFile};
+use crate::ai::chat::models::is_valid_session_id;
+use crate::ai::chat::workspace::workspace_root;
 use crate::api::public::ApiError;
 use crate::api::state::AppState;
 use crate::loops::db::workspace_id_for_session;
@@ -28,16 +30,6 @@ const ALLOWED_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 struct PendingFile {
     filename: String,
     bytes: axum::body::Bytes,
-}
-
-/// Session IDs are used as a path segment (`workspace/{session_id}`), so
-/// restrict them to a safe character set to prevent path traversal.
-fn is_valid_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Reduce a client-supplied filename to a safe basename. Strips any directory
@@ -187,10 +179,7 @@ async fn upload_files(
         validated.push((filename, ext, file.bytes));
     }
 
-    let files_dir = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&workspace_id)
-        .join("files");
+    let files_dir = workspace_root(&storage_path, &workspace_id).join("files");
     tokio::fs::create_dir_all(&files_dir).await?;
 
     let mut uploaded = Vec::with_capacity(validated.len());
@@ -236,9 +225,7 @@ async fn get_file(
 
     let workspace_id = workspace_id_for_session(&db, &session_id).await?;
 
-    let path = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&workspace_id)
+    let path = workspace_root(&storage_path, &workspace_id)
         .join("files")
         .join(&filename);
 
@@ -277,9 +264,7 @@ async fn delete_file(
 
     let workspace_id = workspace_id_for_session(&db, &session_id).await?;
 
-    let path = PathBuf::from(&storage_path)
-        .join("workspace")
-        .join(&workspace_id)
+    let path = workspace_root(&storage_path, &workspace_id)
         .join("files")
         .join(&filename);
 

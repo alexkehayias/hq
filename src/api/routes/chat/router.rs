@@ -1,7 +1,6 @@
 //! Router for the chat API
 
 use std::convert::Infallible;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -23,8 +22,11 @@ use uuid::Uuid;
 
 use super::db::{chat_session_count, chat_session_list};
 use super::stream::{self, SessionStream};
+use super::terminal::{terminal_cwd_handler, terminal_handler};
+use super::workspace::{list_workspace_files, read_workspace_file};
 use crate::ai::chat::commands::{SlashCommand, get_help_text};
 use crate::ai::chat::models::SessionMode;
+use crate::ai::chat::workspace::{ensure_workspace, workspace_root};
 use crate::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
     find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
@@ -413,6 +415,7 @@ async fn chat_handler(
     // Parse message using slash command system
     let slash_cmd = payload.message.parse()?;
     let session = get_or_create_session(&db, &session_id, &[], SessionMode::Chat).await?;
+    ensure_workspace(&storage_path_owned, &workspace_id).await?;
     let current_mode = session.mode;
 
     // Handle mode transitions
@@ -577,8 +580,7 @@ async fn chat_handler(
         }
         (SessionMode::Chat, SlashCommand::Bash { command }) => {
             // Run a command in the bashkit sandbox and return the output
-            let workspace_path =
-                PathBuf::from(format!("{}/workspace/{}", storage_path_owned, workspace_id));
+            let workspace_path = workspace_root(&storage_path_owned, &workspace_id);
             let response = match run_in_sandbox(&storage_path_owned, &workspace_path, command).await
             {
                 Ok(output) => {
@@ -762,8 +764,7 @@ async fn chat_handler(
         transcript.push(system_msg);
     }
 
-    let workspace_path =
-        PathBuf::from(format!("{}/workspace/{}", storage_path_owned, workspace_id));
+    let workspace_path = workspace_root(&storage_path_owned, &workspace_id);
 
     let mut chat = ChatBuilder::new(&openai_api_hostname, &openai_api_key, &openai_model)
         .database(&db, Some(&session_id), None)
@@ -867,5 +868,11 @@ pub fn router() -> Router<SharedState> {
         .route("/", post(chat_handler))
         .route("/{id}", get(chat_session))
         .route("/{id}/stream", get(chat_stream_handler))
+        .route(
+            "/{id}/terminal",
+            get(terminal_cwd_handler).post(terminal_handler),
+        )
+        .route("/{id}/workspace", get(list_workspace_files))
+        .route("/{id}/workspace/{*path}", get(read_workspace_file))
         .route("/sessions", get(chat_list))
 }

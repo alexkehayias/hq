@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use super::bash::SANDBOX_ROOT;
 use super::registry::{Tool, ToolConfig};
+use crate::ai::chat::workspace::workspace_root;
 use crate::core::http::html_to_markdown;
 use crate::openai::{
     Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
@@ -280,7 +281,7 @@ impl Tool for WebsiteViewTool {
 
 impl WebsiteViewTool {
     pub fn new(storage_path: &str, session_id: &str) -> Self {
-        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = workspace_root(storage_path, session_id);
 
         let function = Function {
             name: Self::NAME.to_string(),

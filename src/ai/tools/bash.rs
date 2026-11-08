@@ -1,4 +1,5 @@
 use super::registry::{Tool, ToolConfig};
+use crate::ai::chat::workspace::workspace_root;
 use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{
@@ -81,7 +82,7 @@ impl BashTool {
         // Only allow access to the session's directory in the
         // workspace to avoid potential security issues from
         // overwriting files in another session
-        let workspace_path = PathBuf::from(format!("{}/workspace/{}", storage_path, session_id));
+        let workspace_path = workspace_root(storage_path, session_id);
 
         let parameters = Parameters {
             r#type: String::from("object"),
@@ -117,6 +118,31 @@ impl BashTool {
     }
 }
 
+/// Build a bashkit shell with `workspace_path` mounted at the sandbox root.
+///
+/// The workspace directory must already exist. `cwd` is the initial working
+/// directory inside the sandbox; pass `/` to start at the top of the mounted
+/// workspace.
+pub async fn new_sandbox(
+    storage_path: &str,
+    workspace_path: &Path,
+    cwd: impl Into<PathBuf>,
+) -> Result<Bash> {
+    let backend = RealFs::new(workspace_path, RealFsMode::ReadWrite)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
+    let fs = Arc::new(PosixFs::new(backend));
+
+    let mut bash = Bash::builder()
+        .builtin("hq", Box::new(HqBuiltin::new(storage_path)))
+        .cwd(cwd)
+        .build();
+    bash.mount(SANDBOX_ROOT, fs)
+        .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
+
+    Ok(bash)
+}
+
 /// Run a command in a bashkit sandbox with workspace filesystem access.
 /// Creates the workspace directory if it doesn't exist, mounts it at the
 /// sandbox root, and returns the command output. This is idempotent.
@@ -131,18 +157,9 @@ pub async fn run_in_sandbox(
     workspace_path: &Path,
     command: &str,
 ) -> Result<BashOutput> {
+    // Preserve bashkit's default starting directory for the agent's bash tool.
     fs::create_dir_all(workspace_path).await?;
-
-    let backend = RealFs::new(workspace_path, RealFsMode::ReadWrite)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
-    let fs = Arc::new(PosixFs::new(backend));
-
-    let mut bash = Bash::builder()
-        .builtin("hq", Box::new(HqBuiltin::new(storage_path)))
-        .build();
-    bash.mount(SANDBOX_ROOT, fs)
-        .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
+    let mut bash = new_sandbox(storage_path, workspace_path, "/home/user").await?;
 
     let output = bash.exec(command).await.map_err(|e| {
         // bashkit reports command-level failures (bad syntax, unsupported
