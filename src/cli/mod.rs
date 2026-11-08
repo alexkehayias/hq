@@ -22,6 +22,7 @@ pub mod query;
 pub mod rebuild;
 pub mod serve;
 pub mod session;
+pub mod sync;
 pub mod tasks;
 pub mod web;
 
@@ -165,6 +166,11 @@ enum Command {
     Web {
         #[command(subcommand)]
         command: web::WebCommand,
+    },
+    /// Sync data with its remote source (notes, etc.)
+    Sync {
+        #[command(subcommand)]
+        command: sync::SyncCommand,
     },
     /// Load example .org notes for development
     ExampleData {},
@@ -434,6 +440,19 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
         }
         Some(Command::Web { command }) => {
             web::run(command).await?;
+        }
+        Some(Command::Sync { command }) => {
+            let deploy_key_path = env::var("HQ_NOTES_DEPLOY_KEY_PATH").ok();
+            sync::run(
+                command,
+                &sync::SyncConfig {
+                    deploy_key_path: deploy_key_path.as_deref(),
+                    notes_path: &notes_path,
+                    index_path: &index_path,
+                    vec_db_path: &vec_db_path,
+                },
+            )
+            .await?;
         }
         Some(Command::ExampleData {}) => {
             example_data::run(&notes_path, &index_path, &vec_db_path).await?;

@@ -1265,7 +1265,7 @@ pub async fn sync_and_reindex_notes(db: &Connection, config: &AppConfig) {
 
     // sync_repo stages and commits before rebasing, so it (unlike
     // maybe_pull_rebase) tolerates an otherwise-dirty working tree.
-    match git::sync_repo(&config.deploy_key_path, &config.notes_path).await {
+    match git::sync_repo(Some(&config.deploy_key_path), &config.notes_path).await {
         Ok(changed) if !changed.is_empty() => {
             if let Err(e) = reindex_changed_notes(
                 db,

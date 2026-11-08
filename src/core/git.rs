@@ -152,11 +152,18 @@ pub async fn changed_files_between(path: &str, from: &str, to: &str) -> Result<V
 /// and our `git add -A` that could stage a half-written file. Risk is low
 /// (atomic at OS level for small files) and self-heals on the next tick when
 /// the complete file gets committed. Not blocking.
-pub async fn sync_repo(deploy_key_path: &str, path: &str) -> Result<Vec<String>> {
-    let ssh = format!(
-        "GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes'",
-        deploy_key_path
-    );
+///
+/// `deploy_key_path` overrides the SSH identity for remotes that need it. Pass
+/// `None` for repos reachable without one (local paths, HTTPS), which lets the
+/// command run without `HQ_NOTES_DEPLOY_KEY_PATH` configured.
+pub async fn sync_repo(deploy_key_path: Option<&str>, path: &str) -> Result<Vec<String>> {
+    let ssh = match deploy_key_path {
+        Some(deploy_key_path) => format!(
+            "GIT_SSH_COMMAND='ssh -i {} -o IdentitiesOnly=yes'",
+            deploy_key_path
+        ),
+        None => String::new(),
+    };
 
     // 1. Capture pre-sync HEAD
     let pre_head = head_sha(path).await?;
@@ -370,7 +377,7 @@ mod tests {
         git(path, "git push -u origin main").await;
 
         // sync_repo with no local changes — should not error, returns empty Vec
-        let changed = sync_repo("unused-deploy-key", path).await.unwrap();
+        let changed = sync_repo(None, path).await.unwrap();
         assert!(changed.is_empty(), "expected no changes, got: {changed:?}");
     }
 
@@ -394,7 +401,7 @@ mod tests {
         fs::write(format!("{path}/note.org"), ":PROPERTIES:\n:ID: abc\n:END:").unwrap();
 
         // sync_repo should commit + push; returned changed list includes note.org
-        let changed = sync_repo("unused-deploy-key", path).await.unwrap();
+        let changed = sync_repo(None, path).await.unwrap();
         assert!(
             changed.contains(&"note.org".to_string()),
             "expected note.org in changed files, got: {changed:?}"
