@@ -152,7 +152,7 @@ fn create_migration_in(dir: &Path, name: &str) -> Result<(PathBuf, String, i64)>
 
 use super::MigrationFn;
 use anyhow::{{Result, bail}};
-use rusqlite::Connection;
+use tokio_rusqlite::rusqlite::Connection;
 
 pub const DOWN: Option<MigrationFn> = Some(down);
 

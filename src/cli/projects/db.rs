@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::{Connection, rusqlite};
 
 pub struct ProjectRow {
     pub id: String,
@@ -75,7 +75,7 @@ pub async fn find_project_file(
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
 
-            Ok(rows)
+            Ok::<_, rusqlite::Error>(rows)
         })
         .await?;
 
@@ -134,9 +134,9 @@ pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
                     let id: String = row.get(0)?;
                     let title: String = row.get(1)?;
                     let file_name: String = row.get(2)?;
-                    let total_tasks: usize = row.get(3)?;
-                    let done_tasks: usize = row.get(4)?;
-                    let todo_tasks: usize = row.get(5)?;
+                    let total_tasks: usize = row.get::<_, i64>(3)? as usize;
+                    let done_tasks: usize = row.get::<_, i64>(4)? as usize;
+                    let todo_tasks: usize = row.get::<_, i64>(5)? as usize;
                     let is_done_int: i32 = row.get(6)?;
                     Ok(ProjectRow {
                         id,
@@ -151,7 +151,7 @@ pub async fn list_projects(db: &Connection) -> Result<Vec<ProjectRow>> {
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
 
-            Ok(rows)
+            Ok::<_, rusqlite::Error>(rows)
         })
         .await?;
 

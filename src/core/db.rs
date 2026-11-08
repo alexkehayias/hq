@@ -1,6 +1,6 @@
 use sqlite_vec::sqlite3_vec_init;
 use std::os::raw::c_char;
-use tokio_rusqlite::{Connection, Result, ffi::sqlite3_auto_extension};
+use tokio_rusqlite::{Connection, ffi::sqlite3_auto_extension, rusqlite};
 
 pub mod migrations;
 
@@ -8,7 +8,7 @@ pub mod migrations;
 ///
 /// This is safe to run multiple times: migrations already recorded in
 /// `schema_migrations` are skipped. See [`migrations`] for the framework.
-pub fn initialize_db(db: &rusqlite::Connection) -> Result<()> {
+pub fn initialize_db(db: &rusqlite::Connection) -> Result<(), migrations::MigrationError> {
     migrations::migrate(db).map_err(migrations::db_error)?;
     Ok(())
 }
@@ -99,7 +99,7 @@ mod tests {
                 "the dropped loop's channel link should be removed"
             );
 
-            Ok(())
+            Ok::<_, migrations::MigrationError>(())
         })
         .await
         .unwrap();
@@ -130,7 +130,7 @@ mod tests {
             let status = migrations::status(conn).map_err(migrations::db_error)?;
             assert_eq!(status.pending.len(), 1);
 
-            Ok(())
+            Ok::<_, migrations::MigrationError>(())
         })
         .await
         .unwrap();

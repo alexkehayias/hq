@@ -2,7 +2,7 @@
 //!
 //! A migration is a Rust module that exposes an `up` function and a `DOWN`
 //! constant holding an optional `down` function, both operating on a
-//! [`rusqlite::Connection`]. Modules are discovered by `build.rs` from their
+//! [`Connection`]. Modules are discovered by `build.rs` from their
 //! `migration_<version>_<name>.rs` filenames, so there is no registry to
 //! maintain by hand. The set of migrations applied to a database is recorded in
 //! the `schema_migrations` table, so [`migrate`] runs only the pending ones and
@@ -12,8 +12,8 @@
 //! transaction, so a failure leaves the database at the previous migration.
 
 use anyhow::{Context, Result, bail};
-use rusqlite::Connection;
 use std::collections::HashSet;
+use tokio_rusqlite::rusqlite::{Connection, params};
 
 /// The signature of a migration's `up` or `down` function.
 pub type MigrationFn = fn(&Connection) -> Result<()>;
@@ -133,12 +133,42 @@ fn validate_name(migration: &Migration) -> Result<()> {
     Ok(())
 }
 
+/// A migration error that can be the error type of a
+/// [`tokio_rusqlite::Connection::call`] closure.
+///
+/// Migration functions use `anyhow` for readable context, but `anyhow::Error`
+/// deliberately does not implement [`std::error::Error`], which `call` requires
+/// of its closure's error type. This wrapper adds that impl and forwards the
+/// source chain.
+#[derive(Debug)]
+pub struct MigrationError(anyhow::Error);
+
+impl std::fmt::Display for MigrationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for MigrationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // `chain()` starts with this error's own context, so the next item is
+        // its immediate cause.
+        self.0.chain().nth(1)
+    }
+}
+
+impl From<tokio_rusqlite::rusqlite::Error> for MigrationError {
+    fn from(err: tokio_rusqlite::rusqlite::Error) -> Self {
+        MigrationError(err.into())
+    }
+}
+
 /// Converts a migration error into the error type used by `tokio_rusqlite`.
 ///
 /// Migration functions use `anyhow` for readable context; callers that run
 /// them inside [`tokio_rusqlite::Connection::call`] need this conversion.
-pub fn db_error(err: anyhow::Error) -> tokio_rusqlite::Error {
-    tokio_rusqlite::Error::Other(err.into())
+pub fn db_error(err: anyhow::Error) -> MigrationError {
+    MigrationError(err)
 }
 
 const MIGRATIONS_TABLE: &str = "schema_migrations";
@@ -230,7 +260,7 @@ pub fn migrate(conn: &Connection) -> Result<Vec<Migration>> {
             })?;
             tx.execute(
                 &format!("INSERT INTO {MIGRATIONS_TABLE} (version, name) VALUES (?1, ?2)"),
-                rusqlite::params![migration.version, migration.name],
+                params![migration.version, migration.name],
             )?;
             tx.commit()?;
         }

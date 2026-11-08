@@ -4,6 +4,8 @@ mod test_utils;
 
 #[cfg(test)]
 mod tests {
+    use tokio_rusqlite::rusqlite;
+
     use axum::{
         body::Body,
         http::{Request, StatusCode, header},
@@ -67,7 +69,7 @@ mod tests {
                  VALUES ('loop-1', 'beta')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -104,7 +106,7 @@ mod tests {
                  VALUES ('loop-1', 'Old prompt.', '[\"bash\"]')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -127,11 +129,11 @@ mod tests {
 
         let prompt: String = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT system_prompt FROM loop WHERE id = 'loop-1'",
                     [],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();
@@ -191,7 +193,7 @@ mod tests {
                  VALUES ('loop-1', 'Old prompt.', '[\"bash\"]')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -212,11 +214,11 @@ mod tests {
 
         let prompt: String = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT system_prompt FROM loop WHERE id = 'loop-1'",
                     [],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();
@@ -252,7 +254,7 @@ mod tests {
                 [],
             )?;
             conn.execute("INSERT INTO session (id) VALUES ('run-2')", [])?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -326,7 +328,7 @@ mod tests {
                          '2026-01-03T00:00:00.000Z')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

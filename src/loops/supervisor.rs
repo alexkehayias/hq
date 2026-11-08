@@ -265,14 +265,15 @@ mod tests {
     use super::*;
     use crate::channels::registry;
     use crate::core::db::{async_db, initialize_db};
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     async fn setup() -> (tempfile::TempDir, LoopSupervisorConfig) {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
-            initialize_db(conn)?;
-            Ok(())
+            initialize_db(conn).expect("Failed to migrate db");
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -313,7 +314,7 @@ mod tests {
                     "INSERT INTO channel (id, source) VALUES (?1, 'server')",
                     [&channel_for_db],
                 )?;
-                Ok(())
+                Ok::<_, rusqlite::Error>(())
             })
             .await
             .unwrap();

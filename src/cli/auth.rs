@@ -1,6 +1,7 @@
 use crate::core::db::async_db;
 use anyhow::{Result, anyhow};
 use std::io::{self, Write};
+use tokio_rusqlite::rusqlite;
 
 #[derive(clap::ValueEnum, Clone)]
 pub enum ServiceKind {
@@ -74,7 +75,7 @@ pub async fn run(service: ServiceKind, vec_db_path: &str) -> Result<()> {
                 )
                     .expect("Failed to insert/update refresh token in DB");
                 println!("Refresh token for {} saved to DB.", user_email);
-                Ok(())
+                Ok::<_, rusqlite::Error>(())
             }).await?;
         }
     }

@@ -12,7 +12,7 @@ use tantivy::{Index, IndexWriter, doc};
 use text_splitter::{ChunkConfig, TextSplitter};
 use tiktoken_rs::{CoreBPE, cl100k_base};
 use tokio::fs;
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::{Connection, rusqlite};
 use zerocopy::IntoBytes;
 
 use super::fts::schema::note_schema;
@@ -758,7 +758,7 @@ pub async fn index_all(
             .call(move |conn| {
                 let new_entries = index_note_meta(conn, &file_name_inner, &note_inner)
                     .expect("Upserting note meta failed");
-                Ok(new_entries)
+                Ok::<_, rusqlite::Error>(new_entries)
             })
             .await
             .expect("DB work failed");
@@ -786,7 +786,7 @@ pub async fn index_all(
             db.call(move |conn| {
                 store_embeddings_in_db(conn, &note_id, embeddings)
                     .expect("Storing embeddings in DB failed");
-                Ok(())
+                Ok::<_, rusqlite::Error>(())
             })
             .await
             .expect("DB work failed for embeddings");
@@ -853,7 +853,7 @@ pub async fn index_single_file(
         .call(move |conn| {
             let new_entries = index_note_meta(conn, &file_name_for_db, &note_for_db)
                 .expect("Upserting note meta failed");
-            Ok(new_entries)
+            Ok::<_, rusqlite::Error>(new_entries)
         })
         .await
         .expect("DB work failed");
@@ -927,7 +927,7 @@ pub async fn remove_task_from_indexes(
         .ok();
         conn.execute("DELETE FROM note_meta WHERE id = ?", [&task_id_owned])
             .ok();
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .expect("DB cleanup failed");
@@ -1092,7 +1092,7 @@ pub async fn index_chat_messages(
                 .filter_map(|r| r.ok())
                 .collect();
 
-            Ok((title, message_ids))
+            Ok::<_, rusqlite::Error>((title, message_ids))
         })
         .await?;
 
@@ -1172,7 +1172,7 @@ pub async fn delete_chat_session_index(
                 .query_map([&s_id], |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(ids)
+            Ok::<_, rusqlite::Error>(ids)
         })
         .await?;
 
@@ -1412,7 +1412,11 @@ mod tests {
 
         let note_for_db = note.clone();
         let new_entries = db
-            .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
+            .call(move |conn| {
+                Ok::<_, rusqlite::Error>(
+                    index_note_meta(conn, "notes/first.org", &note_for_db).unwrap(),
+                )
+            })
             .await
             .unwrap();
         assert_eq!(
@@ -1444,7 +1448,11 @@ mod tests {
 
         let note_for_db = note.clone();
         let new_entries = db
-            .call(move |conn| Ok(index_note_meta(conn, "notes/first.org", &note_for_db).unwrap()))
+            .call(move |conn| {
+                Ok::<_, rusqlite::Error>(
+                    index_note_meta(conn, "notes/first.org", &note_for_db).unwrap(),
+                )
+            })
             .await
             .unwrap();
         assert!(
@@ -1455,7 +1463,9 @@ mod tests {
         let archive_for_db = note.clone();
         let new_entries = db
             .call(move |conn| {
-                Ok(index_note_meta(conn, "notes/first.org_archive", &archive_for_db).unwrap())
+                Ok::<_, rusqlite::Error>(
+                    index_note_meta(conn, "notes/first.org_archive", &archive_for_db).unwrap(),
+                )
             })
             .await
             .unwrap();
@@ -1479,7 +1489,7 @@ mod tests {
         let db = async_db(&vec_db_path).await.unwrap();
         db.call(|conn| {
             initialize_db(conn).unwrap();
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1551,7 +1561,7 @@ mod tests {
                     .query_map([&s_id], |row| row.get(0))?
                     .filter_map(|r| r.ok())
                     .collect();
-                Ok(ids)
+                Ok::<_, rusqlite::Error>(ids)
             })
             .await
             .unwrap();
@@ -1584,11 +1594,11 @@ mod tests {
         // The DB rows are untouched (delete_chat_session_index doesn't touch DB)
         let remaining: i64 = db
             .call(move |conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM chat_message WHERE session_id = ?",
                     rusqlite::params![session_id],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();

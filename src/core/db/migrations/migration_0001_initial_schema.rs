@@ -10,7 +10,7 @@
 
 use super::MigrationFn;
 use anyhow::Result;
-use rusqlite::Connection;
+use tokio_rusqlite::rusqlite::{Connection, params};
 
 pub const DOWN: Option<MigrationFn> = Some(down);
 
@@ -472,7 +472,7 @@ fn upgrade_channel_created_by(conn: &Connection) -> Result<()> {
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
-        rusqlite::params![table, column],
+        params![table, column],
         |row| row.get(0),
     )?;
     Ok(count > 0)
