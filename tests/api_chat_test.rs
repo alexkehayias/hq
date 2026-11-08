@@ -4,6 +4,8 @@ mod test_utils;
 
 #[cfg(test)]
 mod tests {
+    use tokio_rusqlite::rusqlite;
+
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -1179,7 +1181,7 @@ mod tests {
                  VALUES ('run-1', 'loop-1', 'alpha', 'event', 'success', 'run-1')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

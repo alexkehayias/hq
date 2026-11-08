@@ -4,7 +4,7 @@ use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_to
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::{Connection, rusqlite};
 
 #[derive(Serialize)]
 pub struct CalendarProps {
@@ -43,7 +43,7 @@ impl ToolCall for CalendarTool {
                 for email in rows {
                     emails.push(email?);
                 }
-                Ok(emails)
+                Ok::<_, rusqlite::Error>(emails)
             })
             .await?;
 

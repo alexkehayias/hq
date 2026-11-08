@@ -39,7 +39,7 @@ pub async fn channel_meta(db: &Connection, id: &str) -> Result<(ChannelSource, u
                     i.get::<_, i64>(1)?,
                 ))
             })?;
-            Ok(rows.next().transpose()?)
+            rows.next().transpose()
         })
         .await?;
 
@@ -85,14 +85,15 @@ mod tests {
     use crate::core::db::{async_db, initialize_db};
     use async_stream::stream;
     use futures::StreamExt;
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     async fn setup_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
-            initialize_db(conn)?;
-            Ok(())
+            initialize_db(conn).expect("Failed to migrate db");
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -107,7 +108,7 @@ mod tests {
                 "INSERT INTO channel (id, source, debounce_ms) VALUES (?1, ?2, ?3)",
                 rusqlite::params![id, source, debounce_ms],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

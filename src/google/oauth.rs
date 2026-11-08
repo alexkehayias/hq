@@ -3,7 +3,7 @@
 use anyhow::{Error, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::{Connection, rusqlite};
 
 /// Response from Google's token endpoint
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -91,7 +91,7 @@ pub async fn find_all_gmail_auth_emails(db: &Connection) -> Result<Vec<String>, 
             .query_map([], |row| row.get(0))?
             .filter_map(Result::ok)
             .collect();
-        Ok(result)
+        Ok::<_, rusqlite::Error>(result)
     });
     Ok(auths.await?)
 }

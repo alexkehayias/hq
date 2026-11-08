@@ -8,8 +8,8 @@ use crate::ai::chat::workspace::workspace_root;
 use crate::core::db::async_db;
 use crate::openai::{Message, Role};
 use crate::search::delete_chat_session_index;
-use rusqlite::OptionalExtension;
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::rusqlite::OptionalExtension;
+use tokio_rusqlite::{Connection, rusqlite};
 
 /// Delete a chat session, its messages, its tantivy search index entries,
 /// and its workspace directory.
@@ -48,7 +48,7 @@ pub async fn run_delete(
                 rusqlite::params![s_id_check],
                 |row| row.get(0),
             )?;
-            Ok(count > 0)
+            Ok::<_, rusqlite::Error>(count > 0)
         })
         .await
         .context("Failed to check session existence")?;
@@ -117,7 +117,7 @@ pub async fn run_summarize(
                 rusqlite::params![s_id_check],
                 |row| row.get(0),
             )?;
-            Ok(count > 0)
+            Ok::<_, rusqlite::Error>(count > 0)
         })
         .await
         .context("Failed to check session existence")?;
@@ -165,7 +165,7 @@ pub async fn run_list(db: Connection) -> Result<()> {
             let mut stmt =
                 conn.prepare("SELECT id, title FROM session ORDER BY created_at DESC")?;
             let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            rows.collect::<rusqlite::Result<Vec<_>>>()
         })
         .await
         .context("Failed to list chat sessions")?;
@@ -203,7 +203,7 @@ pub async fn run_get(db: Connection, session_id: &str) -> Result<()> {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            Ok(row)
+            Ok::<_, rusqlite::Error>(row)
         })
         .await
         .context("Failed to load chat session")?;
@@ -312,7 +312,7 @@ mod tests {
         let db = async_db(&db_path_str).await.unwrap();
         db.call(|conn| {
             initialize_db(conn).unwrap();
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -359,11 +359,11 @@ mod tests {
         // DB rows are gone
         let remaining_session: i64 = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM session WHERE id = ?",
                     ["test-session-1"],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();
@@ -371,11 +371,11 @@ mod tests {
 
         let remaining_msgs: i64 = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM chat_message WHERE session_id = ?",
                     ["test-session-1"],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();
@@ -444,11 +444,11 @@ mod tests {
         // DB rows are gone
         let remaining: i64 = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM session WHERE id = ?",
                     ["test-session-no-workspace"],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();
@@ -524,7 +524,7 @@ mod tests {
                 "INSERT INTO session (id) VALUES (?1)",
                 rusqlite::params!["no-title"],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -569,7 +569,7 @@ mod tests {
                 "UPDATE session SET title = ?, summary = ? WHERE id = ?",
                 rusqlite::params!["A title", "A summary", "get-session"],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

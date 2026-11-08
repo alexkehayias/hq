@@ -2,6 +2,7 @@ use crate::search::index_all;
 use crate::search::recreate_index;
 use anyhow::Result;
 use std::env;
+use tokio_rusqlite::rusqlite;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub async fn run(index_path: &str, notes_path: &str, vec_db_path: &str) -> Result<()> {
@@ -22,7 +23,7 @@ pub async fn run(index_path: &str, notes_path: &str, vec_db_path: &str) -> Resul
     db.call(|conn| {
         conn.execute("DELETE FROM vec_items", [])?;
         conn.execute("DELETE FROM note_meta", [])?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .expect("Failed to delete note_meta or vec_items data");
