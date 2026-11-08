@@ -1,6 +1,7 @@
 use crate::core::db::{async_db, migrate_db};
 use crate::search::recreate_index;
 use anyhow::Result;
+use tokio_rusqlite::rusqlite;
 
 pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> Result<()> {
     // Run the DB migration script
@@ -11,7 +12,7 @@ pub async fn run(db: bool, index: bool, vec_db_path: &str, index_path: &str) -> 
             .expect("Failed to connect to db");
         db.call(|conn| {
             migrate_db(conn).unwrap_or_else(|err| eprintln!("DB migration failed {}", err));
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await?;
         println!("Finished migrating db");

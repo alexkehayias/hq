@@ -1,10 +1,10 @@
 use sqlite_vec::sqlite3_vec_init;
 use std::os::raw::c_char;
-use tokio_rusqlite::{Connection, Result, ffi::sqlite3_auto_extension};
+use tokio_rusqlite::{Connection, ffi::sqlite3_auto_extension, rusqlite};
 
 /// Initialize the db by creating all tables. This function should
 /// always succeed and is safe to run multiple times.
-pub fn initialize_db(db: &rusqlite::Connection) -> Result<()> {
+pub fn initialize_db(db: &rusqlite::Connection) -> rusqlite::Result<()> {
     // Create a metadata table that has a foreign key to the
     // embeddings virtual table. This will be used to coordinate
     // upserts and hydrating the notes
@@ -344,7 +344,7 @@ embedding float[384]
 
 /// Migrate the db from a previous schema to a new one. This is safe
 /// to run multiple times.
-pub fn migrate_db(db: &rusqlite::Connection) -> Result<()> {
+pub fn migrate_db(db: &rusqlite::Connection) -> rusqlite::Result<()> {
     // 2024-12-29 Add columns for type and status
     // 2025-03-30 Add column for category
     // 2025-04-05 Add columns for task scheduled, deadline, and

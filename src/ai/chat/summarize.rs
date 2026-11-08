@@ -1,7 +1,6 @@
-use tokio_rusqlite::Connection;
-
 use crate::ai::chat::{ChatBuilder, InvisibleCharFilter};
 use crate::openai::{Message, Role};
+use tokio_rusqlite::{Connection, rusqlite};
 
 /// Generate a title and summary for a chat session from its transcript and
 /// persist them to the `session` table.
@@ -46,7 +45,7 @@ pub async fn generate_and_update_session_info(
                         let mut stmt =
                             conn.prepare("UPDATE session SET title = ?, summary = ? WHERE id = ?")?;
                         stmt.execute([title_owned, summary_owned, session_id_owned])?;
-                        Ok(())
+                        Ok::<_, rusqlite::Error>(())
                     })
                     .await?;
 

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Result, anyhow};
-use tokio_rusqlite::Connection;
-
 use crate::ai::skills::SkillRegistry;
 use crate::openai::{BoxedToolCall, ToolCall};
+use anyhow::{Result, anyhow};
+use tokio_rusqlite::Connection;
 
 use super::{
     BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
@@ -150,13 +149,14 @@ impl ToolRegistry {
 mod tests {
     use super::*;
     use crate::core::db::{async_db, initialize_db};
+    use tokio_rusqlite::rusqlite;
 
     async fn test_context() -> ToolConfig {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             initialize_db(conn)?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

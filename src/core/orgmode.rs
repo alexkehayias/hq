@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::org;
 use anyhow::{Context, Result};
 use chrono::Local;
 use once_cell::sync::Lazy;
@@ -14,8 +15,6 @@ use orgize::rowan::ast::AstNode;
 use regex::Regex;
 use tokio::fs;
 use tokio_rusqlite::Connection;
-
-use crate::org;
 
 /// Suffix Org mode uses for archive files (e.g. `work.org_archive`).
 pub const ORG_ARCHIVE_SUFFIX: &str = ".org_archive";
@@ -434,7 +433,7 @@ pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<Ta
             let mut stmt =
                 conn.prepare("SELECT file_name FROM note_meta WHERE id = ?1 AND type = 'task'")?;
             let mut rows = stmt.query_map([id_owned.as_str()], |row| row.get::<_, String>(0))?;
-            Ok(rows.next().transpose()?)
+            rows.next().transpose()
         })
         .await?;
 

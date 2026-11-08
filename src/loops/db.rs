@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
-use tokio_rusqlite::Connection;
-
 use super::models::{Loop, LoopRun, RunStatus};
+use anyhow::Result;
+use tokio_rusqlite::{Connection, rusqlite};
 
 pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
     let loops = db.call(|conn| {
@@ -52,7 +51,7 @@ pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
                 l.emit_channels = ch;
             }
         }
-        Ok(loops)
+        Ok::<_, rusqlite::Error>(loops)
     });
     Ok(loops.await?)
 }
@@ -76,7 +75,7 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
             })?;
             match rows.next().transpose()? {
                 Some(record) => record,
-                None => return Ok(None),
+                None => return Ok::<_, rusqlite::Error>(None),
             }
         };
 
@@ -110,10 +109,10 @@ pub async fn update_loop_system_prompt(
     let id = id.to_string();
     let system_prompt = system_prompt.to_string();
     let updated = db.call(move |conn| {
-        Ok(conn.execute(
+        conn.execute(
             "UPDATE loop SET system_prompt = ?1 WHERE id = ?2",
             rusqlite::params![system_prompt, id],
-        )?)
+        )
     });
     Ok(updated.await?)
 }
@@ -129,7 +128,7 @@ pub async fn loop_may_emit(db: &Connection, loop_id: &str, channel_id: &str) -> 
             rusqlite::params![loop_id, channel_id],
             |row| row.get(0),
         )?;
-        Ok(count > 0)
+        Ok::<_, rusqlite::Error>(count > 0)
     });
     Ok(permitted.await?)
 }
@@ -149,7 +148,7 @@ pub async fn workspace_id_for_session(db: &Connection, session_id: &str) -> Resu
             let mut stmt = conn.prepare("SELECT loop_id FROM loop_run WHERE session_id = ?1")?;
             let mut rows = stmt.query([&id])?;
             match rows.next()? {
-                Some(row) => Ok(Some(row.get(0)?)),
+                Some(row) => Ok::<_, rusqlite::Error>(Some(row.get(0)?)),
                 None => Ok(None),
             }
         })
@@ -185,7 +184,7 @@ pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::new)
@@ -202,7 +201,7 @@ pub async fn delete_loop(db: &Connection, id: &str) -> Result<usize> {
         tx.execute("DELETE FROM loop_emit_channel WHERE loop_id = ?1", [&id])?;
         let count = tx.execute("DELETE FROM loop WHERE id = ?1", [&id])?;
         tx.commit()?;
-        Ok(count)
+        Ok::<_, rusqlite::Error>(count)
     });
     Ok(deleted.await?)
 }
@@ -225,7 +224,7 @@ pub async fn insert_loop_run(
              VALUES (?1, ?2, ?3, ?4, ?5, ?1)",
             rusqlite::params![id, loop_id, channel_id, event, RunStatus::Running.as_str()],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::new)
@@ -254,7 +253,7 @@ pub async fn finish_loop_run(
              WHERE id = ?1",
             rusqlite::params![id, status, duration_ms, response, error],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::new)
@@ -298,7 +297,7 @@ pub async fn find_loop_runs(db: &Connection, loop_id: &str, limit: usize) -> Res
             .query_map(rusqlite::params![loop_id, limit as i64], map_loop_run)?
             .filter_map(Result::ok)
             .collect::<Vec<LoopRun>>();
-        Ok(runs)
+        Ok::<_, rusqlite::Error>(runs)
     });
     Ok(runs.await?)
 }
@@ -320,7 +319,7 @@ pub async fn find_loop_runs_page(
             .query_map(rusqlite::params![limit as i64, offset as i64], map_loop_run)?
             .filter_map(Result::ok)
             .collect::<Vec<LoopRun>>();
-        Ok(runs)
+        Ok::<_, rusqlite::Error>(runs)
     });
     Ok(runs.await?)
 }
@@ -328,7 +327,7 @@ pub async fn find_loop_runs_page(
 /// Total number of runs across every loop.
 pub async fn count_loop_runs(db: &Connection) -> Result<i64> {
     let count =
-        db.call(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM loop_run", [], |row| row.get(0))?));
+        db.call(|conn| conn.query_row("SELECT COUNT(*) FROM loop_run", [], |row| row.get(0)));
     Ok(count.await?)
 }
 
@@ -342,7 +341,7 @@ pub async fn mark_running_loop_runs_interrupted(db: &Connection) -> Result<usize
              WHERE status = ?2",
             rusqlite::params![RunStatus::Interrupted.as_str(), RunStatus::Running.as_str()],
         )?;
-        Ok(count)
+        Ok::<_, rusqlite::Error>(count)
     });
     Ok(updated.await?)
 }
@@ -370,7 +369,7 @@ pub async fn prune_loop_runs(db: &Connection, loop_id: &str, keep: usize) -> Res
         };
 
         if stale_ids.is_empty() {
-            return Ok(0);
+            return Ok::<_, rusqlite::Error>(0);
         }
 
         let session_ids = select_session_ids_for_runs(&tx, &stale_ids)?;
@@ -447,7 +446,7 @@ mod tests {
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             initialize_db(conn)?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -463,7 +462,7 @@ mod tests {
                 "INSERT INTO channel (id, source) VALUES (?1, ?2)",
                 rusqlite::params![id, source],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -493,7 +492,7 @@ mod tests {
                     .query_map([], |row| row.get::<_, String>(0))?
                     .filter_map(Result::ok)
                     .collect::<Vec<String>>();
-                Ok(names)
+                Ok::<_, rusqlite::Error>(names)
             })
             .await
             .unwrap();
@@ -551,7 +550,7 @@ mod tests {
                     ["loop-1"],
                     |row| row.get(0),
                 )?;
-                Ok((subscriptions, emit_grants))
+                Ok::<_, rusqlite::Error>((subscriptions, emit_grants))
             })
             .await
             .unwrap();
@@ -627,7 +626,7 @@ mod tests {
         let id = id.to_string();
         db.call(move |conn| {
             conn.execute("INSERT INTO session (id) VALUES (?1)", [&id])?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -636,11 +635,11 @@ mod tests {
     async fn count_runs(db: &Connection, loop_id: &str) -> i64 {
         let loop_id = loop_id.to_string();
         db.call(move |conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM loop_run WHERE loop_id = ?1",
                 [&loop_id],
                 |row| row.get(0),
-            )?)
+            )
         })
         .await
         .unwrap()
@@ -780,11 +779,11 @@ mod tests {
 
         let remaining_sessions: i64 = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM session WHERE id LIKE 'run-%'",
                     [],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();
@@ -807,11 +806,11 @@ mod tests {
         assert_eq!(count_runs(&db, "loop-1").await, 0);
         let sessions: i64 = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT COUNT(*) FROM session WHERE id = 'run-1'",
                     [],
                     |row| row.get(0),
-                )?)
+                )
             })
             .await
             .unwrap();

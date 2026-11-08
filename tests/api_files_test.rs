@@ -6,6 +6,8 @@ mod test_utils;
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use tokio_rusqlite::rusqlite;
+
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -379,7 +381,7 @@ mod tests {
                  VALUES ('run-1', 'loop-1', 'alpha', 'event', 'success', 'run-1')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

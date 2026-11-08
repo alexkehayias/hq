@@ -1,7 +1,6 @@
-use anyhow::Result;
-use tokio_rusqlite::Connection;
-
 use super::models::PushSubscription;
+use anyhow::Result;
+use tokio_rusqlite::{Connection, rusqlite};
 
 pub async fn find_all_notification_subscriptions(db: &Connection) -> Result<Vec<PushSubscription>> {
     let subscriptions = db.call(|conn| {
@@ -17,7 +16,7 @@ pub async fn find_all_notification_subscriptions(db: &Connection) -> Result<Vec<
             })?
             .filter_map(Result::ok)
             .collect::<Vec<PushSubscription>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(subscriptions.await?)
 }
@@ -29,7 +28,7 @@ pub async fn mark_push_subscription_invalid(db: &Connection, endpoint: &str) -> 
             "UPDATE push_subscription SET is_valid = 0 WHERE endpoint = ?1",
             [&endpoint],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::new)

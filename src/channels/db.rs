@@ -1,7 +1,6 @@
-use anyhow::Result;
-use tokio_rusqlite::Connection;
-
 use super::models::{Channel, ChannelSource};
+use anyhow::Result;
+use tokio_rusqlite::{Connection, rusqlite};
 
 /// List every channel, ordered by id.
 pub async fn find_all_channels(db: &Connection) -> Result<Vec<Channel>> {
@@ -21,7 +20,7 @@ pub async fn find_all_channels(db: &Connection) -> Result<Vec<Channel>> {
             })?
             .filter_map(Result::ok)
             .collect::<Vec<Channel>>();
-        Ok(channels)
+        Ok::<_, rusqlite::Error>(channels)
     });
     Ok(channels.await?)
 }
@@ -42,7 +41,7 @@ pub async fn find_channel(db: &Connection, id: &str) -> Result<Option<Channel>> 
                 created_at: i.get(4)?,
             })
         })?;
-        Ok(rows.next().transpose()?)
+        rows.next().transpose()
     });
     Ok(channel.await?)
 }
@@ -65,7 +64,7 @@ pub async fn insert_channel(
             "INSERT INTO channel (id, source, created_by) VALUES (?1, ?2, ?3)",
             rusqlite::params![id, source, created_by],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::new)
@@ -82,7 +81,7 @@ pub async fn find_agent_channels(db: &Connection) -> Result<Vec<String>> {
             .query_map([], |i| i.get::<_, String>(0))?
             .filter_map(Result::ok)
             .collect::<Vec<String>>();
-        Ok(ids)
+        Ok::<_, rusqlite::Error>(ids)
     });
     Ok(ids.await?)
 }
@@ -110,7 +109,7 @@ pub async fn ensure_channels(
         for id in &ids {
             stmt.execute(rusqlite::params![id, default_source])?;
         }
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     });
     Ok(inserted.await?)
 }
@@ -125,7 +124,7 @@ mod tests {
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             initialize_db(conn)?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -141,7 +140,7 @@ mod tests {
                 "INSERT INTO channel (id, source) VALUES (?1, ?2)",
                 rusqlite::params![id, source],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -232,7 +231,7 @@ mod tests {
                     .query_map([], |i| Ok((i.get::<_, String>(0)?, i.get::<_, String>(1)?)))?
                     .filter_map(Result::ok)
                     .collect::<Vec<(String, String)>>();
-                Ok(rows)
+                Ok::<_, rusqlite::Error>(rows)
             })
             .await
             .unwrap();

@@ -1,6 +1,7 @@
 //! Router for the push API
 
 use std::sync::{Arc, RwLock};
+use tokio_rusqlite::rusqlite;
 
 use axum::{Json, Router, extract::State};
 use serde_json::Value;
@@ -43,7 +44,7 @@ async fn push_subscription(
                 auth,
             ])?;
             conn.execute("DELETE FROM vec_items", [])?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await?;
     }

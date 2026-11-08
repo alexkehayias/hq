@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use tokio_rusqlite::rusqlite;
 
 use axum::{Router, body::Body};
 
@@ -55,7 +56,7 @@ pub async fn test_app() -> Router {
         .expect("Failed to connect to async db");
     db.call(|conn| {
         initialize_db(conn).expect("Failed to migrate db");
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .unwrap();
@@ -142,7 +143,7 @@ pub async fn test_app_with_state() -> (Router, AppState) {
         .expect("Failed to connect to async db");
     db.call(|conn| {
         initialize_db(conn).expect("Failed to migrate db");
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .unwrap();
@@ -233,7 +234,7 @@ pub async fn test_app_with_skills() -> Router {
         .expect("Failed to connect to async db");
     db.call(|conn| {
         initialize_db(conn).expect("Failed to migrate db");
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .unwrap();

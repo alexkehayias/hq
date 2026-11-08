@@ -5,7 +5,7 @@ use serde_json::json;
 use tantivy::collector::TopDocs;
 use tantivy::schema::*;
 use tantivy::{Index, ReloadPolicy};
-use tokio_rusqlite::{Connection, Result};
+use tokio_rusqlite::{Connection, Result, rusqlite};
 use zerocopy::IntoBytes;
 
 use crate::ai::chat::db::get_chat_messages_by_ids;
@@ -283,7 +283,7 @@ pub async fn search_notes(
                     })
                 })?
                 .collect::<std::result::Result<Vec<SearchResult>, _>>()?;
-            Ok(found)
+            Ok::<_, rusqlite::Error>(found)
         })
         .await?
     } else {

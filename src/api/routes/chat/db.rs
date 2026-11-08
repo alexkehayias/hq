@@ -1,8 +1,7 @@
+use super::public;
 use anyhow::{Error, Result};
 use serde_json::json;
-use tokio_rusqlite::{Connection, params};
-
-use super::public;
+use tokio_rusqlite::{Connection, params, rusqlite};
 
 pub async fn chat_session_count(
     db: &Connection,
@@ -15,7 +14,7 @@ pub async fn chat_session_count(
             .call(|conn| {
                 let mut stmt = conn.prepare("SELECT COUNT(*) FROM session")?;
                 let count: i64 = stmt.query_row([], |row| row.get(0))?;
-                Ok(count)
+                Ok::<_, rusqlite::Error>(count)
             })
             .await
             .map_err(anyhow::Error::from);
@@ -49,7 +48,7 @@ pub async fn chat_session_count(
                 ],
                 |row| row.get(0),
             )?;
-            Ok(count)
+            Ok::<_, rusqlite::Error>(count)
         })
         .await?;
     Ok(count)
@@ -76,7 +75,7 @@ pub async fn chat_session_list(
                 "#,
                 )?;
                 let session_list = stmt
-                    .query_map(params![limit, offset], |row| {
+                    .query_map(params![limit as i64, offset as i64], |row| {
                         Ok(public::ChatSession {
                             id: row.get(0)?,
                             title: row.get(1)?,
@@ -86,7 +85,7 @@ pub async fn chat_session_list(
                     })?
                     .filter_map(Result::ok)
                     .collect::<Vec<_>>();
-                Ok(session_list)
+                Ok::<_, rusqlite::Error>(session_list)
             })
             .await?);
     }
@@ -128,8 +127,8 @@ pub async fn chat_session_list(
                         include_json.as_str(),
                         exc_len,
                         exclude_json.as_str(),
-                        limit,
-                        offset
+                        limit as i64,
+                        offset as i64
                     ],
                     |row| {
                         let session_id: String = row.get(0)?;
@@ -150,7 +149,7 @@ pub async fn chat_session_list(
                 )?
                 .filter_map(Result::ok)
                 .collect::<Vec<_>>();
-            Ok(session_list)
+            Ok::<_, rusqlite::Error>(session_list)
         })
         .await
         .map_err(anyhow::Error::from)?;

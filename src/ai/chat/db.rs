@@ -1,10 +1,9 @@
+use crate::ai::chat::models::{BACKGROUND_TAG, Session, SessionMode};
+use crate::openai::Message;
 use anyhow::{Error, Result};
 use serde::Serialize;
 use serde_json::json;
-use tokio_rusqlite::Connection;
-
-use crate::ai::chat::models::{BACKGROUND_TAG, Session, SessionMode};
-use crate::openai::Message;
+use tokio_rusqlite::{Connection, rusqlite};
 
 #[derive(Serialize)]
 pub struct SessionWithTitle {
@@ -31,7 +30,7 @@ pub async fn insert_chat_message(
                 [],
                 |row| row.get(0),
             )?;
-            Ok(id)
+            Ok::<_, rusqlite::Error>(id)
         })
         .await?;
 
@@ -98,7 +97,7 @@ RETURNING id, mode",
             }
 
             tx.commit()?;
-            Ok((id, mode))
+            Ok::<_, rusqlite::Error>((id, mode))
         })
         .await?;
 
@@ -126,7 +125,7 @@ pub async fn find_chat_session_by_id(
             })?
             .filter_map(Result::ok)
             .collect::<Vec<(String, Message)>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(history.await?)
 }
@@ -159,7 +158,7 @@ pub async fn get_chat_message_by_index(
             .filter_map(Result::ok)
             .next();
 
-        Ok(msg.map(|m| (m, title)))
+        Ok::<_, rusqlite::Error>(msg.map(|m| (m, title)))
     });
     Ok(result.await?)
 }
@@ -185,7 +184,7 @@ pub async fn get_chat_message_by_id(
         match row {
             Ok((msg, title)) => Ok(Some((msg, title))),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(tokio_rusqlite::Error::Rusqlite(e)),
+            Err(e) => Err(tokio_rusqlite::Error::Error(e)),
         }
     });
     Ok(result.await?)
@@ -212,7 +211,7 @@ pub async fn get_non_background_sessions(db: &Connection) -> Result<Vec<SessionW
             })?
             .filter_map(Result::ok)
             .collect::<Vec<SessionWithTitle>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(sessions.await?)
 }
@@ -245,7 +244,7 @@ pub async fn get_chat_messages_by_ids(
             })?
             .filter_map(Result::ok)
             .collect::<Vec<(String, Message, String, Option<String>)>>();
-        Ok(rows)
+        Ok::<_, rusqlite::Error>(rows)
     });
     Ok(result.await?)
 }
@@ -263,7 +262,7 @@ pub async fn session_has_background_tag(db: &Connection, session_id: &str) -> Re
             rusqlite::params![s_id, BACKGROUND_TAG],
             |row| row.get(0),
         );
-        Ok(result.unwrap_or(0) > 0)
+        Ok::<_, rusqlite::Error>(result.unwrap_or(0) > 0)
     });
     Ok(has_tag.await?)
 }
@@ -277,7 +276,7 @@ pub async fn get_session_mode(db: &Connection, session_id: &str) -> Result<Sessi
                 .prepare("SELECT mode FROM session WHERE id = ?")
                 .expect("Invalid sql");
             let val: String = stmt.query_row([s_id], |row| row.get::<_, String>(0))?;
-            Ok(val.parse().expect("Parsing session mode failed"))
+            Ok::<_, rusqlite::Error>(val.parse().expect("Parsing session mode failed"))
         })
         .await
         .map_err(anyhow::Error::from)?;
@@ -298,7 +297,7 @@ pub async fn set_session_mode(
             "UPDATE session SET mode = ? WHERE id = ?",
             rusqlite::params![mode_str, s_id],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .map_err(anyhow::Error::from)
@@ -346,7 +345,7 @@ pub async fn delete_chat_session(
 
             tx.commit()?;
 
-            Ok(DeletedChatSession {
+            Ok::<_, rusqlite::Error>(DeletedChatSession {
                 messages_deleted,
                 session_existed: sessions_deleted > 0,
             })
@@ -371,7 +370,7 @@ mod tests {
         let db = async_db(&vec_db_path).await.unwrap();
         db.call(|conn| {
             initialize_db(conn).unwrap();
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -384,7 +383,7 @@ mod tests {
         let sql_owned = sql.to_string();
         db.call(move |conn| {
             let count: i64 = conn.query_row(&sql_owned, rusqlite::params![p], |row| row.get(0))?;
-            Ok(count)
+            Ok::<_, rusqlite::Error>(count)
         })
         .await
         .unwrap()
@@ -524,7 +523,7 @@ mod tests {
 
         // Tag rows themselves are NOT deleted (shared lookup table)
         let total_tags: i64 = db
-            .call(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM tag", [], |row| row.get(0))?))
+            .call(|conn| conn.query_row("SELECT COUNT(*) FROM tag", [], |row| row.get(0)))
             .await
             .unwrap();
         assert!(

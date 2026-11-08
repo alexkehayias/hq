@@ -10,15 +10,14 @@
 
 use std::time::Duration;
 
+use super::models::ChannelSource;
+use super::registry;
+use crate::cli::channel::{event_stream_from_reader, socket_path};
 use anyhow::{Result, anyhow};
 use futures::stream::BoxStream;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio_rusqlite::Connection;
-
-use super::models::ChannelSource;
-use super::registry;
-use crate::cli::channel::{event_stream_from_reader, socket_path};
 
 /// Debounce window used when a channel has no `channel` row.
 pub const DEFAULT_DEBOUNCE_MS: u64 = 250;
@@ -39,7 +38,7 @@ pub async fn channel_meta(db: &Connection, id: &str) -> Result<(ChannelSource, u
                     i.get::<_, i64>(1)?,
                 ))
             })?;
-            Ok(rows.next().transpose()?)
+            rows.next().transpose()
         })
         .await?;
 
@@ -85,6 +84,7 @@ mod tests {
     use crate::core::db::{async_db, initialize_db};
     use async_stream::stream;
     use futures::StreamExt;
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     async fn setup_db() -> (tempfile::TempDir, Connection) {
@@ -92,7 +92,7 @@ mod tests {
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             initialize_db(conn)?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -107,7 +107,7 @@ mod tests {
                 "INSERT INTO channel (id, source, debounce_ms) VALUES (?1, ?2, ?3)",
                 rusqlite::params![id, source, debounce_ms],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

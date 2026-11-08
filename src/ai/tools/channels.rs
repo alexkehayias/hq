@@ -200,13 +200,14 @@ mod tests {
     use crate::core::db::{async_db, initialize_db};
     use futures::StreamExt;
     use std::time::Duration;
+    use tokio_rusqlite::rusqlite;
 
     async fn setup() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             initialize_db(conn)?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -302,7 +303,7 @@ mod tests {
                 "INSERT INTO loop_emit_channel (loop_id, channel_id) VALUES ('loop-x', ?1)",
                 [&channel_id],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -332,7 +333,7 @@ mod tests {
                  VALUES ('loop-y', 'You are a loop.', '[\"emit_channel\"]')",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

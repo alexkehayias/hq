@@ -14,18 +14,17 @@
 
 use std::time::Duration;
 
+use super::db::{ensure_channels, find_agent_channels};
+use super::errors::{SERVER_ERROR_CHANNEL, register as register_error_channel};
+use super::models::ChannelSource;
+use super::notes::{NEW_NOTE_CHANNEL, register as register_note_channel};
+use super::registry;
 use anyhow::Result;
 use async_stream::stream;
 use futures::stream::BoxStream;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, interval_at};
 use tokio_rusqlite::Connection;
-
-use super::db::{ensure_channels, find_agent_channels};
-use super::errors::{SERVER_ERROR_CHANNEL, register as register_error_channel};
-use super::models::ChannelSource;
-use super::notes::{NEW_NOTE_CHANNEL, register as register_note_channel};
-use super::registry;
 
 /// Default timer channels as `(id, interval)`.
 pub const DEFAULT_TIMER_CHANNELS: &[(&str, Duration)] = &[
@@ -130,6 +129,7 @@ mod tests {
     use crate::channels::db::insert_channel;
     use crate::core::db::{async_db, initialize_db};
     use futures::StreamExt;
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     async fn setup_db() -> (tempfile::TempDir, Connection) {
@@ -137,7 +137,7 @@ mod tests {
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
             initialize_db(conn)?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -156,7 +156,7 @@ mod tests {
                     .query_map([], |i| Ok((i.get::<_, String>(0)?, i.get::<_, String>(1)?)))?
                     .filter_map(Result::ok)
                     .collect::<Vec<(String, String)>>();
-                Ok(rows)
+                Ok::<_, rusqlite::Error>(rows)
             })
             .await
             .unwrap();
@@ -182,7 +182,7 @@ mod tests {
                 "INSERT INTO channel (id, source, debounce_ms) VALUES ('timer-1h', 'socket', 999)",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -191,11 +191,11 @@ mod tests {
 
         let (source, debounce) = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT source, debounce_ms FROM channel WHERE id = 'timer-1h'",
                     [],
                     |i| Ok((i.get::<_, String>(0)?, i.get::<_, i64>(1)?)),
-                )?)
+                )
             })
             .await
             .unwrap();
