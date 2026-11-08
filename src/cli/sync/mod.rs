@@ -8,7 +8,7 @@ pub mod notes;
 /// Env vars are read once in `run_dispatch` and threaded through here so the
 /// subcommand modules stay free of environment access.
 pub struct SyncConfig<'a> {
-    pub deploy_key_path: Option<&'a str>,
+    pub deploy_key_path: &'a str,
     pub notes_path: &'a str,
     pub index_path: &'a str,
     pub vec_db_path: &'a str,

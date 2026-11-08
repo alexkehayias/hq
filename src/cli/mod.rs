@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
 use std::env;
 use std::path::PathBuf;
@@ -442,11 +442,12 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             web::run(command).await?;
         }
         Some(Command::Sync { command }) => {
-            let deploy_key_path = env::var("HQ_NOTES_DEPLOY_KEY_PATH").ok();
+            let deploy_key_path = env::var("HQ_NOTES_DEPLOY_KEY_PATH")
+                .context("Missing env var HQ_NOTES_DEPLOY_KEY_PATH")?;
             sync::run(
                 command,
                 &sync::SyncConfig {
-                    deploy_key_path: deploy_key_path.as_deref(),
+                    deploy_key_path: &deploy_key_path,
                     notes_path: &notes_path,
                     index_path: &index_path,
                     vec_db_path: &vec_db_path,
