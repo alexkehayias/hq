@@ -2,6 +2,7 @@ use crate::core::db::{async_db, initialize_db};
 use crate::core::git::maybe_clone_repo;
 use anyhow::Result;
 use tokio::fs;
+use tokio_rusqlite::rusqlite;
 
 /// Which components to initialize. Each flag mirrors a `--<name>` CLI option.
 #[derive(Default)]
@@ -40,7 +41,7 @@ pub async fn run(
         connection
             .call(|conn| {
                 initialize_db(conn).expect("DB initialization failed");
-                Ok(())
+                Ok::<_, rusqlite::Error>(())
             })
             .await?;
         println!("Finished initializing db");

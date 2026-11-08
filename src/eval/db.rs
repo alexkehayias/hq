@@ -1,5 +1,5 @@
 use crate::eval::models::{EvalResult, EvalRun};
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::{Connection, rusqlite};
 
 pub async fn insert_run(db: &Connection, id: &str, name: &str, model: &str) -> anyhow::Result<()> {
     let id = id.to_string();
@@ -7,10 +7,10 @@ pub async fn insert_run(db: &Connection, id: &str, name: &str, model: &str) -> a
     let model = model.to_string();
 
     db.call(move |conn| {
-        Ok(conn.execute(
+        conn.execute(
             "INSERT INTO eval_run (id, name, model, status) VALUES (?1, ?2, ?3, 'pending')",
             rusqlite::params![id, name, model],
-        )?)
+        )
     })
     .await?;
 
@@ -23,10 +23,10 @@ pub async fn update_run_status(db: &Connection, run_id: &str, status: &str) -> a
     let status = status.to_string();
 
     db.call(move |conn| {
-        Ok(conn.execute(
+        conn.execute(
             "UPDATE eval_run SET status = ?1, started_at = CASE WHEN ?1 = 'running' THEN ?2 ELSE started_at END, completed_at = CASE WHEN ?1 IN ('completed', 'failed') THEN ?2 ELSE completed_at END WHERE id = ?3",
             rusqlite::params![status, now, run_id],
-        )?)
+        )
     })
     .await?;
 
@@ -35,7 +35,7 @@ pub async fn update_run_status(db: &Connection, run_id: &str, status: &str) -> a
 
 pub async fn insert_result(db: &Connection, result: EvalResult) -> anyhow::Result<()> {
     db.call(move |conn| {
-        Ok(conn.execute(
+        conn.execute(
             "INSERT INTO eval_result (id, run_id, case_id, input, output, passed, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 result.id,
@@ -46,7 +46,7 @@ pub async fn insert_result(db: &Connection, result: EvalResult) -> anyhow::Resul
                 result.passed as i32,
                 result.error
             ],
-        )?)
+        )
     })
     .await?;
 
@@ -75,7 +75,7 @@ pub async fn get_run_results(db: &Connection, run_id: &str) -> anyhow::Result<Ve
         for row in rows {
             results.push(row?);
         }
-        Ok(results)
+        Ok::<_, rusqlite::Error>(results)
     })
     .await?)
 }
@@ -101,7 +101,7 @@ pub async fn get_run(db: &Connection, run_id: &str) -> anyhow::Result<Option<Eva
         ) {
             Ok(run) => Ok(Some(run)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(tokio_rusqlite::Error::Rusqlite(e)),
+            Err(e) => Err(tokio_rusqlite::Error::Error(e)),
         }
         })
         .await?)

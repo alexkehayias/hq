@@ -1,6 +1,7 @@
 //! Router for the metrics API
 
 use std::sync::{Arc, RwLock};
+use tokio_rusqlite::rusqlite;
 
 use axum::{Router, extract::State, http::StatusCode, response::Json};
 use axum_extra::extract::Query;
@@ -32,7 +33,7 @@ async fn record_metric(
                 payload.reasoning,
             ],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await?;
 
@@ -81,7 +82,7 @@ async fn get_metrics(
                     .filter_map(Result::ok)
                     .collect::<Vec<public::MetricEvent>>();
 
-                Ok(events)
+                Ok::<_, rusqlite::Error>(events)
             })
             .await?
         }
@@ -121,7 +122,7 @@ async fn get_metrics(
                     .filter_map(Result::ok)
                     .collect::<Vec<public::MetricEvent>>();
 
-                Ok(events)
+                Ok::<_, rusqlite::Error>(events)
             })
             .await?
         }

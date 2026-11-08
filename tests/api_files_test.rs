@@ -6,6 +6,8 @@ mod test_utils;
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use tokio_rusqlite::rusqlite;
+
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -352,5 +354,72 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Files uploaded to a loop run's transcript land in the loop's shared
+    /// workspace, so the run's bash/python tools (which mount that workspace)
+    /// can see them.
+    #[tokio::test]
+    #[serial]
+    async fn it_stores_loop_run_uploads_in_the_loop_workspace() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let db = state.db.clone();
+
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO channel (id, source) VALUES ('alpha', 'socket')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop (id, system_prompt, tools)
+                 VALUES ('loop-1', 'You are a loop.', '[\"bash\"]')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO loop_run (id, loop_id, channel_id, event, status, session_id)
+                 VALUES ('run-1', 'loop-1', 'alpha', 'event', 'success', 'run-1')",
+                [],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await
+        .unwrap();
+
+        let body = multipart_body(&[
+            ("session_id", None, b"run-1"),
+            ("file", Some("screenshot.png"), PNG_BYTES),
+        ]);
+        let response = app.clone().oneshot(upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = files_dir(&storage, "loop-1").join("screenshot.png");
+        assert!(
+            stored.exists(),
+            "upload should be written to the loop's workspace"
+        );
+        assert!(
+            !files_dir(&storage, "run-1").exists(),
+            "no per-run workspace should be created"
+        );
+
+        // The run's transcript path serves the loop's file back.
+        let response = app
+            .clone()
+            .oneshot(get_request("run-1", "screenshot.png"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), PNG_BYTES);
+
+        let response = app
+            .oneshot(delete_request("run-1", "screenshot.png"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!stored.exists(), "delete should remove the loop's file");
     }
 }

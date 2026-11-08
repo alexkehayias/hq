@@ -163,6 +163,7 @@ mod tests {
     use std::env;
     use std::fs;
     use tokio_rusqlite::Connection;
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     use crate::core::db::{async_db, initialize_db};
@@ -179,7 +180,7 @@ mod tests {
             .expect("Failed to connect to async db");
         db.call(|conn| {
             initialize_db(conn).expect("Failed to migrate db");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

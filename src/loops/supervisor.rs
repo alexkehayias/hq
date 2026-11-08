@@ -157,6 +157,8 @@ async fn run_loop(
 
     // session_id is the loop id, fixed for the lifetime of the loop so every
     // BashTool mounts the same workspace directory across events and restarts.
+    // `workspace_id_for_session` resolves a run's transcript session back to
+    // this id, so opening the run in the chat UI mounts the same directory.
     let base_context = ToolConfig {
         db: config.db.clone(),
         api_base_url: config.api_base_url.clone(),
@@ -263,14 +265,15 @@ mod tests {
     use super::*;
     use crate::channels::registry;
     use crate::core::db::{async_db, initialize_db};
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     async fn setup() -> (tempfile::TempDir, LoopSupervisorConfig) {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
-            initialize_db(conn)?;
-            Ok(())
+            initialize_db(conn).expect("Failed to migrate db");
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -311,7 +314,7 @@ mod tests {
                     "INSERT INTO channel (id, source) VALUES (?1, 'server')",
                     [&channel_for_db],
                 )?;
-                Ok(())
+                Ok::<_, rusqlite::Error>(())
             })
             .await
             .unwrap();
