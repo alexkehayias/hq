@@ -1,5 +1,6 @@
 use super::registry::{Tool, ToolConfig};
 use crate::ai::chat::workspace::workspace_root;
+use crate::bash::builtins::DEFAULT_HOME;
 use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
 use crate::cli::bashkit::HqBuiltin;
 use crate::openai::{
@@ -140,6 +141,14 @@ pub async fn new_sandbox(
     bash.mount(SANDBOX_ROOT, fs)
         .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
 
+    // bashkit's in-memory filesystem creates the home directory up front, but
+    // a mounted `RealFs` starts empty, so `$HOME` would point at a missing
+    // directory and `cd ~` would fail. Create it in the workspace.
+    bash.fs()
+        .mkdir(Path::new(DEFAULT_HOME), true)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create sandbox home directory: {e}"))?;
+
     Ok(bash)
 }
 
@@ -159,7 +168,7 @@ pub async fn run_in_sandbox(
 ) -> Result<BashOutput> {
     // Preserve bashkit's default starting directory for the agent's bash tool.
     fs::create_dir_all(workspace_path).await?;
-    let mut bash = new_sandbox(storage_path, workspace_path, "/home/user").await?;
+    let mut bash = new_sandbox(storage_path, workspace_path, DEFAULT_HOME).await?;
 
     let output = bash.exec(command).await.map_err(|e| {
         // bashkit reports command-level failures (bad syntax, unsupported
@@ -438,5 +447,26 @@ mod tests {
         let result = tool1.call(&args3).await.unwrap();
         let output: BashOutput = serde_json::from_str(&result).unwrap();
         assert_eq!(output.stdout.trim(), "original");
+    }
+
+    #[tokio::test]
+    async fn test_bash_home_directory() {
+        let tool = temp_bash_tool().await;
+
+        // The sandbox home exists, so `cd ~` succeeds and lands there.
+        let result = tool.call(r#"{"command": "cd ~ && pwd"}"#).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+        assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr);
+        assert_eq!(output.stdout.trim(), DEFAULT_HOME);
+
+        // Files written under `~` land in the session workspace and persist
+        // across tool calls.
+        tool.call(r#"{"command": "echo hello > ~/home.txt"}"#)
+            .await
+            .unwrap();
+        let result = tool.call(r#"{"command": "cat ~/home.txt"}"#).await.unwrap();
+        let output: BashOutput = serde_json::from_str(&result).unwrap();
+        assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr);
+        assert_eq!(output.stdout.trim(), "hello");
     }
 }

@@ -155,7 +155,7 @@ impl Interpreter {
                             .get("HOME")
                             .or_else(|| self.scoped.variables.get("HOME"))
                             .cloned()
-                            .unwrap_or_else(|| "/home/user".to_string());
+                            .unwrap_or_else(|| builtins::DEFAULT_HOME.to_string());
 
                         if s == "~" {
                             result.push_str(&home);

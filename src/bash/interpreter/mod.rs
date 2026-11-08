@@ -1478,7 +1478,7 @@ impl Interpreter {
 
         // Initialize default shell variables
         let mut variables = HashMap::new();
-        variables.insert("HOME".to_string(), format!("/home/{}", username_val));
+        variables.insert("HOME".to_string(), builtins::DEFAULT_HOME.to_string());
         variables.insert("USER".to_string(), username_val.clone());
         variables.insert("UID".to_string(), "1000".to_string());
         variables.insert("EUID".to_string(), "1000".to_string());
@@ -1505,7 +1505,7 @@ impl Interpreter {
                 ..Default::default()
             },
             flags: BashFlags::empty(),
-            cwd: PathBuf::from("/home/user"),
+            cwd: PathBuf::from(builtins::DEFAULT_HOME),
             last_exit_code: 0,
             builtins,
             host_builtins,
@@ -10232,7 +10232,7 @@ mod tests {
         let result = run_script("bash -c 'echo \"$HOME\"'").await;
         // Should use virtual home directory, not real system path
         assert!(!result.stdout.contains("/root"));
-        assert!(result.stdout.contains("/home/sandbox"));
+        assert!(result.stdout.contains(builtins::DEFAULT_HOME));
     }
 
     #[tokio::test]

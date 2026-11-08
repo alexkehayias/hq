@@ -19,7 +19,7 @@ impl Builtin for Cd {
             .map(|s| s.as_str())
             .or_else(|| ctx.variables.get("HOME").map(|s| s.as_str()))
             .or_else(|| ctx.env.get("HOME").map(|s| s.as_str()))
-            .unwrap_or("/home/user");
+            .unwrap_or(super::DEFAULT_HOME);
 
         let new_path = if target.starts_with('/') {
             PathBuf::from(target)
