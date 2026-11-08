@@ -130,14 +130,15 @@ mod tests {
     use crate::channels::db::insert_channel;
     use crate::core::db::{async_db, initialize_db};
     use futures::StreamExt;
+    use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
     async fn setup_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
-            initialize_db(conn)?;
-            Ok(())
+            initialize_db(conn).expect("Failed to migrate db");
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -156,7 +157,7 @@ mod tests {
                     .query_map([], |i| Ok((i.get::<_, String>(0)?, i.get::<_, String>(1)?)))?
                     .filter_map(Result::ok)
                     .collect::<Vec<(String, String)>>();
-                Ok(rows)
+                Ok::<_, rusqlite::Error>(rows)
             })
             .await
             .unwrap();
@@ -182,7 +183,7 @@ mod tests {
                 "INSERT INTO channel (id, source, debounce_ms) VALUES ('timer-1h', 'socket', 999)",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -191,11 +192,11 @@ mod tests {
 
         let (source, debounce) = db
             .call(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT source, debounce_ms FROM channel WHERE id = 'timer-1h'",
                     [],
                     |i| Ok((i.get::<_, String>(0)?, i.get::<_, i64>(1)?)),
-                )?)
+                )
             })
             .await
             .unwrap();

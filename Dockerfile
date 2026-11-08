@@ -5,7 +5,16 @@
 # fails at link time with "undefined symbol: __isoc23_strtoll".
 FROM rust:trixie AS builder
 
-WORKDIR /
+# The package must not live at the filesystem root. Cargo walks the package
+# directory to fingerprint it whenever a build script is present (build.rs
+# generates the migration registry), so `WORKDIR /` makes it stat the whole
+# container — /proc, /sys, the toolchain, and the multi-GB target dir — which
+# exhausts memory on the build VM.
+WORKDIR /app
+
+# Keep build artifacts outside the package root so that fingerprint walk never
+# descends into them. The runner stage copies from this stable path.
+ENV CARGO_TARGET_DIR=/target
 
 ## Install native dependencies + x86_64 cross-compilation toolchain
 ## (Dokku server is linux/amd64, but colima on Apple Silicon is arm64)
@@ -43,6 +52,9 @@ RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features 
 ## Actually build the app
 RUN rm -rf ./src
 COPY ./src ./src
+# build.rs generates the migration registry into OUT_DIR, which src/core/db/migrations
+# includes via `env!("OUT_DIR")`. Without it Cargo sets no OUT_DIR and the build fails.
+COPY ./build.rs ./build.rs
 # Assets are embedded into the binary at compile time; copying them here lets
 # the include_dir! macro read them and busts the layer cache when assets change.
 COPY ./web-ui ./web-ui

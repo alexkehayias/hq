@@ -72,3 +72,16 @@ pub struct Session {
     pub id: String,
     pub mode: SessionMode,
 }
+
+/// Whether a session id is safe to use as a database key and a path segment
+/// (`workspace/{session_id}`).
+///
+/// Restricted to a conservative character set so the id can never escape the
+/// session workspace directory.
+pub fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}

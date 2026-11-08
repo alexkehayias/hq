@@ -12,6 +12,7 @@ use hq::ai::tools::run_in_sandbox;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio_rusqlite::rusqlite;
 
 async fn init_storage(storage: &Path) {
     let notes = storage.join("notes");
@@ -25,7 +26,7 @@ async fn init_storage(storage: &Path) {
     let conn = hq::core::db::async_db(db.to_str().unwrap()).await.unwrap();
     conn.call(|conn| {
         hq::core::db::initialize_db(conn).unwrap();
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await
     .unwrap();

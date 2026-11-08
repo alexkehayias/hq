@@ -434,7 +434,7 @@ pub async fn find_task(db: &Connection, notes_path: &str, id: &str) -> Result<Ta
             let mut stmt =
                 conn.prepare("SELECT file_name FROM note_meta WHERE id = ?1 AND type = 'task'")?;
             let mut rows = stmt.query_map([id_owned.as_str()], |row| row.get::<_, String>(0))?;
-            Ok(rows.next().transpose()?)
+            rows.next().transpose()
         })
         .await?;
 

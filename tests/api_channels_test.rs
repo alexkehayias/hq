@@ -4,6 +4,8 @@ mod test_utils;
 
 #[cfg(test)]
 mod tests {
+    use tokio_rusqlite::rusqlite;
+
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -48,7 +50,7 @@ mod tests {
                 "INSERT INTO channel (id, source, debounce_ms) VALUES ('alpha', 'socket', 500)",
                 [],
             )?;
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();

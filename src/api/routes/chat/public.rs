@@ -73,3 +73,45 @@ pub struct ChatStreamQuery {
     /// browser has no `Last-Event-ID` (e.g. after a full page reload).
     pub after: Option<u64>,
 }
+
+#[derive(Deserialize)]
+pub struct TerminalRequest {
+    /// Shell command to run in the session's bashkit sandbox.
+    pub command: String,
+}
+
+#[derive(Serialize)]
+pub struct TerminalCwdResponse {
+    pub cwd: String,
+}
+
+#[derive(Serialize)]
+pub struct TerminalResponse {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    /// True when stdout or stderr hit bashkit's output limit.
+    pub truncated: bool,
+    /// Working directory inside the sandbox after the command, e.g. `/files`.
+    pub cwd: String,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceFilesResponse {
+    pub files: Vec<WorkspaceFileEntry>,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceFileEntry {
+    /// Path relative to the session workspace, e.g. `notes/todo.md`.
+    pub path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceFileResponse {
+    pub path: String,
+    pub content: String,
+    /// True when the file was larger than the preview limit.
+    pub truncated: bool,
+}

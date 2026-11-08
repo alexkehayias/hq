@@ -1,6 +1,7 @@
 //! Router for the email API
 
 use std::sync::{Arc, RwLock};
+use tokio_rusqlite::rusqlite;
 
 use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
@@ -27,7 +28,7 @@ async fn email_unread_handler(
             let result = conn
                 .prepare("SELECT refresh_token FROM auth WHERE id = ?1")
                 .and_then(|mut stmt| stmt.query_row([&params.email], |row| row.get(0)))?;
-            Ok(result)
+            Ok::<_, rusqlite::Error>(result)
         })
         .await?
     };
@@ -63,7 +64,7 @@ async fn email_search_handler(
             let result = conn
                 .prepare("SELECT refresh_token FROM auth WHERE id = ?1")
                 .and_then(|mut stmt| stmt.query_row([&params.email], |row| row.get(0)))?;
-            Ok(result)
+            Ok::<_, rusqlite::Error>(result)
         })
         .await?
     };

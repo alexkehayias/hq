@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -46,20 +46,13 @@ enum Command {
         #[arg(long, action, default_value = "false")]
         workspace: bool,
     },
-    /// Migrate indices and db schema
+    /// Run database migrations
     Migrate {
-        /// Run the DB schema migration (default: on)
-        #[arg(
-            long,
-            default_value_t = true,
-            num_args = 0..=1,
-            default_missing_value = "true",
-            action = ArgAction::Set
-        )]
-        db: bool,
         /// Rebuild the search index (destructive; default: off)
-        #[arg(long, action, default_value = "false")]
+        #[arg(long)]
         index: bool,
+        #[command(subcommand)]
+        command: Option<migrate::MigrateCommand>,
     },
     /// Run the server
     Serve {
@@ -325,8 +318,8 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             )
             .await?;
         }
-        Some(Command::Migrate { db, index }) => {
-            migrate::run(db, index, &vec_db_path, &index_path).await?;
+        Some(Command::Migrate { index, command }) => {
+            migrate::run(command, index, &vec_db_path, &index_path).await?;
         }
         Some(Command::Serve { host, port }) => {
             serve::run(host, port).await;

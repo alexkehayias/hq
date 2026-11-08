@@ -1,5 +1,5 @@
 pub mod bash;
-pub use bash::{BashOutput, BashTool, run_in_sandbox};
+pub use bash::{BashOutput, BashTool, new_sandbox, run_in_sandbox};
 
 pub mod datetime;
 pub use datetime::DateTimeTool;
@@ -19,8 +19,8 @@ pub use email::{EmailSearchTool, EmailUnreadTool};
 pub mod website_view;
 pub use website_view::WebsiteViewTool;
 
-pub mod iterate;
-pub use iterate::IterateTool;
+pub mod subagent;
+pub use subagent::SubagentTool;
 
 pub mod web_search;
 pub use web_search::WebSearchTool;

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use orgize::rowan::ast::AstNode;
 use tokio::fs;
-use tokio_rusqlite::Connection;
+use tokio_rusqlite::{Connection, rusqlite};
 use uuid::Uuid;
 
 use crate::cli::projects;
@@ -92,7 +92,7 @@ async fn create_project_file(
              VALUES (?1, ?2, ?3, 'note', 'project')",
             rusqlite::params![db_id, db_filename, db_title],
         )?;
-        Ok(())
+        Ok::<_, rusqlite::Error>(())
     })
     .await?;
 
@@ -470,7 +470,7 @@ async fn list_tasks_from_files(
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
 
-            Ok(rows)
+            Ok::<_, rusqlite::Error>(rows)
         })
         .await?;
 
@@ -743,14 +743,14 @@ mod tests {
     async fn count_tasks_by_title(db: &Connection, title: &str) -> usize {
         let title = title.to_owned();
         db.call(move |conn| {
-            let count: usize = conn
+            let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM note_meta WHERE type = 'task' AND title = ?",
                     [&title],
                     |row| row.get(0),
                 )
                 .unwrap();
-            Ok(count)
+            Ok::<_, rusqlite::Error>(count as usize)
         })
         .await
         .unwrap()
@@ -1456,7 +1456,7 @@ mod tests {
         let db = crate::core::db::async_db(&vec_db_path).await.unwrap();
         db.call(|conn| {
             crate::core::db::initialize_db(conn).unwrap();
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1479,7 +1479,7 @@ mod tests {
             .unwrap();
         db.call(|conn| {
             crate::core::db::initialize_db(conn).unwrap();
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1539,7 +1539,7 @@ mod tests {
             );
             insert_task(conn, "task-2", "projects/refile.org", "Fix login", "done");
             insert_task(conn, "task-3", "projects/capture.org", "Quick idea", "todo");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1555,7 +1555,7 @@ mod tests {
             insert_task(conn, "t1", "projects/refile.org", "Task one", "todo");
             insert_task(conn, "t2", "projects/refile.org", "Task two", "done");
             insert_task(conn, "t3", "projects/capture.org", "Capture task", "todo");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1570,7 +1570,7 @@ mod tests {
         db.call(|conn| {
             insert_task(conn, "t1", "projects/refile.org", "Refile task", "todo");
             insert_task(conn, "t2", "projects/capture.org", "Capture task", "todo");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1586,7 +1586,7 @@ mod tests {
             insert_task(conn, "p1", "projects/personal.org", "Personal task", "todo");
             insert_task(conn, "w1", "projects/work.org", "Work task", "todo");
             insert_task(conn, "t1", "projects/capture.org", "Capture task", "todo");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1606,7 +1606,7 @@ mod tests {
             insert_task(conn, "t1", "projects/refile.org", "Task one", "todo");
             insert_task(conn, "t2", "projects/refile.org", "Task two", "done");
             insert_task(conn, "t3", "projects/refile.org", "Task three", "todo");
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1677,7 +1677,7 @@ mod tests {
                 "Second task",
                 "done",
             );
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -1750,7 +1750,7 @@ mod tests {
                 "Task C",
                 "todo",
             );
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
@@ -2292,7 +2292,7 @@ Investigate the redirect
                 "Old archived task",
                 "done",
             );
-            Ok(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
