@@ -137,7 +137,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
         db.call(|conn| {
-            initialize_db(conn)?;
+            initialize_db(conn).expect("Failed to migrate db");
             Ok::<_, rusqlite::Error>(())
         })
         .await
