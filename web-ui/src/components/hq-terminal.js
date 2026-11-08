@@ -50,7 +50,7 @@ class HqTerminal extends HTMLElement {
     this.innerHTML = `
       <div data-hq-root class="flex h-full flex-col overflow-hidden rounded-card border border-line bg-code font-mono text-[13px] leading-tight shadow-sm">
         <div data-hq-output class="min-h-0 flex-1 overflow-y-auto px-4 py-2" role="log" aria-live="polite" aria-label="Terminal output"></div>
-        <form data-hq-form class="m-0 flex items-center gap-2 border-t border-white/10 px-4 py-2 text-[16px] xl:text-[13px]">
+        <form data-hq-form class="m-0 flex items-center gap-2 border-t border-white/10 px-4 py-2">
           <span data-hq-prompt class="shrink-0 select-none font-normal text-[var(--color-code-fg)]"></span>
           <input data-hq-input class="min-w-0 flex-1 bg-transparent text-[#e8efe9] caret-teal-bright outline-none placeholder:text-[#5d7167]" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Terminal input">
         </form>
