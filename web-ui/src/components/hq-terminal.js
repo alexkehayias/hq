@@ -4,6 +4,8 @@
  * @attr {string} prompt - prompt string shown before the input (default: "$")
  * @attr {string} welcome - optional muted line printed when the element connects
  * @attr {string} height - CSS height for the whole terminal (default: "320px")
+ * @attr {number} max-lines - maximum output rows kept in the DOM; older rows
+ *   are removed (default: unlimited)
  * @attr {boolean} disabled - disables the input
  *
  * @method print(text, tone?) - append output; `text` may contain newlines.
@@ -27,7 +29,7 @@ const TONES = {
 };
 
 class HqTerminal extends HTMLElement {
-  static observedAttributes = ['prompt', 'height', 'disabled'];
+  static observedAttributes = ['prompt', 'height', 'max-lines', 'disabled'];
 
   #initialized = false;
   #root = null;
@@ -46,11 +48,11 @@ class HqTerminal extends HTMLElement {
     this.#applyHeight();
 
     this.innerHTML = `
-      <div data-hq-root class="flex h-full flex-col overflow-hidden rounded-card border border-line bg-code font-mono text-[13px] leading-relaxed shadow-sm">
-        <div data-hq-output class="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-4 py-3" role="log" aria-live="polite" aria-label="Terminal output"></div>
-        <form data-hq-form class="m-0 flex items-center gap-2 border-t border-white/10 px-4 py-2.5">
-          <span data-hq-prompt class="shrink-0 select-none font-semibold text-[var(--color-code-fg)]"></span>
-          <input data-hq-input class="min-w-0 flex-1 bg-transparent text-[13px] text-[#e8efe9] caret-teal-bright outline-none placeholder:text-[#5d7167]" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Terminal input">
+      <div data-hq-root class="flex h-full flex-col overflow-hidden rounded-card border border-line bg-code font-mono text-[13px] leading-tight shadow-sm">
+        <div data-hq-output class="min-h-0 flex-1 overflow-y-auto px-4 py-2" role="log" aria-live="polite" aria-label="Terminal output"></div>
+        <form data-hq-form class="m-0 flex items-center gap-2 border-t border-white/10 px-4 py-2">
+          <span data-hq-prompt class="shrink-0 select-none font-normal text-[var(--color-code-fg)]"></span>
+          <input data-hq-input class="min-w-0 flex-1 bg-transparent text-[#e8efe9] caret-teal-bright outline-none placeholder:text-[#5d7167]" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Terminal input">
         </form>
       </div>
     `;
@@ -97,6 +99,7 @@ class HqTerminal extends HTMLElement {
     if (!this.#initialized) return;
     if (name === 'prompt') this.#updatePrompt();
     if (name === 'height') this.#applyHeight();
+    if (name === 'max-lines') this.#trim();
     if (name === 'disabled') this.#updateDisabled();
   }
 
@@ -136,7 +139,8 @@ class HqTerminal extends HTMLElement {
     row.className = 'flex gap-2';
 
     const prompt = document.createElement('span');
-    prompt.className = 'shrink-0 select-none text-[var(--color-code-fg)]';
+    prompt.className =
+      'shrink-0 select-none font-normal text-[var(--color-code-fg)]';
     prompt.textContent = this.#promptText();
 
     const text = document.createElement('span');
@@ -145,6 +149,7 @@ class HqTerminal extends HTMLElement {
 
     row.append(prompt, text);
     this.#output.appendChild(row);
+    this.#trim();
     this.#scrollToBottom();
   }
 
@@ -153,7 +158,17 @@ class HqTerminal extends HTMLElement {
     line.className = `min-h-[1.25em] break-words whitespace-pre-wrap ${TONES[tone] || TONES.default}`;
     line.textContent = text;
     this.#output.appendChild(line);
+    this.#trim();
     this.#scrollToBottom();
+  }
+
+  // Bound the DOM for long-running shells; drop the oldest rows first.
+  #trim() {
+    const max = Number.parseInt(this.getAttribute('max-lines'), 10);
+    if (!Number.isFinite(max) || max <= 0) return;
+    while (this.#output.childElementCount > max) {
+      this.#output.firstElementChild.remove();
+    }
   }
 
   #navigateHistory(delta) {
