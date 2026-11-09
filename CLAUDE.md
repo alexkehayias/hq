@@ -10,12 +10,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **CLI**: Terminal interface for commands
 - **AI Layer**: Tools, agents, and LLM integrations (Anthropic Claude, OpenAI-compatible)
 
+## Workspace Layout
+
+This is a Cargo workspace. The split keeps the fast-moving CLI and API in small
+crates so editing them does not recompile the large library.
+
+| Crate | Path | Contents |
+|-------|------|----------|
+| `hq` (lib) | `src/` | core, ai, search, channels, loops, jobs, google, openai, anthropic, notify, eval, org, `types` |
+| `hq-bash` | `crates/bash/` | vendored bashkit virtual shell (self-contained) |
+| `hq-api` | `crates/api/` | Axum HTTP server and routes |
+| `hq-cli` | `crates/cli/` | CLI dispatch and the `hq` binary |
+
+Dependency direction: `hq` → `hq-bash`; `hq-api` → `hq`, `hq-bash`;
+`hq-cli` → `hq`, `hq-api`, `hq-bash`.
+
+Because the library cannot depend on the CLI, the `hq` sandbox builtin is
+injected: the CLI registers a factory with `hq::ai::tools::set_hq_builtin_factory`
+before dispatch. Shared serialized shapes that the library produces and the API
+serves live in `hq::types`, not in `hq-api`.
+
+The root package is the library, so run the binary with `-p hq-cli`
+(e.g. `cargo run -p hq-cli -- serve`). `cargo build`/`cargo test` without `-p`
+cover the whole workspace.
+
 ## Common Commands
 
 ### Rust Server & Development
 ```bash
 # Run the server (default: localhost:2222, or next available port)
-cargo run -- serve
+cargo run -p hq-cli -- serve
 
 # Start dev server with auto-reload (requires watchexec-cli: cargo install --locked watchexec-cli)
 ./bin/watch.sh
@@ -31,30 +55,30 @@ cargo test
 cargo test api_chat_test
 
 # Initialize (clone notes repo, create indices)
-cargo run -- --init
+cargo run -p hq-cli -- --init
 
 # Index all notes
-cargo run -- index --all
+cargo run -p hq-cli -- index --all
 
 # Rebuild indices from scratch
-cargo run -- rebuild
+cargo run -p hq-cli -- rebuild
 
 # Apply pending database migrations
-cargo run -- migrate
+cargo run -p hq-cli -- migrate
 # Roll back the most recent migration (or --steps N)
-cargo run -- migrate down
+cargo run -p hq-cli -- migrate down
 # Show applied and pending migrations
-cargo run -- migrate status
+cargo run -p hq-cli -- migrate status
 # Generate a new migration module
-cargo run -- migrate new add_user_table
+cargo run -p hq-cli -- migrate new add_user_table
 
 # Query notes (default: full-text search)
-cargo run -- query "search term"
+cargo run -p hq-cli -- query "search term"
 # With vector similarity
-cargo run -- query "search term" --vector
+cargo run -p hq-cli -- query "search term" --vector
 
 # Chat session in terminal
-cargo run -- chat
+cargo run -p hq-cli -- chat
 ```
 
 ### Web UI
@@ -144,7 +168,7 @@ latest schema.
 - `tools/` - AI-callable tools (bash, calendar, email, memory, note_search, tasks, web_search)
 - `skills/` - dynamically loaded skill system
 
-### API Server (`src/api/`)
+### API Server (`crates/api/src/`)
 Routes built with Axum:
 - `/api/chat` - chat sessions and streaming completions
 - `/api/notes` - note CRUD and search
@@ -157,7 +181,7 @@ Routes built with Axum:
 
 #### Adding a New API Endpoint
 
-**Module structure** — each route group lives in `src/api/routes/<name>/`:
+**Module structure** — each route group lives in `crates/api/src/routes/<name>/`:
 - `mod.rs` — `mod router; pub use router::router;` (re-exports)
 - `router.rs` — handler functions + `pub fn router() -> Router<SharedState>`
 - `public.rs` — request/response structs (derive `Deserialize`/`Serialize`)
@@ -193,7 +217,7 @@ async fn my_handler(
 **Registration (3 places):**
 1. In `router.rs`: `pub fn router() -> Router<SharedState> { Router::new().route("/path", get(handler)) }`
 2. In `routes/mod.rs`: add `pub mod my_module;` and `.nest("/path", my_module::router())`
-3. In `src/api/public.rs`: add `pub mod my_module { pub use crate::api::routes::my_module::public::*; }`
+3. In `crates/api/src/public.rs`: add `pub mod my_module { pub use crate::routes::my_module::public::*; }`
 
 ### Background Jobs (`src/jobs/`)
 Periodic jobs spawned on server start using Tokio tasks:
@@ -206,7 +230,7 @@ Periodic jobs spawned on server start using Tokio tasks:
 - Google Calendar API
 - Custom search API for web search
 
-### CLI (`src/cli/`)
+### CLI (`crates/cli/src/`)
 Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `chat`, `auth`, `job`
 
 ## Environment Variables
@@ -227,12 +251,12 @@ This project uses git worktrees for isolated development. Each worktree gets its
 
 ```bash
 # One-command: create worktree, set up env, start Claude Code in herdr
-cargo run -- develop <branch-name>
+cargo run -p hq-cli -- develop <branch-name>
 
 # Or manually:
 git worktree add .claude/worktrees/<name> main -b <name>
 cd .claude/worktrees/<name>
-cargo run -- develop . --no-init --no-examples
+cargo run -p hq-cli -- develop . --no-init --no-examples
 ./bin/run.sh
 ```
 
@@ -242,7 +266,7 @@ Key behaviors:
 - **Environment**: `hq develop` writes `.hq-data/.zshrc` that sources your zsh config then sets worktree-specific env vars. No env files are persisted to disk.
 - **`.claude/worktrees/`** is gitignored — worktree directories are not committed.
 - **Storage**: `.hq-data/` contains subdirs (`db/`, `index/`, `notes/`, etc.).
-- **Quick start**: `cargo run -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a herdr workspace.
+- **Quick start**: `cargo run -p hq-cli -- develop <branch-name>` creates a worktree from main, runs setup, and launches Claude Code in a herdr workspace.
 - **herdr**: The develop command uses [herdr](https://herdr.dev/) as its terminal multiplexer. It starts a background herdr server if one isn't running, creates a workspace for the worktree, pre-spawns Claude Code in it, and attaches. Detach with `Ctrl-B Q` (server keeps running). Reattach later with bare `herdr`. Run `herdr server stop` to end sessions. Each worktree gets its own workspace in the shared default session.
 - **Worktrees vs workspaces**: A **worktree** is a Git concept — it's a directory on disk where a branch is checked out (created by `git worktree add`). A **workspace** is herdr's project-level container inside the running server; it holds tabs and panes (real terminals). The develop command pairs them 1:1: the worktree is your source code on disk, and the workspace is where Claude Code actually runs. The root pane's cwd points at the worktree directory, so terminals inside the workspace see your code. Detaching herdr leaves both intact — the worktree stays on disk, and the workspace (with Claude still running) persists in the server until you `herdr server stop`.
 

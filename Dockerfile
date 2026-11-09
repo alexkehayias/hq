@@ -44,22 +44,34 @@ ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
 ## Cache rust dependencies
 ## https://stackoverflow.com/questions/58473606/cache-rust-dependencies-with-docker-build
 ## --locked ensures the build uses Cargo.lock exactly as committed, with no registry resolution drift.
-RUN mkdir ./src && echo 'fn main() { println!("Dummy!"); }' > ./src/main.rs
-COPY ./Cargo.toml .
-COPY ./Cargo.lock .
-RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets
-
-## Actually build the app
-RUN rm -rf ./src
-COPY ./src ./src
+## This is a Cargo workspace (root lib + crates/bash, crates/api, crates/cli), so
+## every manifest must exist and every package needs a placeholder source file
+## before the dependency-only build can resolve.
+RUN mkdir -p ./src ./crates/bash/src ./crates/api/src ./crates/cli/src
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ./crates/bash/Cargo.toml ./crates/bash/
+COPY ./crates/api/Cargo.toml ./crates/api/
+COPY ./crates/cli/Cargo.toml ./crates/cli/
 # build.rs generates the migration registry into OUT_DIR, which src/core/db/migrations
 # includes via `env!("OUT_DIR")`. Without it Cargo sets no OUT_DIR and the build fails.
+COPY ./build.rs ./build.rs
+COPY ./src/core/db/migrations ./src/core/db/migrations
+RUN echo '' > ./src/lib.rs && \
+    echo '' > ./crates/bash/src/lib.rs && \
+    echo '' > ./crates/api/src/lib.rs && \
+    echo '' > ./crates/cli/src/lib.rs && \
+    echo 'fn main() {}' > ./crates/cli/src/main.rs
+RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets -p hq-cli
+
+## Actually build the app
+COPY ./src ./src
+COPY ./crates ./crates
 COPY ./build.rs ./build.rs
 # Assets are embedded into the binary at compile time; copying them here lets
 # the include_dir! macro read them and busts the layer cache when assets change.
 COPY ./web-ui ./web-ui
-RUN touch -a -m ./src/main.rs
-RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets
+RUN touch -a -m ./src/lib.rs ./crates/*/src/lib.rs
+RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets -p hq-cli
 
 # Run stage
 # Match builder's glibc (see note above re: __isoc23_strtoll).

@@ -16,7 +16,7 @@ mod tests {
     use crate::test_utils::{body_to_string, test_app, test_app_with_skills, test_app_with_state};
     use hq::ai::chat::db::get_or_create_session;
     use hq::ai::chat::models::SessionMode;
-    use hq::api::AppState;
+    use hq_api::AppState;
 
     /// Tests getting chat sessions returns empty list initially
     #[tokio::test]
@@ -719,7 +719,7 @@ mod tests {
     async fn it_resumes_buffered_stream_events() {
         let (app, state) = test_app_with_state().await;
 
-        let stream = hq::api::routes::chat::stream::register(&state.streams, "resume-session");
+        let stream = hq_api::routes::chat::stream::register(&state.streams, "resume-session");
         stream.publish(r#"{"choices":[{"delta":{"content":"hello"}}]}"#.to_string());
         stream.finish();
 
@@ -746,7 +746,7 @@ mod tests {
     async fn it_resumes_stream_after_cursor() {
         let (app, state) = test_app_with_state().await;
 
-        let stream = hq::api::routes::chat::stream::register(&state.streams, "resume-cursor");
+        let stream = hq_api::routes::chat::stream::register(&state.streams, "resume-cursor");
         stream.publish("first".to_string());
         stream.publish("second".to_string());
         stream.finish();
@@ -787,8 +787,7 @@ mod tests {
             .unwrap();
 
         // Register a stream but don't finish it, so the turn looks in flight.
-        let _stream =
-            hq::api::routes::chat::stream::register(&state.streams, "in-progress-session");
+        let _stream = hq_api::routes::chat::stream::register(&state.streams, "in-progress-session");
 
         let response = app
             .oneshot(

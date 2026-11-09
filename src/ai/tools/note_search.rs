@@ -1,6 +1,6 @@
 use super::registry::{Tool, ToolConfig};
-use crate::api::public::notes::SearchResponse;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
+use crate::types::notes::SearchResponse;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

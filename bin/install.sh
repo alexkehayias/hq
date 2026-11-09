@@ -18,4 +18,4 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
     esac
 fi
 
-cargo install --path . --locked
+cargo install --path crates/cli --locked

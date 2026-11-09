@@ -9,13 +9,13 @@ use axum::{Router, body::Body};
 
 use hq::ai::chat::db::{get_or_create_session, insert_chat_message};
 use hq::ai::skills::SkillRegistry;
-use hq::api::AppState;
-use hq::api::app;
 use hq::core::AppConfig;
 use hq::core::db::async_db;
 use hq::core::db::initialize_db;
 use hq::openai::{Message, Role};
 use hq::search::{index_all, index_all_chat_sessions};
+use hq_api::AppState;
+use hq_api::app;
 
 /// Converts a response body to a string
 #[allow(dead_code)] // Otherwise test crates give dead code warning

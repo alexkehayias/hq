@@ -11,6 +11,7 @@
 //! channel carrying the server's error logs, and [`notes`] for the default
 //! channel announcing newly indexed notes.
 
+pub mod channel;
 pub mod db;
 pub mod default;
 pub mod errors;

@@ -1,0 +1,134 @@
+//! Router for the notes API
+
+use std::sync::{Arc, RwLock};
+
+use super::public;
+use crate::routes::notes::db as notes_db;
+use crate::state::AppState;
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, patch},
+};
+use axum_extra::extract::Query;
+use hq::core::orgmode as core_org;
+use hq::search::aql;
+use hq::search::index_files_locked;
+use hq::search::search_notes;
+
+type SharedState = Arc<RwLock<AppState>>;
+
+// Note search endpoint
+async fn note_search(
+    State(state): State<SharedState>,
+    Query(params): Query<public::SearchRequest>,
+) -> Result<axum::Json<public::SearchResponse>, crate::public::ApiError> {
+    let raw_query = params.query;
+    let query = aql::parse_query(&raw_query).expect("Parsing AQL failed");
+    let (db, index_path) = {
+        let shared_state = state.read().unwrap();
+        (
+            shared_state.db.clone(),
+            shared_state.config.index_path.clone(),
+        )
+    };
+
+    let results = search_notes(
+        &index_path,
+        &db,
+        params.include_similarity,
+        params.truncate,
+        &query,
+        params.limit,
+    )
+    .await?;
+
+    let resp = public::SearchResponse {
+        raw_query: raw_query.to_string(),
+        parsed_query: format!("{:?}", query),
+        results,
+    };
+
+    Ok(axum::Json(resp))
+}
+
+// View note endpoint
+async fn view_note(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, crate::public::ApiError> {
+    let db = state.read().unwrap().db.clone();
+    match notes_db::get_note_by_id(&db, id).await {
+        Ok(Some(note)) => Ok(axum::Json(note).into_response()),
+        Ok(None) => Ok((StatusCode::NOT_FOUND, "Note not found").into_response()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+// Update note status endpoint
+async fn update_note(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<public::UpdateNoteRequest>,
+) -> Result<axum::response::Response, crate::public::ApiError> {
+    let (db, notes_path, index_path) = {
+        let shared_state = state.read().unwrap();
+        (
+            shared_state.db.clone(),
+            shared_state.config.notes_path.clone(),
+            shared_state.config.index_path.clone(),
+        )
+    };
+
+    let note = notes_db::get_note_by_id(&db, id.clone()).await?;
+    let note = match note {
+        Some(n) => n,
+        None => return Ok((StatusCode::NOT_FOUND, "Note not found").into_response()),
+    };
+
+    if note.r#type.as_deref() != Some("task") {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "Only task notes can have their status updated",
+        )
+            .into_response());
+    }
+
+    let file_path = std::path::PathBuf::from(&notes_path).join(&note.file_name);
+    core_org::update_task_in_file(
+        &file_path,
+        &id,
+        core_org::TaskUpdate {
+            status: Some(&body.status),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    // Re-index only the file that was modified
+    index_files_locked(
+        &db,
+        &index_path,
+        &notes_path,
+        true,
+        true,
+        Some(vec![file_path]),
+    )
+    .await?;
+
+    // Re-fetch to return the indexed state
+    match notes_db::get_note_by_id(&db, id).await? {
+        Some(updated) => Ok(axum::Json(updated).into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "Note not found").into_response()),
+    }
+}
+
+/// Create the notes router
+pub fn router() -> Router<SharedState> {
+    Router::new()
+        .route("/search", get(note_search))
+        .route("/{id}/view", get(view_note))
+        .route("/{id}", patch(update_note))
+}

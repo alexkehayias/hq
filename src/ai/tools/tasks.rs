@@ -1,6 +1,6 @@
 use super::registry::{Tool, ToolConfig};
-use crate::api::public::notes::SearchResponse;
 use crate::openai::{Function, Parameters, ToolCall, ToolType};
+use crate::types::notes::SearchResponse;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use chrono::Utc;

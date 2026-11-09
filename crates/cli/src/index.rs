@@ -1,0 +1,75 @@
+use anyhow::{Result, anyhow};
+use hq::core::git::{changed_files_between, head_sha, maybe_pull_rebase};
+use hq::search::{index_all_chat_sessions, reindex_changed_notes};
+use std::env;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+pub async fn run(
+    all: bool,
+    full_text: bool,
+    vector: bool,
+    chat: bool,
+    index_path: &str,
+    notes_path: &str,
+    vec_db_path: &str,
+) -> Result<()> {
+    if !all && !full_text && !vector && !chat {
+        return Err(anyhow!(
+            "Missing value for index \"all\", \"full-text\", \"vector\", and/or \"chat\""
+        ));
+    }
+    // If using the CLI only and not the webserver, set up tracing to
+    // output to stdout and stderr
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    let deploy_key_path =
+        env::var("HQ_NOTES_DEPLOY_KEY_PATH").expect("Missing env var HQ_NOTES_REPO_URL");
+
+    // Non-destructive pull: capture HEAD before, rebase local commits on top of origin.
+    // This replaces the old destructive `git reset --hard origin/main` which clobbered
+    // local changes.
+    let pre_head = head_sha(notes_path).await?;
+    if let Err(e) = maybe_pull_rebase(&deploy_key_path, notes_path).await {
+        tracing::warn!("git pull/rebase failed (continuing with local state): {e}");
+    }
+
+    // Compute files that changed as a result of the pull/rebase (origin's new
+    // contributions + our own rebased commits). Only these get reindexed — no full
+    // reindex. If nothing changed, the changed list is empty and nothing is indexed.
+    let changed = changed_files_between(notes_path, &pre_head, "HEAD")
+        .await
+        .unwrap_or_default();
+
+    let db = hq::core::db::async_db(vec_db_path)
+        .await
+        .expect("Failed to connect to async db");
+
+    if full_text {
+        reindex_changed_notes(&db, index_path, notes_path, &changed, true, false)
+            .await
+            .expect("Indexing failed");
+    }
+    if vector {
+        reindex_changed_notes(&db, index_path, notes_path, &changed, false, true)
+            .await
+            .expect("Indexing failed");
+    }
+    if all {
+        reindex_changed_notes(&db, index_path, notes_path, &changed, true, true)
+            .await
+            .expect("Indexing failed");
+    }
+    if chat {
+        index_all_chat_sessions(&db, index_path)
+            .await
+            .expect("Chat indexing failed");
+    }
+
+    Ok(())
+}

@@ -1,7 +1,7 @@
 use super::registry::{Tool, ToolConfig};
 use crate::ai::prompt::{self, Prompt};
-use crate::api::public;
 use crate::openai::{Function, Parameters, Property, ToolCall, ToolType, parse_tool_args};
+use crate::types::email;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,7 @@ impl ToolCall for EmailUnreadTool {
             ));
         }
 
-        let email_threads: Vec<public::email::EmailThread> = match resp.json().await {
+        let email_threads: Vec<email::EmailThread> = match resp.json().await {
             Ok(threads) => threads,
             Err(e) => {
                 return Ok(format!(
@@ -175,7 +175,7 @@ impl ToolCall for EmailSearchTool {
             ));
         }
 
-        let email_threads: Vec<public::email::EmailThread> = match resp.json().await {
+        let email_threads: Vec<email::EmailThread> = match resp.json().await {
             Ok(threads) => threads,
             Err(e) => {
                 return Ok(format!(
