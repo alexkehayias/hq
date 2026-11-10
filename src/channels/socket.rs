@@ -205,7 +205,7 @@ pub async fn sigterm() {
 /// crashed without cleaning up. We detect this by attempting to connect: if the
 /// connection succeeds, another publisher is live (channel in use); if it fails,
 /// the socket file is stale and we remove + retry.
-async fn bind_socket(path: &Path) -> Result<UnixListener> {
+pub(crate) async fn bind_socket(path: &Path) -> Result<UnixListener> {
     match UnixListener::bind(path) {
         Ok(listener) => Ok(listener),
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -514,16 +514,21 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (tx, rx) = mpsc::channel(16);
-            tokio::spawn(async move {
-                tx.send(b"line1\n".to_vec()).await.unwrap();
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                tx.send(b"line2\n".to_vec()).await.unwrap();
-                // dropping tx signals EOF
-            });
+            tx.send(b"line1\n".to_vec()).await.unwrap();
             let reader = BufReader::new(MpscReader::new(rx));
-            let stream = event_stream_from_reader(reader, Duration::from_millis(10));
-            let events: Vec<String> = stream.collect().await;
-            assert_eq!(events, vec!["line1", "line2"]);
+            let mut stream = event_stream_from_reader(reader, Duration::from_millis(10));
+
+            // Only send the second line once the first burst has been emitted,
+            // so the split does not depend on the scheduler running the idle
+            // timer between two sends.
+            assert_eq!(stream.next().await.as_deref(), Some("line1"));
+
+            tx.send(b"line2\n".to_vec()).await.unwrap();
+            assert_eq!(stream.next().await.as_deref(), Some("line2"));
+
+            // Dropping the sender signals EOF.
+            drop(tx);
+            assert!(stream.next().await.is_none());
         });
     }
 }
