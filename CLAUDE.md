@@ -163,7 +163,6 @@ latest schema.
 - **AQL (Alex Query Language)** - custom query syntax for fielded terms, phrases, negation, ranges
 
 ### AI (`src/ai/`)
-- `agents/` - task-specific agents (agenda, email)
 - `chat/core.rs` - chat session management, message handling
 - `tools/` - AI-callable tools (bash, calendar, email, memory, note_search, tasks, web_search)
 - `skills/` - dynamically loaded skill system
@@ -221,9 +220,8 @@ async fn my_handler(
 
 ### Background Jobs (`src/jobs/`)
 Periodic jobs spawned on server start using Tokio tasks:
-- `DailyAgenda` - generates daily agenda
-- `ResearchMeetingAttendees` - prepares meeting context
 - `GenerateSessionTitles` - auto-titles chat sessions
+- `GitSync` - syncs the notes repository
 
 ### External Integrations (`src/google/`)
 - Gmail API via OAuth2

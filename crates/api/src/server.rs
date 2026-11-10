@@ -11,7 +11,7 @@ use hq::ai::skills::SkillRegistry;
 use hq::channels::default::{register_agent_channels, start_default_channels};
 use hq::channels::errors::{ErrorChannelLayer, register as register_error_channel};
 use hq::core::{AppConfig, db::async_db};
-use hq::jobs::{DailyAgenda, GenerateSessionTitles, GitSync, spawn_periodic_job};
+use hq::jobs::{GenerateSessionTitles, GitSync, spawn_periodic_job};
 use hq::loops::supervisor::{self as loops, LoopSupervisorConfig};
 
 /// Directives used when `RUST_LOG` is unset.
@@ -108,7 +108,6 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
 
     // Run background jobs. Each job is spawned in it's own tokio task
     // in a loop.
-    spawn_periodic_job(config.clone(), db.clone(), DailyAgenda);
     spawn_periodic_job(config.clone(), db.clone(), GitSync);
     spawn_periodic_job(config, db, GenerateSessionTitles);
 
