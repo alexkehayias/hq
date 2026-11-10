@@ -4,16 +4,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use hq::core::AppConfig;
 use hq::core::db::async_db;
-use hq::jobs::{
-    DailyAgenda, GenerateSessionTitles, PeriodicJob, ProcessEmail, ResearchMeetingAttendees,
-};
+use hq::jobs::{GenerateSessionTitles, PeriodicJob};
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 pub enum JobId {
-    ProcessEmail,
-    ResearchMeetingAttendees,
     GenerateSessionTitles,
-    DailyAgenda,
 }
 
 pub async fn run(id: JobId) -> Result<()> {
@@ -31,10 +26,7 @@ pub async fn run(id: JobId) -> Result<()> {
         .expect("Failed to connect to db");
 
     let job: Box<dyn PeriodicJob> = match id {
-        JobId::ProcessEmail => Box::new(ProcessEmail),
-        JobId::ResearchMeetingAttendees => Box::new(ResearchMeetingAttendees),
         JobId::GenerateSessionTitles => Box::new(GenerateSessionTitles),
-        JobId::DailyAgenda => Box::new(DailyAgenda),
     };
 
     println!("Running job: {:?}", id);
