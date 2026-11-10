@@ -1,0 +1,894 @@
+//! read builtin - read a line of input
+
+use async_trait::async_trait;
+
+use super::{Builtin, BuiltinSideEffect, Context};
+use crate::error::Result;
+use crate::interpreter::{ExecResult, is_internal_variable};
+
+/// read builtin - read a line of input into variables
+pub struct Read;
+
+#[async_trait]
+impl Builtin for Read {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        // Get the input to read from stdin
+        let input = ctx.stdin.map(|s| s.to_string());
+
+        // Parse flags
+        let mut raw_mode = false; // -r: don't interpret backslashes
+        let mut array_mode = false; // -a: read into array
+        let mut delimiter = None::<char>; // -d: custom delimiter
+        let mut nchars = None::<usize>; // -n: read N chars
+        let mut prompt = None::<String>; // -p prompt
+        let mut var_args = Vec::new();
+        let mut args_iter = ctx.args.iter();
+        while let Some(arg) = args_iter.next() {
+            if arg.starts_with('-') && arg.len() > 1 {
+                let mut chars = arg[1..].chars();
+                while let Some(flag) = chars.next() {
+                    match flag {
+                        'r' => raw_mode = true,
+                        'a' => array_mode = true,
+                        'd' => {
+                            // -d delim: use first char of next arg as delimiter
+                            let rest: String = chars.collect();
+                            let delim_str = if rest.is_empty() {
+                                args_iter.next().map(|s| s.as_str()).unwrap_or("")
+                            } else {
+                                &rest
+                            };
+                            delimiter = delim_str.chars().next();
+                            break;
+                        }
+                        'n' => {
+                            let rest: String = chars.collect();
+                            let n_str = if rest.is_empty() {
+                                args_iter.next().map(|s| s.as_str()).unwrap_or("0")
+                            } else {
+                                &rest
+                            };
+                            nchars = n_str.parse().ok();
+                            break;
+                        }
+                        'p' => {
+                            let rest: String = chars.collect();
+                            prompt = Some(if rest.is_empty() {
+                                args_iter.next().cloned().unwrap_or_default()
+                            } else {
+                                rest
+                            });
+                            break;
+                        }
+                        't' | 's' | 'u' | 'e' | 'i' => {
+                            // -t timeout, -s silent, -u fd: accept and ignore
+                            if matches!(flag, 't' | 'u') {
+                                let rest: String = chars.collect();
+                                if rest.is_empty() {
+                                    args_iter.next();
+                                }
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                var_args.push(arg.as_str());
+            }
+        }
+        let _ = prompt; // prompt is for interactive use, ignored in non-interactive
+
+        // EOF with no data: clear all target variables to empty and return 1.
+        // This prevents the common `while read line || [[ -n "$line" ]]`
+        // pattern from looping infinitely on the stale last value.
+        let input = match input {
+            Some(s) => s,
+            None => {
+                let var_names: Vec<&str> = if var_args.is_empty() {
+                    vec!["REPLY"]
+                } else {
+                    var_args
+                };
+                let mut result = ExecResult::err("", 1);
+                for var_name in &var_names {
+                    if is_internal_variable(var_name) {
+                        continue;
+                    }
+                    result.side_effects.push(BuiltinSideEffect::SetVariable {
+                        name: var_name.to_string(),
+                        value: String::new(),
+                    });
+                }
+                return Ok(result);
+            }
+        };
+
+        // Extract input based on delimiter or nchars
+        let line = if let Some(n) = nchars {
+            // -n N: read at most N chars
+            input.chars().take(n).collect::<String>()
+        } else if let Some(delim) = delimiter {
+            // -d delim: read until delimiter
+            input.split(delim).next().unwrap_or("").to_string()
+        } else if raw_mode {
+            // -r: treat backslashes literally
+            input.lines().next().unwrap_or("").to_string()
+        } else {
+            // Without -r: handle backslash line continuation
+            let mut result = String::new();
+            for l in input.lines() {
+                if let Some(stripped) = l.strip_suffix('\\') {
+                    result.push_str(stripped);
+                } else {
+                    result.push_str(l);
+                    break;
+                }
+            }
+            result
+        };
+
+        // Split line by IFS (default: space, tab, newline)
+        // IFS whitespace chars (space, tab, newline) collapse runs and trim.
+        // Non-whitespace IFS chars preserve empty fields between consecutive delimiters.
+        // Check shell variables first (IFS=","), then env, then default.
+        let ifs = ctx
+            .variables
+            .get("IFS")
+            .or_else(|| ctx.env.get("IFS"))
+            .map(|s| s.as_str())
+            .unwrap_or(" \t\n");
+        struct ReadField<'a> {
+            text: &'a str,
+            start: usize,
+        }
+
+        let words: Vec<ReadField<'_>> = if ifs.is_empty() {
+            // Empty IFS means no word splitting
+            vec![ReadField {
+                text: &line,
+                start: 0,
+            }]
+        } else {
+            let ifs_ws: Vec<char> = ifs.chars().filter(|c| " \t\n".contains(*c)).collect();
+            let ifs_non_ws: Vec<char> = ifs.chars().filter(|c| !" \t\n".contains(*c)).collect();
+
+            if ifs_non_ws.is_empty() {
+                // All IFS chars are whitespace: collapse runs, trim
+                let mut fields = Vec::new();
+                let mut field_start = None::<usize>;
+                for (i, ch) in line.char_indices() {
+                    if ifs.contains(ch) {
+                        if let Some(start) = field_start.take() {
+                            fields.push(ReadField {
+                                text: &line[start..i],
+                                start,
+                            });
+                        }
+                    } else if field_start.is_none() {
+                        field_start = Some(i);
+                    }
+                }
+                if let Some(start) = field_start {
+                    fields.push(ReadField {
+                        text: &line[start..],
+                        start,
+                    });
+                }
+                fields
+            } else {
+                // Mixed IFS: split on all IFS chars, collapse whitespace runs,
+                // preserve empty fields for consecutive non-whitespace delimiters.
+                let mut fields: Vec<ReadField<'_>> = Vec::new();
+                let mut field_start = 0usize;
+                let mut i = 0usize;
+                let mut last_delim_was_non_ws = false;
+
+                while i < line.len() {
+                    let mut iter = line[i..].char_indices();
+                    let (_, ch) = iter.next().expect("valid char boundary");
+                    let ch_len = ch.len_utf8();
+                    if !ifs.contains(ch) {
+                        i += ch_len;
+                        last_delim_was_non_ws = false;
+                        continue;
+                    }
+
+                    if ifs_non_ws.contains(&ch) {
+                        fields.push(ReadField {
+                            text: &line[field_start..i],
+                            start: field_start,
+                        });
+                        i += ch_len;
+                        while i < line.len() {
+                            let mut ws_iter = line[i..].char_indices();
+                            let (_, ws_ch) = ws_iter.next().expect("valid char boundary");
+                            if ifs_ws.contains(&ws_ch) {
+                                i += ws_ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        field_start = i;
+                        last_delim_was_non_ws = true;
+                    } else {
+                        let pushed_field = field_start != i;
+                        if pushed_field {
+                            fields.push(ReadField {
+                                text: &line[field_start..i],
+                                start: field_start,
+                            });
+                        }
+                        i += ch_len;
+                        while i < line.len() {
+                            let mut ws_iter = line[i..].char_indices();
+                            let (_, ws_ch) = ws_iter.next().expect("valid char boundary");
+                            if ifs_ws.contains(&ws_ch) {
+                                i += ws_ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // IFS whitespace adjacent to a non-whitespace IFS delimiter
+                        // is one delimiter sequence, not an empty field.
+                        if pushed_field && i < line.len() {
+                            let mut next_iter = line[i..].char_indices();
+                            let (_, next_ch) = next_iter.next().expect("valid char boundary");
+                            if ifs_non_ws.contains(&next_ch) {
+                                i += next_ch.len_utf8();
+                                while i < line.len() {
+                                    let mut ws_iter = line[i..].char_indices();
+                                    let (_, ws_ch) = ws_iter.next().expect("valid char boundary");
+                                    if ifs_ws.contains(&ws_ch) {
+                                        i += ws_ch.len_utf8();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        field_start = i;
+                        last_delim_was_non_ws = false;
+                    }
+                }
+
+                if field_start < line.len() || last_delim_was_non_ws {
+                    fields.push(ReadField {
+                        text: &line[field_start..],
+                        start: field_start,
+                    });
+                }
+                fields
+            }
+        };
+
+        if array_mode {
+            // -a: read all words into array variable
+            let arr_name = var_args.first().copied().unwrap_or("REPLY");
+            // THREAT[TM-INJ-009]: Block internal variable prefix injection via read -a
+            if is_internal_variable(arr_name) {
+                return Ok(ExecResult::ok(String::new()));
+            }
+            let mut result = ExecResult::ok(String::new());
+            result.side_effects.push(BuiltinSideEffect::SetArray {
+                name: arr_name.to_string(),
+                elements: words.iter().map(|w| w.text.to_string()).collect(),
+            });
+            return Ok(result);
+        }
+
+        if var_args.is_empty() {
+            let mut result = ExecResult::ok(String::new());
+            result.side_effects.push(BuiltinSideEffect::SetVariable {
+                name: "REPLY".to_string(),
+                value: line,
+            });
+            return Ok(result);
+        }
+
+        let var_names = var_args;
+
+        // Assign words to variables via side effects (respects local scoping)
+        let mut result = ExecResult::ok(String::new());
+        for (i, var_name) in var_names.iter().enumerate() {
+            // THREAT[TM-INJ-009]: Block internal variable prefix injection via read
+            if is_internal_variable(var_name) {
+                continue;
+            }
+            let value = if i == var_names.len() - 1 {
+                // Bash gives the final variable the unsplit remaining input,
+                // then strips trailing IFS whitespace. Preserve original
+                // separators without keeping whitespace Bash trims.
+                words
+                    .get(i)
+                    .map(|field| {
+                        line[field.start..]
+                            .trim_end_matches(|ch| ifs.contains(ch) && " \t\n".contains(ch))
+                            .to_string()
+                    })
+                    .unwrap_or_default()
+            } else if i < words.len() {
+                words[i].text.to_string()
+            } else {
+                // Not enough words - set to empty
+                String::new()
+            };
+            result.side_effects.push(BuiltinSideEffect::SetVariable {
+                name: var_name.to_string(),
+                value,
+            });
+        }
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use crate::fs::{FileSystem, InMemoryFs};
+
+    async fn setup() -> (Arc<InMemoryFs>, PathBuf, HashMap<String, String>) {
+        let fs = Arc::new(InMemoryFs::new());
+        let cwd = PathBuf::from("/home/user");
+        let variables = HashMap::new();
+        fs.mkdir(&cwd, true).await.unwrap();
+        (fs, cwd, variables)
+    }
+
+    /// Extract SetVariable side effects into a map for easy assertion.
+    fn extract_vars(result: &ExecResult) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for effect in &result.side_effects {
+            if let BuiltinSideEffect::SetVariable { name, value } = effect {
+                map.insert(name.clone(), value.clone());
+            }
+        }
+        map
+    }
+
+    // ==================== no stdin ====================
+
+    #[tokio::test]
+    async fn read_no_stdin_returns_error() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args: Vec<String> = vec![];
+        let ctx = Context::new_for_test(&args, &env, &mut variables, &mut cwd, fs.clone(), None);
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 1);
+    }
+
+    // ==================== basic read into REPLY ====================
+
+    #[tokio::test]
+    async fn read_into_reply() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args: Vec<String> = vec![];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("hello world"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("REPLY").unwrap(), "hello world");
+    }
+
+    #[tokio::test]
+    async fn read_into_reply_preserves_trailing_ifs_whitespace() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args: Vec<String> = vec![];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("secret  "),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("REPLY").unwrap(), "secret  ");
+    }
+
+    // ==================== read into named variable ====================
+
+    #[tokio::test]
+    async fn read_into_named_var() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["MY_VAR".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("test_value"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("MY_VAR").unwrap(), "test_value");
+    }
+
+    // ==================== read into multiple variables ====================
+
+    #[tokio::test]
+    async fn read_multiple_vars() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one two three four"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "one");
+        assert_eq!(vars.get("B").unwrap(), "two");
+        // Last var gets remaining words
+        assert_eq!(vars.get("C").unwrap(), "three four");
+    }
+
+    #[tokio::test]
+    async fn read_more_vars_than_words() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "one");
+        assert_eq!(vars.get("B").unwrap(), "");
+        assert_eq!(vars.get("C").unwrap(), "");
+    }
+
+    // ==================== -r flag (raw mode) ====================
+
+    #[tokio::test]
+    async fn read_raw_mode_preserves_backslash() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-r".to_string(), "LINE".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("hello\\world"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("LINE").unwrap(), "hello\\world");
+    }
+
+    #[tokio::test]
+    async fn read_without_raw_handles_line_continuation() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["LINE".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("hello\\\nworld"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        // Without -r, backslash-newline is line continuation
+        assert_eq!(vars.get("LINE").unwrap(), "helloworld");
+    }
+
+    // ==================== -n flag (read N chars) ====================
+
+    #[tokio::test]
+    async fn read_n_chars() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-n".to_string(), "3".to_string(), "CHUNK".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("abcdefgh"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("CHUNK").unwrap(), "abc");
+    }
+
+    #[tokio::test]
+    async fn read_n_more_than_input() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-n".to_string(), "100".to_string(), "CHUNK".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("hi"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("CHUNK").unwrap(), "hi");
+    }
+
+    // ==================== -d flag (delimiter) ====================
+
+    #[tokio::test]
+    async fn read_custom_delimiter() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-d".to_string(), ",".to_string(), "FIELD".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("first,second,third"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("FIELD").unwrap(), "first");
+    }
+
+    // ==================== -a flag (array mode) ====================
+
+    #[tokio::test]
+    async fn read_array_mode() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-a".to_string(), "ARR".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one two three"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.side_effects.len(), 1);
+        match &result.side_effects[0] {
+            BuiltinSideEffect::SetArray { name, elements } => {
+                assert_eq!(name, "ARR");
+                assert_eq!(elements, &["one", "two", "three"]);
+            }
+            _ => panic!("Expected SetArray side effect"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_array_mode_default_name() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-a".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("a b"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.side_effects.len(), 1);
+        match &result.side_effects[0] {
+            BuiltinSideEffect::SetArray { name, .. } => assert_eq!(name, "REPLY"),
+            _ => panic!("Expected SetArray side effect"),
+        }
+    }
+
+    // ==================== combined flags ====================
+
+    #[tokio::test]
+    async fn read_combined_r_flag() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        // -r combined in single arg
+        let args = vec!["-r".to_string(), "V".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("path\\to\\file"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("V").unwrap(), "path\\to\\file");
+    }
+
+    // ==================== multiline input ====================
+
+    #[tokio::test]
+    async fn read_only_first_line() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        let args = vec!["-r".to_string(), "LINE".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("first\nsecond\nthird"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("LINE").unwrap(), "first");
+    }
+
+    // ==================== custom IFS ====================
+
+    #[tokio::test]
+    async fn read_custom_ifs() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), ":".to_string());
+        let args = vec!["A".to_string(), "B".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("foo:bar:baz"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "foo");
+        assert_eq!(vars.get("B").unwrap(), "bar:baz");
+    }
+
+    #[tokio::test]
+    async fn read_custom_ifs_last_var_preserves_original_delimiters() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), ",:".to_string());
+        let args = vec!["A".to_string(), "B".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("1,2:3"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "1");
+        assert_eq!(vars.get("B").unwrap(), "2:3");
+    }
+
+    #[tokio::test]
+    async fn read_last_var_trims_trailing_ifs_whitespace() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), " ".to_string());
+        let args = vec!["A".to_string(), "B".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("a   b  c  "),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "a");
+        assert_eq!(vars.get("B").unwrap(), "b  c");
+    }
+
+    #[tokio::test]
+    async fn read_last_var_trims_only_trailing_ifs_whitespace() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), ",:".to_string());
+        let args = vec!["A".to_string(), "B".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("1,2:3  "),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "1");
+        assert_eq!(vars.get("B").unwrap(), "2:3  ");
+    }
+
+    #[tokio::test]
+    async fn read_custom_ifs_preserves_empty_fields() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), ":".to_string());
+        let args = vec![
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+            "D".to_string(),
+        ];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one::three:"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "one");
+        assert_eq!(vars.get("B").unwrap(), "");
+        assert_eq!(vars.get("C").unwrap(), "three");
+        assert_eq!(vars.get("D").unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn read_mixed_ifs_whitespace_and_non_ws() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), ": ".to_string());
+        let args = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one two:three"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "one");
+        assert_eq!(vars.get("B").unwrap(), "two");
+        assert_eq!(vars.get("C").unwrap(), "three");
+    }
+
+    #[tokio::test]
+    async fn read_mixed_ifs_whitespace_before_non_ws_delimiter() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), ": ".to_string());
+        let args = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one : two"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "one");
+        assert_eq!(vars.get("B").unwrap(), "two");
+        assert_eq!(vars.get("C").unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn read_empty_ifs_no_splitting() {
+        let (fs, mut cwd, mut variables) = setup().await;
+        let mut env = HashMap::new();
+        env.insert("IFS".to_string(), String::new());
+        let args = vec!["LINE".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("no splitting here"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("LINE").unwrap(), "no splitting here");
+    }
+
+    #[tokio::test]
+    async fn read_ifs_from_shell_variables() {
+        // IFS set as a shell variable (not env) — the common case (IFS=",")
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        variables.insert("IFS".to_string(), ",".to_string());
+        let args = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("one,two,three"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let vars = extract_vars(&result);
+        assert_eq!(vars.get("A").unwrap(), "one");
+        assert_eq!(vars.get("B").unwrap(), "two");
+        assert_eq!(vars.get("C").unwrap(), "three");
+    }
+
+    #[tokio::test]
+    async fn read_ifs_from_shell_variables_array() {
+        // IFS=: with read -ra should split into array
+        let (fs, mut cwd, mut variables) = setup().await;
+        let env = HashMap::new();
+        variables.insert("IFS".to_string(), ":".to_string());
+        let args = vec!["-ra".to_string(), "parts".to_string()];
+        let ctx = Context::new_for_test(
+            &args,
+            &env,
+            &mut variables,
+            &mut cwd,
+            fs.clone(),
+            Some("a:b:c"),
+        );
+        let result = Read.execute(ctx).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        match &result.side_effects[0] {
+            BuiltinSideEffect::SetArray { name, elements } => {
+                assert_eq!(name, "parts");
+                assert_eq!(elements, &["a", "b", "c"]);
+            }
+            _ => panic!("Expected SetArray side effect"),
+        }
+    }
+}

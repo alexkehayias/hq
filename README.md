@@ -13,25 +13,25 @@ This is [one-of-one software](https://notes.alexkehayias.com/one-of-one-software
 Initialize index:
 
 ```
-cargo run -- --init
+cargo run -p hq-cli -- --init
 ```
 
 Search notes:
 
 ```
-cargo run -- query "testing" --vector
+cargo run -p hq-cli -- query "testing" --vector
 ```
 
 Index or re-index:
 
 ```
-cargo run -- index --all
+cargo run -p hq-cli -- index --all
 ```
 
 Run the server:
 
 ```
-cargo run -- serve --port 2222
+cargo run -p hq-cli -- serve --port 2222
 ```
 
 Search notes using the server:

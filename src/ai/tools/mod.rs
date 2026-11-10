@@ -1,5 +1,7 @@
 pub mod bash;
-pub use bash::{BashOutput, BashTool, new_sandbox, run_in_sandbox};
+pub use bash::{
+    BashOutput, BashTool, HqBuiltinFactory, new_sandbox, run_in_sandbox, set_hq_builtin_factory,
+};
 
 pub mod datetime;
 pub use datetime::DateTimeTool;

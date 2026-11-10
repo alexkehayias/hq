@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::{Tool, ToolConfig};
 use crate::channels::db::{ensure_channels, find_channel};
 use crate::channels::models::ChannelSource;
-use crate::cli::channel::validate_channel_id;
+use crate::channels::validate_channel_id;
 use crate::loops::db::{delete_loop, find_all_loops, insert_loop};
 use crate::loops::models::Loop;
 use crate::loops::supervisor::{self, LoopSupervisorConfig};

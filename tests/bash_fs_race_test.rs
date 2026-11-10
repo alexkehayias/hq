@@ -54,7 +54,7 @@ async fn concurrent_hq_tasks_create_via_cli() {
             ];
             tokio::time::timeout(
                 Duration::from_secs(20),
-                hq::cli::run_with_args_in(args, &storage_path),
+                hq_cli::run_with_args_in(args, &storage_path),
             )
             .await
         }
@@ -112,7 +112,7 @@ async fn concurrent_hq_tasks_create_new_project_via_cli() {
             ];
             tokio::time::timeout(
                 Duration::from_secs(20),
-                hq::cli::run_with_args_in(args, &storage_path),
+                hq_cli::run_with_args_in(args, &storage_path),
             )
             .await
         }
@@ -163,6 +163,10 @@ async fn concurrent_hq_tasks_create_via_bash() {
     let storage = dir.path().to_path_buf();
     init_storage(&storage).await;
     let storage_path = storage.to_string_lossy().to_string();
+
+    // `run_in_sandbox` only exposes the `hq` command once the CLI has
+    // registered its builtin factory with the library.
+    hq_cli::bashkit::register_hq_builtin();
 
     let workspace = storage.join("workspace").join("session");
     tokio::fs::create_dir_all(&workspace).await.unwrap();

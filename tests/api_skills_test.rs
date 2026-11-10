@@ -172,9 +172,9 @@ This skill has scripts and references.
         use std::sync::{Arc, RwLock};
 
         use hq::ai::skills::SkillRegistry;
-        use hq::api::{AppState, app};
         use hq::core::AppConfig;
         use hq::core::db::async_db;
+        use hq_api::{AppState, app};
 
         let temp_dir = std::env::temp_dir();
         let dir = temp_dir.join(uuid::Uuid::new_v4().to_string());

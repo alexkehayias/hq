@@ -1,0 +1,308 @@
+//! column builtin command - columnate lists
+
+use async_trait::async_trait;
+
+use super::{Builtin, BuiltinHelper, Context, read_text_file};
+use crate::error::Result;
+use crate::interpreter::ExecResult;
+
+/// The column builtin - format input into columns.
+///
+/// Usage: column [-t] [-s SEP] [-o SEP] [FILE...]
+///
+/// Options:
+///   -t         Create a table (determine columns from input)
+///   -s SEP     Specify input delimiter for -t mode (default: whitespace)
+///   -o SEP     Specify output delimiter for -t mode (default: two spaces)
+pub struct Column;
+
+impl BuiltinHelper for Column {
+    const NAME: &'static str = "column";
+}
+
+struct ColumnOptions {
+    table: bool,
+    input_sep: Option<String>,
+    output_sep: String,
+}
+
+fn parse_column_args(args: &[String]) -> (ColumnOptions, Vec<String>) {
+    let mut opts = ColumnOptions {
+        table: false,
+        input_sep: None,
+        output_sep: "  ".to_string(),
+    };
+    let mut files = Vec::new();
+    let mut p = super::arg_parser::ArgParser::new(args);
+
+    while !p.is_done() {
+        if p.flag("-t") {
+            opts.table = true;
+        } else if let Some(val) = p.flag_value_opt("-s") {
+            opts.input_sep = Some(val.to_string());
+        } else if let Some(val) = p.flag_value_opt("-o") {
+            opts.output_sep = val.to_string();
+        } else if !p.is_flag() {
+            if let Some(arg) = p.positional() {
+                files.push(arg.to_string());
+            }
+        } else {
+            p.advance();
+        }
+    }
+
+    (opts, files)
+}
+
+fn format_table(text: &str, opts: &ColumnOptions) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    // Split each line into fields
+    let rows: Vec<Vec<&str>> = lines
+        .iter()
+        .map(|line| {
+            if let Some(ref sep) = opts.input_sep {
+                line.split(sep.as_str()).collect()
+            } else {
+                line.split_whitespace().collect()
+            }
+        })
+        .collect();
+
+    // Determine max columns and column widths
+    let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut widths = vec![0usize; max_cols];
+
+    for row in &rows {
+        for (j, field) in row.iter().enumerate() {
+            widths[j] = widths[j].max(field.len());
+        }
+    }
+
+    // Format each row
+    let mut output = String::new();
+    for row in &rows {
+        for (j, field) in row.iter().enumerate() {
+            if j > 0 {
+                output.push_str(&opts.output_sep);
+            }
+            if j < row.len() - 1 {
+                // Left-align, pad to column width (except last column)
+                output.push_str(&format!("{:<width$}", field, width = widths[j]));
+            } else {
+                // Last column: no padding
+                output.push_str(field);
+            }
+        }
+        output.push('\n');
+    }
+
+    output
+}
+
+fn format_columns(text: &str) -> String {
+    // Fill-column mode: collect all words and arrange into columns.
+    // Real `column` uses terminal width (default 80) and tab-based spacing.
+    let terminal_width = 80;
+
+    let entries: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    if entries.is_empty() {
+        return String::new();
+    }
+
+    let max_len = entries.iter().map(|e| e.len()).max().unwrap_or(0);
+    // Column width: next tab stop (multiple of 8), minimum max_len + 1
+    let col_width = if max_len == 0 {
+        8
+    } else {
+        ((max_len / 8) + 1) * 8
+    };
+
+    let num_cols = (terminal_width / col_width).max(1);
+    let num_rows = entries.len().div_ceil(num_cols);
+
+    let mut output = String::new();
+    for row in 0..num_rows {
+        for col in 0..num_cols {
+            let idx = col * num_rows + row;
+            if idx >= entries.len() {
+                break;
+            }
+            if col > 0 {
+                output.push('\t');
+            }
+            output.push_str(entries[idx]);
+        }
+        output.push('\n');
+    }
+
+    output
+}
+
+#[async_trait]
+impl Builtin for Column {
+    async fn execute(&self, ctx: Context<'_>) -> Result<ExecResult> {
+        if let Some(r) = Self::check_help(
+            ctx.args,
+            "Usage: column [OPTION]... [FILE]...\nColumnate lists.\n\n  -t\t\tcreate a table\n  -s SEP\tspecify input delimiter for -t mode\n  -o SEP\tspecify output delimiter for -t mode\n  --help\tdisplay this help and exit\n  --version\toutput version information and exit\n",
+            Some("column (bashkit) 0.1"),
+        ) {
+            return Ok(r);
+        }
+        let (opts, files) = parse_column_args(ctx.args);
+
+        // Collect all input
+        let mut input = String::new();
+
+        if files.is_empty() {
+            if let Some(stdin) = ctx.stdin {
+                input.push_str(stdin);
+            }
+        } else {
+            for file in &files {
+                if file == "-" {
+                    if let Some(stdin) = ctx.stdin {
+                        input.push_str(stdin);
+                    }
+                } else {
+                    let path = if file.starts_with('/') {
+                        std::path::PathBuf::from(file)
+                    } else {
+                        ctx.cwd.join(file)
+                    };
+
+                    let text = match read_text_file(&*ctx.fs, &path, "column").await {
+                        Ok(t) => t,
+                        Err(e) => return Ok(e),
+                    };
+                    input.push_str(&text);
+                }
+            }
+        }
+
+        let output = if opts.table {
+            format_table(&input, &opts)
+        } else {
+            format_columns(&input)
+        };
+
+        Ok(ExecResult::ok(output))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use crate::fs::InMemoryFs;
+
+    async fn run_column(args: &[&str], stdin: Option<&str>) -> ExecResult {
+        let fs = Arc::new(InMemoryFs::new());
+        let mut variables = HashMap::new();
+        let env = HashMap::new();
+        let mut cwd = PathBuf::from("/");
+
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ctx = Context {
+            args: &args,
+            env: &env,
+            variables: &mut variables,
+            cwd: &mut cwd,
+            fs,
+            stdin,
+            #[cfg(feature = "http_client")]
+            http_client: None,
+            #[cfg(feature = "git")]
+            git_client: None,
+            #[cfg(feature = "ssh")]
+            ssh_client: None,
+            shell: None,
+        };
+
+        Column.execute(ctx).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_column_table_basic() {
+        let result = run_column(&["-t"], Some("a b c\nfoo bar baz\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a    b    c\nfoo  bar  baz\n");
+    }
+
+    #[tokio::test]
+    async fn test_column_table_custom_input_sep() {
+        let result = run_column(&["-t", "-s", ","], Some("a,b,c\nfoo,bar,baz\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a    b    c\nfoo  bar  baz\n");
+    }
+
+    #[tokio::test]
+    async fn test_column_table_custom_output_sep() {
+        let result = run_column(&["-t", "-o", " | "], Some("a b c\nfoo bar baz\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a   | b   | c\nfoo | bar | baz\n");
+    }
+
+    #[tokio::test]
+    async fn test_column_table_uneven_rows() {
+        let result = run_column(&["-t"], Some("a b c\nx y\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a  b  c\nx  y\n");
+    }
+
+    #[tokio::test]
+    async fn test_column_passthrough() {
+        // Without -t, column fills entries into columns (tab-separated)
+        let result = run_column(&[], Some("hello\nworld\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hello\tworld\n");
+    }
+
+    #[tokio::test]
+    async fn test_column_empty_input() {
+        let result = run_column(&["-t"], Some("")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_column_single_column() {
+        let result = run_column(&["-t"], Some("alpha\nbeta\ngamma\n")).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "alpha\nbeta\ngamma\n");
+    }
+
+    #[tokio::test]
+    async fn test_column_colon_delimiter() {
+        let result = run_column(
+            &["-t", "-s", ":"],
+            Some("root:0:root\nnobody:65534:nobody\n"),
+        )
+        .await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(
+            result.stdout,
+            "root    0      root\nnobody  65534  nobody\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_column_no_stdin() {
+        let result = run_column(&["-t"], None).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_column_file_not_found() {
+        let result = run_column(&["/nonexistent"], None).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("column:"));
+    }
+}

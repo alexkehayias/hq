@@ -1,8 +1,7 @@
 use super::registry::{Tool, ToolConfig};
 use crate::ai::chat::workspace::workspace_root;
 use crate::bash::builtins::DEFAULT_HOME;
-use crate::bash::{Bash, PosixFs, RealFs, RealFsMode};
-use crate::cli::bashkit::HqBuiltin;
+use crate::bash::{Bash, Builtin, PosixFs, RealFs, RealFsMode};
 use crate::openai::{
     Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
 };
@@ -10,7 +9,7 @@ use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::fs;
 
 #[derive(Serialize)]
@@ -35,6 +34,22 @@ pub struct BashOutput {
     pub stderr: String,
     /// Whether the output was truncated due to size limits.
     pub truncated: bool,
+}
+
+/// Builds the `hq` command builtin for a sandbox rooted at a storage path.
+///
+/// The CLI lives in a crate that sits above this library, so the library cannot
+/// reference it directly. The binary registers a factory at startup, and every
+/// sandbox created afterwards exposes `hq` as a command.
+pub type HqBuiltinFactory = Arc<dyn Fn(&str) -> Box<dyn Builtin> + Send + Sync>;
+
+static HQ_BUILTIN_FACTORY: OnceLock<HqBuiltinFactory> = OnceLock::new();
+
+/// Register the process-wide factory used to build the `hq` sandbox builtin.
+///
+/// Safe to call more than once; only the first registration wins.
+pub fn set_hq_builtin_factory(factory: HqBuiltinFactory) {
+    let _ = HQ_BUILTIN_FACTORY.set(factory);
 }
 
 /// The root path inside the sandbox where the workspace is mounted.
@@ -134,10 +149,11 @@ pub async fn new_sandbox(
         .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
     let fs = Arc::new(PosixFs::new(backend));
 
-    let mut bash = Bash::builder()
-        .builtin("hq", Box::new(HqBuiltin::new(storage_path)))
-        .cwd(cwd)
-        .build();
+    let mut builder = Bash::builder();
+    if let Some(factory) = HQ_BUILTIN_FACTORY.get() {
+        builder = builder.builtin("hq", factory(storage_path));
+    }
+    let mut bash = builder.cwd(cwd).build();
     bash.mount(SANDBOX_ROOT, fs)
         .map_err(|e| anyhow::anyhow!("Failed to mount filesystem: {e}"))?;
 

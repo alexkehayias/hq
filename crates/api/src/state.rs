@@ -1,0 +1,44 @@
+use std::sync::{Arc, RwLock};
+
+use serde::Deserialize;
+use tokio_rusqlite::Connection;
+
+use crate::routes::chat::TerminalRegistry;
+use crate::routes::chat::stream::ChatStreamRegistry;
+use hq::ai::skills::SkillRegistry;
+use hq::core::AppConfig;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LastSelection {
+    pub id: String,
+    pub title: String,
+    pub file_name: String,
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    // Stores the latest search hit selected by the user
+    pub latest_selection: Option<LastSelection>,
+    pub db: Connection,
+    pub config: AppConfig,
+    pub skill_registry: Arc<RwLock<SkillRegistry>>,
+    // In-flight (and recently finished) chat streams, keyed by session id, so
+    // a reconnecting client can resume a response mid-generation.
+    pub streams: ChatStreamRegistry,
+    // Interactive bashkit shells, keyed by session id, so working directory
+    // and shell state persist across terminal commands.
+    pub terminals: TerminalRegistry,
+}
+
+impl AppState {
+    pub fn new(db: Connection, config: AppConfig, skill_registry: SkillRegistry) -> Self {
+        Self {
+            latest_selection: None,
+            db,
+            config,
+            skill_registry: Arc::new(RwLock::new(skill_registry)),
+            streams: ChatStreamRegistry::default(),
+            terminals: TerminalRegistry::default(),
+        }
+    }
+}

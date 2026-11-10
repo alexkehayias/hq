@@ -1,6 +1,6 @@
 //! Supervisor for persisted channel loops.
 //!
-//! A loop mirrors the `hq loop` CLI ([`crate::cli::loop_cmd`]): it connects to
+//! A loop mirrors the `hq loop` CLI command: it connects to
 //! one or more channel publishers, merges their event streams, and runs a fresh
 //! LLM chat turn per event. This module owns the live instances — [`start`]
 //! spawns a background task and records it in a process-wide [`RUNNING`]
@@ -35,7 +35,7 @@ use crate::ai::chat::{
 };
 use crate::ai::tools::{ToolConfig, ToolRegistry};
 use crate::channels::subscribe::subscribe;
-use crate::cli::channel::validate_channel_id;
+use crate::channels::validate_channel_id;
 use crate::openai::{Message, Role};
 
 /// Configuration for the loop supervisor, assembled by the caller from server

@@ -18,7 +18,7 @@ use tokio_rusqlite::Connection;
 
 use super::models::ChannelSource;
 use super::registry;
-use crate::cli::channel::{event_stream_from_reader, socket_path};
+use super::socket::{event_stream_from_reader, socket_path};
 
 /// Debounce window used when a channel has no `channel` row.
 pub const DEFAULT_DEBOUNCE_MS: u64 = 250;
@@ -81,10 +81,11 @@ pub async fn subscribe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::channel::Publisher;
+    use crate::channels::socket::bind_socket;
     use crate::core::db::{async_db, initialize_db};
     use async_stream::stream;
     use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
     use tokio_rusqlite::rusqlite;
     use uuid::Uuid;
 
@@ -206,18 +207,19 @@ mod tests {
         let id = "socket-chan";
         insert_channel(&db, id, "socket", 10).await;
 
-        let publisher = Publisher::bind(&storage, id).await.unwrap();
-        tokio::spawn(async move {
-            let s = stream! {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    yield "hello".to_string();
-                }
-            };
-            let _ = publisher.serve(Box::pin(s)).await;
-        });
+        // Bind the socket and accept the subscriber before writing, so the
+        // test does not depend on when a publisher task gets scheduled.
+        #[cfg(not(target_os = "linux"))]
+        tokio::fs::create_dir_all(std::path::Path::new(&storage).join("channels"))
+            .await
+            .unwrap();
+        let path = socket_path(&storage, id).unwrap();
+        let listener = bind_socket(&path).await.unwrap();
 
         let mut events = subscribe(&db, &storage, id).await.unwrap();
+        let (mut stream, _) = listener.accept().await.unwrap();
+        stream.write_all(b"hello\n").await.unwrap();
+
         let event = tokio::time::timeout(Duration::from_secs(5), events.next())
             .await
             .expect("timed out waiting for event")

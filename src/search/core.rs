@@ -9,13 +9,13 @@ use tokio_rusqlite::{Connection, Result, rusqlite};
 use zerocopy::IntoBytes;
 
 use crate::ai::chat::db::get_chat_messages_by_ids;
-use crate::api::public::notes::SearchResult;
 use crate::core::fastembed_cache_dir;
 use crate::openai::Role;
 use crate::search::aql::{self};
 use crate::search::fts::schema::note_schema;
 use crate::search::indexing::DocType;
 use crate::search::query::{aql_to_index_query, expr_to_sql, query_to_similarity};
+use crate::types::notes::SearchResult;
 
 #[derive(Serialize)]
 pub enum SearchHitType {
