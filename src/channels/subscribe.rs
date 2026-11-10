@@ -16,9 +16,9 @@ use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio_rusqlite::Connection;
 
-use super::channel::{event_stream_from_reader, socket_path};
 use super::models::ChannelSource;
 use super::registry;
+use super::socket::{event_stream_from_reader, socket_path};
 
 /// Debounce window used when a channel has no `channel` row.
 pub const DEFAULT_DEBOUNCE_MS: u64 = 250;
@@ -81,7 +81,7 @@ pub async fn subscribe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channels::channel::Publisher;
+    use crate::channels::socket::Publisher;
     use crate::core::db::{async_db, initialize_db};
     use async_stream::stream;
     use futures::StreamExt;

@@ -3,7 +3,7 @@
 //! ## What it does
 //!
 //! `hq loop --channel <name> [--channel <other>]...` connects to one or more
-//! channel publishers (see [`hq::channels::channel`]), merges their event streams,
+//! channel publishers (see [`hq::channels::socket`]), merges their event streams,
 //! and feeds each event into a fresh LLM chat. The chat has access to the
 //! **bash tool** (sandboxed to a fresh workspace per loop invocation) and the
 //! **notify tool** (push notifications) — not to the full tool set used by
@@ -37,8 +37,8 @@ use hq::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use hq::ai::tools::{ToolConfig, ToolRegistry};
-use hq::channels::channel::{event_stream_from_reader, sigterm, socket_path};
 use hq::channels::models::ChannelSource;
+use hq::channels::socket::{event_stream_from_reader, sigterm, socket_path};
 use hq::channels::subscribe::channel_meta;
 use hq::core::markdown_render;
 use hq::loops::prompt::build_system_prompt;

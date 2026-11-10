@@ -28,7 +28,7 @@ pub mod web;
 use auth::ServiceKind;
 use job::JobId;
 
-use hq::channels::channel;
+use hq::channels::socket;
 use hq::core::db::async_db;
 
 #[derive(Subcommand)]
@@ -369,7 +369,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             .await?;
         }
         Some(Command::Channel { id, debounce_ms }) => {
-            channel::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
+            socket::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
         }
         Some(Command::Loop {
             channel,

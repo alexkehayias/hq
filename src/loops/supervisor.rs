@@ -34,8 +34,8 @@ use crate::ai::chat::{
     BACKGROUND_TAG, ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use crate::ai::tools::{ToolConfig, ToolRegistry};
-use crate::channels::channel::validate_channel_id;
 use crate::channels::subscribe::subscribe;
+use crate::channels::validate_channel_id;
 use crate::openai::{Message, Role};
 
 /// Configuration for the loop supervisor, assembled by the caller from server

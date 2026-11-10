@@ -1,6 +1,8 @@
 use std::convert::Infallible;
 use std::str::FromStr;
 
+use anyhow::bail;
+
 /// How a channel is served — where its events come from.
 ///
 /// Mirrors the `channel.source` column. This is distinct from a channel's
@@ -64,6 +66,23 @@ impl Channel {
     }
 }
 
+/// Validate a channel ID. Must be non-empty and alphanumeric with dashes/underscores.
+///
+/// This prevents path traversal (`../`), embedded null bytes, and slash separators
+/// from reaching socket path construction.
+pub fn validate_channel_id(id: &str) -> anyhow::Result<()> {
+    if id.is_empty() {
+        bail!("channel ID cannot be empty");
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("channel ID must be alphanumeric with dashes/underscores only");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +132,53 @@ mod tests {
             ..owned
         };
         assert!(!unowned.is_owned_by("sess-1"));
+    }
+
+    #[test]
+    fn test_validate_channel_id_valid() {
+        assert!(validate_channel_id("my-channel").is_ok());
+        assert!(validate_channel_id("channel_123").is_ok());
+        assert!(validate_channel_id("a").is_ok());
+        assert!(validate_channel_id("abc-123_def").is_ok());
+    }
+
+    #[test]
+    fn test_validate_channel_id_empty() {
+        let err = validate_channel_id("").unwrap_err().to_string();
+        assert!(err.contains("cannot be empty"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_channel_id_rejects_special_chars() {
+        let cases = [
+            "../channel",
+            "channel/../foo",
+            "channel\x00name",
+            "channel space",
+            "channel.name",
+            "channel@host",
+            "",
+        ];
+        for id in cases {
+            if id.is_empty() {
+                continue; // tested separately
+            }
+            assert!(
+                validate_channel_id(id).is_err(),
+                "expected '{id}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_channel_id_rejects_path_traversal_attempts() {
+        // These look like they might slip through naive validation
+        let attacks = ["../etc", "foo/bar", "a/b/c", "/absolute"];
+        for id in attacks {
+            assert!(
+                validate_channel_id(id).is_err(),
+                "expected '{id}' to be rejected"
+            );
+        }
     }
 }
