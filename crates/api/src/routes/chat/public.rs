@@ -62,6 +62,8 @@ impl ChatResponse {
 #[derive(Serialize)]
 pub struct ChatTranscriptResponse {
     pub transcript: Vec<Message>,
+    /// The session's generated title, once the background job has produced one.
+    pub title: Option<String>,
     /// True when a response is currently being generated for this session, so
     /// the client should attach to the resumable stream.
     pub in_progress: bool,

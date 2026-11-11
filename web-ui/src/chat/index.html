@@ -58,6 +58,39 @@
         display: none;
       }
     }
+    /* Desktop: the panel width is driven by the drag handle, which sets
+       --workspace-width on the panel. Keep the old responsive defaults until
+       the user resizes it. */
+    @media (min-width: 1024px) {
+      #workspace-panel {
+        width: var(--workspace-width, 420px);
+      }
+      #chat-body.workspace-collapsed #workspace-panel {
+        display: none;
+      }
+      #chat-body.workspace-collapsed #workspace-toggle {
+        display: flex;
+      }
+    }
+    @media (min-width: 1280px) {
+      #workspace-panel {
+        width: var(--workspace-width, 480px);
+      }
+    }
+    #workspace-panel.fullscreen #workspace-resizer {
+      display: none;
+    }
+    /* Full screen with no files: drop the picker column and let the empty
+       state fill the pane. The extra .fullscreen class outranks the split
+       layout's display rules above. */
+    #workspace-panel.fullscreen.empty-workspace #workspace-tree-view,
+    #workspace-panel.fullscreen.empty-workspace #workspace-preview {
+      display: none;
+    }
+    #workspace-resizer:hover,
+    #workspace-resizer.dragging {
+      background: var(--color-teal-tint);
+    }
   </style>
   <title>Chat</title>
   <script src="/theme-init.js"></script>
@@ -65,9 +98,25 @@
 <body class="bg-canvas text-ink" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
   <div class="flex h-dvh bg-canvas">
     <hq-nav-rail active="chat"></hq-nav-rail>
-    <div class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
+    <div id="chat-body" class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
       <!-- Conversation -->
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <!-- Desktop top bar: session title and workspace toggle -->
+        <header id="chat-topbar"
+                class="hidden h-12 shrink-0 items-center justify-between gap-4 border-b border-line bg-card px-4 lg:flex">
+          <div class="flex min-w-0 flex-1 items-center gap-2">
+            <h1 id="session-title" class="min-w-0 truncate text-sm font-semibold text-ink">New session</h1>
+          </div>
+          <button id="workspace-toggle"
+                  type="button"
+                  title="Show workspace"
+                  aria-label="Show workspace"
+                  aria-controls="workspace-panel"
+                  aria-expanded="false"
+                  class="hidden size-7 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
+            <hq-icon name="chevron-left" size="sm"></hq-icon>
+          </button>
+        </header>
         <div id="chat-container" class="grow overflow-y-auto scrollbar-none" style="scrollbar-gutter: stable both-edges;">
           <div id="chat-display" class="mx-auto flex w-full max-w-[720px] flex-col-reverse px-6 py-6"></div>
         </div>
@@ -110,8 +159,15 @@
 
       <!-- Session workspace: files and a persistent shell -->
       <aside id="workspace-panel"
-             class="hidden min-h-0 shrink-0 flex-col border-line bg-card lg:flex lg:h-auto lg:w-[420px] lg:border-l xl:w-[480px]">
-        <div class="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+             class="relative hidden min-h-0 shrink-0 flex-col border-line bg-card lg:flex lg:h-auto lg:border-l">
+        <div id="workspace-resizer"
+             class="absolute inset-y-0 -left-1 z-10 hidden w-2 cursor-col-resize touch-none lg:block"
+             role="separator"
+             aria-orientation="vertical"
+             aria-label="Resize workspace"
+             title="Drag to resize"
+             tabindex="0"></div>
+        <div class="flex h-12 items-center justify-between gap-2 border-b border-line px-4">
           <div class="flex min-w-0 items-center gap-2">
             <hq-icon name="folder" size="sm" tone="text-muted"></hq-icon>
             <h2 class="truncate text-sm font-semibold text-ink">Workspace</h2>
@@ -131,6 +187,15 @@
                     aria-label="Refresh files"
                     class="flex size-7 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
               <hq-icon name="refresh" size="sm"></hq-icon>
+            </button>
+            <button id="workspace-collapse"
+                    type="button"
+                    title="Hide workspace"
+                    aria-label="Hide workspace"
+                    aria-controls="workspace-panel"
+                    aria-expanded="true"
+                    class="flex size-7 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
+              <hq-icon name="close" size="sm"></hq-icon>
             </button>
           </div>
         </div>
@@ -160,14 +225,19 @@
              aria-labelledby="workspace-tab-files">
           <div id="workspace-tree-view" class="flex min-h-0 flex-1 flex-col">
             <div class="min-h-0 flex-1 overflow-y-auto p-2">
-              <hq-file-tree id="workspace-file-tree" class="block" files="[]"></hq-file-tree>
+              <hq-file-tree id="workspace-file-tree"
+                            class="block"
+                            files="[]"
+                            empty-icon="folder"
+                            empty-title="No files yet"
+                            empty-description="Files created in this session will appear here."></hq-file-tree>
             </div>
           </div>
           <div id="workspace-preview"
                class="hidden flex min-h-0 flex-1 flex-col"
                role="region"
                aria-label="File preview">
-            <div class="flex items-center gap-2 border-b border-line px-3 py-2">
+            <div class="flex items-center gap-2 border-b border-line px-2 py-2">
               <button id="workspace-preview-back"
                       type="button"
                       title="Back to files"
@@ -181,6 +251,12 @@
             </div>
             <div id="workspace-preview-content"
                  class="min-h-0 flex-1 overflow-hidden"></div>
+          </div>
+          <div id="workspace-files-empty"
+               class="hidden flex min-h-0 flex-1 flex-col items-center justify-center">
+            <hq-empty-state icon="folder" title="No files yet">
+              <span>Files created in this session will appear here.</span>
+            </hq-empty-state>
           </div>
         </div>
 

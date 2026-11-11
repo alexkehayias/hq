@@ -31,8 +31,8 @@ use hq::ai::chat::models::SessionMode;
 use hq::ai::chat::workspace::{ensure_workspace, workspace_root};
 use hq::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
-    find_chat_session_by_id, get_or_create_session, insert_chat_message, set_session_mode,
-    user_message_with_attachments,
+    find_chat_session_by_id, find_session_title, get_or_create_session, insert_chat_message,
+    set_session_mode, user_message_with_attachments,
 };
 use hq::ai::tools::{
     BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
@@ -88,9 +88,11 @@ async fn chat_session(
         .streams
         .clone();
     let in_progress = stream::get(&streams, &id).is_some_and(|stream| !stream.is_done());
+    let title = find_session_title(&db, &id).await?;
 
     Ok(axum::Json(ChatTranscriptResponse {
         transcript,
+        title,
         in_progress,
     })
     .into_response())

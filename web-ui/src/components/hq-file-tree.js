@@ -3,6 +3,9 @@
  *
  * @attr {string} files - JSON string: [{path, is_directory}]
  * @attr {string} selected - file path currently highlighted
+ * @attr {string} empty-icon - optional hq-empty-state icon shown when the tree is empty
+ * @attr {string} empty-title - optional hq-empty-state title shown when the tree is empty
+ * @attr {string} empty-description - optional hq-empty-state description
  *
  * @fires file-select - dispatched with { detail: { path } } when a file is clicked (bubbles)
  *
@@ -10,6 +13,7 @@
  * directories before files. Directory expansion state is internal.
  */
 import { html } from '/components/lib/html.js';
+import '/components/hq-empty-state.js';
 import '/components/hq-icon.js';
 
 function buildTree(files) {
@@ -87,7 +91,13 @@ function renderNode(node, openPaths, selectedPath) {
 }
 
 class HqFileTree extends HTMLElement {
-  static observedAttributes = ['files', 'selected'];
+  static observedAttributes = [
+    'files',
+    'selected',
+    'empty-icon',
+    'empty-title',
+    'empty-description',
+  ];
 
   #openPaths = new Set();
   #tree = null;
@@ -142,6 +152,19 @@ class HqFileTree extends HTMLElement {
   render() {
     const tree = this.#getTree();
     if (!tree.children.length) {
+      const icon = this.getAttribute('empty-icon');
+      const title = this.getAttribute('empty-title');
+      if (icon || title) {
+        const description = this.getAttribute('empty-description');
+        // hq-empty-state reads element children for its description, so wrap
+        // the plain text in a span.
+        const result = html`<hq-empty-state
+          icon=${icon || null}
+          title=${title || null}
+        >${description ? html`<span>${description}</span>` : null}</hq-empty-state>`;
+        this.innerHTML = result.value;
+        return;
+      }
       this.innerHTML =
         '<div class="px-2 py-4 text-sm text-muted">No files</div>';
       return;
