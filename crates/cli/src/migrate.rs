@@ -245,10 +245,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // The next version depends on the migrations already in the registry,
         // so derive it instead of hardcoding a number that goes stale.
-        let next = next_version(dir.path()).unwrap();
+        let highest = migrations::all()
+            .iter()
+            .map(|migration| migration.version)
+            .max()
+            .unwrap();
         let (path, module, version) = create_migration_in(dir.path(), "add_user_table").unwrap();
 
-        assert_eq!(version, next);
+        assert_eq!(version, highest + 1);
         assert_eq!(module, format!("migration_{version:04}_add_user_table"));
         assert_eq!(path, dir.path().join(format!("{module}.rs")));
 
