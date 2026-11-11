@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Loop {
     pub id: String,
+    /// Short, human-readable name used to identify the loop.
+    pub title: String,
     /// Channels the loop subscribes to (its event sources).
     pub subscribe_channels: Vec<String>,
     /// Channels the loop is permitted to emit to, beyond any it created itself.

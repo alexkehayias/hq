@@ -91,6 +91,15 @@ mod tests {
                 .collect();
             assert_eq!(ids, vec!["kept"]);
 
+            // The title migration backfills pre-existing loops with a
+            // placeholder so the required column can be added.
+            let title: String = conn
+                .query_row("SELECT title FROM loop WHERE id = 'kept'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(title, "Untitled loop");
+
             let links: i64 = conn
                 .query_row("SELECT COUNT(*) FROM loop_channel", [], |row| row.get(0))
                 .unwrap();

@@ -55,8 +55,8 @@ mod tests {
                 [],
             )?;
             conn.execute(
-                "INSERT INTO loop (id, system_prompt, tools)
-                 VALUES ('loop-1', 'You are a loop.', '[\"bash\"]')",
+                "INSERT INTO loop (id, title, system_prompt, tools)
+                 VALUES ('loop-1', 'Inbox triage', 'You are a loop.', '[\"bash\"]')",
                 [],
             )?;
             conn.execute(
@@ -88,6 +88,7 @@ mod tests {
 
         let body = body_to_string(response.into_body()).await;
         assert!(body.contains("\"loop-1\""));
+        assert!(body.contains("\"title\":\"Inbox triage\""), "{body}");
         assert!(body.contains("\"alpha\""));
         assert!(body.contains("\"emit_channels\":[\"beta\"]"), "{body}");
         assert!(body.contains("\"running\":false"));

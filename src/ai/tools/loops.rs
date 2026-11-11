@@ -31,6 +31,7 @@ fn loop_supervisor_config(conf: &ToolConfig) -> LoopSupervisorConfig {
 
 #[derive(Serialize)]
 pub struct CreateLoopProps {
+    pub title: Property,
     pub subscribe_channels: ArrayProperty,
     pub emit_channels: ArrayProperty,
     pub system_prompt: Property,
@@ -39,6 +40,7 @@ pub struct CreateLoopProps {
 
 #[derive(Deserialize)]
 struct CreateLoopArgs {
+    title: String,
     subscribe_channels: Vec<String>,
     system_prompt: String,
     #[serde(default)]
@@ -60,6 +62,12 @@ impl ToolCall for CreateLoopTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: CreateLoopArgs = parse_tool_args(args)?;
 
+        let title = fn_args.title.trim();
+        if title.is_empty() {
+            return Err(Error::from(RecoverableToolError::new(
+                "A title is required — give the loop a short, descriptive name.",
+            )));
+        }
         if fn_args.subscribe_channels.is_empty() {
             return Err(Error::from(RecoverableToolError::new(
                 "At least one channel is required.",
@@ -113,6 +121,7 @@ impl ToolCall for CreateLoopTool {
 
         let record = Loop {
             id: id.clone(),
+            title: title.to_string(),
             subscribe_channels: fn_args.subscribe_channels,
             emit_channels: emit_channels.clone(),
             system_prompt: fn_args.system_prompt,
@@ -134,7 +143,7 @@ impl ToolCall for CreateLoopTool {
             format!(" It may emit to channel(s): {}.", emit_channels.join(", "))
         };
         Ok(format!(
-            "Created loop '{id}' listening on channel(s): {subscribe_display}.{emit_note} It is now running."
+            "Created loop '{title}' (id: {id}) listening on channel(s): {subscribe_display}.{emit_note} It is now running."
         ))
     }
 
@@ -161,6 +170,10 @@ impl CreateLoopTool {
             parameters: Parameters {
                 r#type: String::from("object"),
                 properties: CreateLoopProps {
+                    title: Property::new(
+                        "string",
+                        "Short, human-readable name for the loop, used to identify it in list_loops and the web UI. Describe the loop's purpose, e.g. \"Morning inbox triage\".",
+                    ),
                     subscribe_channels: ArrayProperty::strings(
                         "Channel IDs the loop should subscribe to. Each must be alphanumeric with dashes/underscores. The channel publisher must already be running.",
                     ),
@@ -176,6 +189,7 @@ impl CreateLoopTool {
                     ),
                 },
                 required: vec![
+                    String::from("title"),
                     String::from("subscribe_channels"),
                     String::from("system_prompt"),
                 ],
@@ -226,7 +240,8 @@ impl ToolCall for ListLoopsTool {
                 record.emit_channels.join(", ")
             };
             out.push_str(&format!(
-                "- {} ({status})\n  subscribe channels: {}\n  emit channels: {}\n  tools: {}\n  prompt: {}\n",
+                "- {} [{}] ({status})\n  subscribe channels: {}\n  emit channels: {}\n  tools: {}\n  prompt: {}\n",
+                record.title,
                 record.id,
                 record.subscribe_channels.join(", "),
                 emit_channels,
@@ -385,6 +400,7 @@ mod tests {
         let json = serde_json::to_value(&tool.function).unwrap();
 
         let properties = &json["parameters"]["properties"];
+        assert_eq!(properties["title"]["type"], "string");
         assert_eq!(properties["subscribe_channels"]["type"], "array");
         assert_eq!(properties["subscribe_channels"]["items"]["type"], "string");
         assert_eq!(properties["emit_channels"]["type"], "array");
@@ -396,6 +412,7 @@ mod tests {
         assert_eq!(
             required,
             &vec![
+                serde_json::json!("title"),
                 serde_json::json!("subscribe_channels"),
                 serde_json::json!("system_prompt")
             ]
@@ -407,7 +424,10 @@ mod tests {
         let (_dir, config) = setup().await;
         let tool = CreateLoopTool::new(config);
         let err = tool
-            .call(r#"{"subscribe_channels": ["../bad"], "system_prompt": "Do the thing."}"#)
+            .call(
+                r#"{"title": "Test loop", "subscribe_channels": ["../bad"],
+                    "system_prompt": "Do the thing."}"#,
+            )
             .await
             .unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
@@ -422,7 +442,7 @@ mod tests {
 
         // Omitted entirely: serde rejects the args before the handler runs.
         let err = tool
-            .call(r#"{"subscribe_channels": ["alpha"]}"#)
+            .call(r#"{"title": "Test loop", "subscribe_channels": ["alpha"]}"#)
             .await
             .unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
@@ -431,7 +451,10 @@ mod tests {
 
         // Present but blank: rejected by the handler's validation.
         let err = tool
-            .call(r#"{"subscribe_channels": ["alpha"], "system_prompt": "  "}"#)
+            .call(
+                r#"{"title": "Test loop", "subscribe_channels": ["alpha"],
+                    "system_prompt": "  "}"#,
+            )
             .await
             .unwrap_err();
         let recoverable = err.downcast_ref::<RecoverableToolError>();
@@ -440,13 +463,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_loop_requires_title() {
+        let (_dir, config) = setup().await;
+        let tool = CreateLoopTool::new(config);
+
+        // Omitted entirely: serde rejects the args before the handler runs.
+        let err = tool
+            .call(r#"{"subscribe_channels": ["alpha"], "system_prompt": "Do the thing."}"#)
+            .await
+            .unwrap_err();
+        let recoverable = err.downcast_ref::<RecoverableToolError>();
+        assert!(recoverable.is_some());
+        assert!(recoverable.unwrap().message.contains("title"));
+
+        // Present but blank: rejected by the handler's validation.
+        let err = tool
+            .call(
+                r#"{"title": "  ", "subscribe_channels": ["alpha"],
+                    "system_prompt": "Do the thing."}"#,
+            )
+            .await
+            .unwrap_err();
+        let recoverable = err.downcast_ref::<RecoverableToolError>();
+        assert!(recoverable.is_some());
+        assert!(recoverable.unwrap().message.contains("title"));
+    }
+
+    #[tokio::test]
     async fn create_loop_unknown_emit_channel_is_recoverable() {
         let (_dir, config) = setup().await;
         let tool = CreateLoopTool::new(config);
         let err = tool
             .call(
-                r#"{"subscribe_channels": ["alpha"], "system_prompt": "Do the thing.",
-                    "emit_channels": ["ghost"]}"#,
+                r#"{"title": "Test loop", "subscribe_channels": ["alpha"],
+                    "system_prompt": "Do the thing.", "emit_channels": ["ghost"]}"#,
             )
             .await
             .unwrap_err();

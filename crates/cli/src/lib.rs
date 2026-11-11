@@ -97,6 +97,9 @@ enum Command {
     },
     /// Subscribe to one or more channels and run an LLM chat on incoming events
     Loop {
+        /// Short, human-readable title for the loop
+        #[arg(long)]
+        title: String,
         /// Channel ID to subscribe to (repeat for multiple channels)
         #[arg(long, num_args = 1..)]
         channel: Vec<String>,
@@ -372,6 +375,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             socket::run(storage_path, &id, Duration::from_millis(debounce_ms)).await?;
         }
         Some(Command::Loop {
+            title,
             channel,
             prompt,
             debounce_ms,
@@ -396,6 +400,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
                     model: &model,
                     storage_path,
                     vapid_key_path: &vapid_key_path,
+                    title: &title,
                     channels: &channel,
                     tools: &tools,
                     debounce: Duration::from_millis(debounce_ms),

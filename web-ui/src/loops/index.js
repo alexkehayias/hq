@@ -187,7 +187,7 @@ function loopCard(loop) {
        class="flex flex-col rounded-card border border-line bg-card p-4 transition-shadow hover:shadow-lg/5 md:p-[22px]">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <h3 class="font-semibold text-ink">Loop</h3>
+          <h3 class="truncate font-semibold text-ink">${loop.title}</h3>
           <p class="mt-0.5 truncate font-mono text-xs text-muted">${loop.id}</p>
         </div>
         ${loop.running ? html`<hq-badge tone="moss">running</hq-badge>` : html`<hq-badge tone="gray">stopped</hq-badge>`}
@@ -233,6 +233,7 @@ async function showLoopDetail(id) {
 
   currentLoop = null;
   promptSection.classList.add('hidden');
+  document.getElementById('loop-detail-title').textContent = 'Loop';
   document.getElementById('loop-detail-id').textContent = id;
   document.getElementById('loop-detail-status').innerHTML = '';
   const body = document.getElementById('loop-detail-body');
@@ -265,6 +266,9 @@ async function showLoopDetail(id) {
     );
     return;
   }
+
+  pageShell.setAttribute('meta-title', loop.title);
+  document.getElementById('loop-detail-title').textContent = loop.title;
 
   document
     .getElementById('loop-detail-status')
