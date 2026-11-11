@@ -294,6 +294,7 @@ mod tests {
     fn loop_record() -> Loop {
         Loop {
             id: "loop-test".to_string(),
+            title: "Test loop".to_string(),
             subscribe_channels: vec!["nonexistent-channel".to_string()],
             emit_channels: vec![],
             system_prompt: "You are a loop.".to_string(),
@@ -322,6 +323,7 @@ mod tests {
 
         let record = Loop {
             id: "loop-server".to_string(),
+            title: "Server loop".to_string(),
             subscribe_channels: vec![channel],
             emit_channels: vec![],
             system_prompt: "You are a loop.".to_string(),

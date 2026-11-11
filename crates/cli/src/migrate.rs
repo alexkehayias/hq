@@ -243,20 +243,27 @@ mod tests {
     #[test]
     fn create_migration_writes_next_version() {
         let dir = tempfile::tempdir().unwrap();
+        // The next version depends on the migrations already in the registry,
+        // so derive it instead of hardcoding a number that goes stale.
+        let highest = migrations::all()
+            .iter()
+            .map(|migration| migration.version)
+            .max()
+            .unwrap();
         let (path, module, version) = create_migration_in(dir.path(), "add_user_table").unwrap();
 
-        assert_eq!(version, 2);
-        assert_eq!(module, "migration_0002_add_user_table");
-        assert_eq!(path, dir.path().join("migration_0002_add_user_table.rs"));
+        assert_eq!(version, highest + 1);
+        assert_eq!(module, format!("migration_{version:04}_add_user_table"));
+        assert_eq!(path, dir.path().join(format!("{module}.rs")));
 
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("pub fn up"));
         assert!(contents.contains("pub fn down"));
         assert!(contents.contains("pub const DOWN"));
-        assert!(contents.contains("migration 2 (add_user_table)"));
+        assert!(contents.contains(&format!("migration {version} (add_user_table)")));
 
         let head = fs::read_to_string(dir.path().join("HEAD")).unwrap();
-        assert_eq!(head, "migration_0002_add_user_table\n");
+        assert_eq!(head, format!("{module}\n"));
     }
 
     #[test]

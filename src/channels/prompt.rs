@@ -45,9 +45,9 @@ pub fn system_prompt_section() -> String {
         "\n\n## Channels and Loops\n\
          Channels are streams of events. A loop is a persistent subscriber: each event \
          published to a channel runs an LLM turn with the loop's system prompt and tools. \
-         Use the `create_loop` tool to create a loop subscribed to one or more channels, \
-         `list_loops` to inspect them, and `delete_loop` to remove one. Loops keep running \
-         across server restarts.\n\n\
+         Use the `create_loop` tool (with a short, descriptive `title`) to create a loop \
+         subscribed to one or more channels, `list_loops` to inspect them, and \
+         `delete_loop` to remove one. Loops keep running across server restarts.\n\n\
          The following timer channels are always available; each publishes a `tick` event \
          with the current UTC time on a fixed interval:\n\
          {channels}\n\n\

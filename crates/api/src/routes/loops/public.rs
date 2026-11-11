@@ -22,6 +22,7 @@ pub struct UpdateLoopResponse {
 #[derive(Serialize)]
 pub struct LoopSummaryResponse {
     pub id: String,
+    pub title: String,
     pub subscribe_channels: Vec<String>,
     pub emit_channels: Vec<String>,
     pub system_prompt: String,

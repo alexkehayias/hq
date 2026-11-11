@@ -2,7 +2,7 @@
 //!
 //! ## What it does
 //!
-//! `hq loop --channel <name> [--channel <other>]...` connects to one or more
+//! `hq loop --title <name> --channel <name> [--channel <other>]...` connects to one or more
 //! channel publishers (see [`hq::channels::socket`]), merges their event streams,
 //! and feeds each event into a fresh LLM chat. The chat has access to the
 //! **bash tool** (sandboxed to a fresh workspace per loop invocation) and the
@@ -55,6 +55,7 @@ pub struct LoopConfig<'a> {
     pub model: &'a str,
     pub storage_path: &'a str,
     pub vapid_key_path: &'a str,
+    pub title: &'a str,
     pub channels: &'a [String],
     pub tools: &'a [String],
     pub debounce: Duration,
@@ -82,15 +83,21 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
         model,
         storage_path,
         vapid_key_path,
+        title,
         channels,
         tools,
         debounce,
         system_prompt,
     } = config;
 
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(anyhow!("--title must not be empty"));
+    }
     if channels.is_empty() {
         return Err(anyhow!("at least one --channel is required"));
     }
+    println!("Starting loop '{}'", title);
 
     // Merge event streams from all channels into one receiver.
     let (event_tx, mut event_rx) = mpsc::channel::<(String, String)>(100);

@@ -7,15 +7,17 @@ use super::models::{Loop, LoopRun, RunStatus};
 
 pub async fn find_all_loops(db: &Connection) -> Result<Vec<Loop>> {
     let loops = db.call(|conn| {
-        let mut stmt = conn.prepare("SELECT id, system_prompt, tools, created_at FROM loop")?;
+        let mut stmt =
+            conn.prepare("SELECT id, title, system_prompt, tools, created_at FROM loop")?;
         let mut loops = stmt
             .query_map([], |i| {
-                let tools: String = i.get(2)?;
+                let tools: String = i.get(3)?;
                 Ok(Loop {
                     id: i.get(0)?,
-                    system_prompt: i.get(1)?,
+                    title: i.get(1)?,
+                    system_prompt: i.get(2)?,
                     tools: serde_json::from_str(&tools).unwrap_or_default(),
-                    created_at: i.get(3)?,
+                    created_at: i.get(4)?,
                     subscribe_channels: Vec::new(),
                     emit_channels: Vec::new(),
                 })
@@ -61,15 +63,17 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
     let id = id.to_string();
     let record = db.call(move |conn| {
         let mut record = {
-            let mut stmt = conn
-                .prepare("SELECT id, system_prompt, tools, created_at FROM loop WHERE id = ?1")?;
+            let mut stmt = conn.prepare(
+                "SELECT id, title, system_prompt, tools, created_at FROM loop WHERE id = ?1",
+            )?;
             let mut rows = stmt.query_map([&id], |i| {
-                let tools: String = i.get(2)?;
+                let tools: String = i.get(3)?;
                 Ok(Loop {
                     id: i.get(0)?,
-                    system_prompt: i.get(1)?,
+                    title: i.get(1)?,
+                    system_prompt: i.get(2)?,
                     tools: serde_json::from_str(&tools).unwrap_or_default(),
-                    created_at: i.get(3)?,
+                    created_at: i.get(4)?,
                     subscribe_channels: Vec::new(),
                     emit_channels: Vec::new(),
                 })
@@ -159,6 +163,7 @@ pub async fn workspace_id_for_session(db: &Connection, session_id: &str) -> Resu
 
 pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
     let id = record.id.clone();
+    let title = record.title.clone();
     let system_prompt = record.system_prompt.clone();
     let tools = serde_json::to_string(&record.tools)?;
     let subscribe_channels = record.subscribe_channels.clone();
@@ -166,8 +171,8 @@ pub async fn insert_loop(db: &Connection, record: &Loop) -> Result<()> {
     db.call(move |conn| {
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO loop (id, system_prompt, tools) VALUES (?1, ?2, ?3)",
-            rusqlite::params![id, system_prompt, tools],
+            "INSERT INTO loop (id, title, system_prompt, tools) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, title, system_prompt, tools],
         )?;
         {
             let mut stmt = tx.prepare(
@@ -472,6 +477,7 @@ mod tests {
     fn sample_loop() -> Loop {
         Loop {
             id: "loop-1".to_string(),
+            title: "Test loop".to_string(),
             subscribe_channels: vec!["alpha".to_string(), "beta".to_string()],
             emit_channels: vec!["beta".to_string()],
             system_prompt: "You are a loop.".to_string(),
@@ -517,6 +523,7 @@ mod tests {
         assert_eq!(all.len(), 1);
         let found = &all[0];
         assert_eq!(found.id, record.id);
+        assert_eq!(found.title, record.title);
         assert_eq!(found.subscribe_channels, record.subscribe_channels);
         assert_eq!(found.emit_channels, record.emit_channels);
         assert_eq!(found.tools, record.tools);
@@ -585,6 +592,7 @@ mod tests {
         assert!(found.is_some());
         let found = found.unwrap();
         assert_eq!(found.id, record.id);
+        assert_eq!(found.title, record.title);
         assert_eq!(found.subscribe_channels, record.subscribe_channels);
         assert_eq!(found.emit_channels, record.emit_channels);
 
