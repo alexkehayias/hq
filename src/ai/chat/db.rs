@@ -1,6 +1,7 @@
 use anyhow::{Error, Result};
 use serde::Serialize;
 use serde_json::json;
+use tokio_rusqlite::rusqlite::OptionalExtension;
 use tokio_rusqlite::{Connection, rusqlite};
 
 use crate::ai::chat::models::{BACKGROUND_TAG, Session, SessionMode};
@@ -142,6 +143,25 @@ pub async fn find_chat_session_by_id(
         Ok::<_, rusqlite::Error>(rows)
     });
     Ok(history.await?)
+}
+
+/// Fetch a session's generated title, if it has one.
+pub async fn find_session_title(
+    db: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, Error> {
+    let s_id = session_id.to_owned();
+    let title = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare("SELECT title FROM session WHERE id = ?1")?;
+            let title: Option<String> = stmt
+                .query_row([s_id], |row| row.get::<_, Option<String>>(0))
+                .optional()?
+                .flatten();
+            Ok::<_, rusqlite::Error>(title)
+        })
+        .await?;
+    Ok(title)
 }
 
 /// Retrieve a single chat message by session ID and index, along with the session title

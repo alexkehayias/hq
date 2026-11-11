@@ -18,6 +18,8 @@ if (!window.crypto.randomUUID) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const sessionTitle = document.getElementById('session-title');
+
   // Preload dog images to avoid fetching them each time
   const dogImages = [];
   for (let i = 1; i <= 3; i++) {
@@ -47,6 +49,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return response.json();
       })
       .then((data) => {
+        if (data?.title) sessionTitle.textContent = data.title;
+
         // Only process transcript if we have data
         if (data?.transcript) {
           data.transcript.forEach((message) => {
@@ -161,8 +165,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const workspacePanel = document.getElementById('workspace-panel');
   const workspaceFullscreen = document.getElementById('workspace-fullscreen');
   const workspaceRefresh = document.getElementById('workspace-refresh');
+  const workspaceCollapse = document.getElementById('workspace-collapse');
+  const workspaceToggle = document.getElementById('workspace-toggle');
+  const workspaceResizer = document.getElementById('workspace-resizer');
+  const chatBody = document.getElementById('chat-body');
   const workspaceFileTree = document.getElementById('workspace-file-tree');
   const workspaceTreeView = document.getElementById('workspace-tree-view');
+  const workspaceFilesEmpty = document.getElementById('workspace-files-empty');
   const workspacePreview = document.getElementById('workspace-preview');
   const workspacePreviewBack = document.getElementById(
     'workspace-preview-back',
@@ -177,8 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
     'workspace-preview-truncated',
   );
 
-  let workspaceTab = 'files';
   let workspaceIsFullscreen = false;
+  let workspaceHasFiles = false;
 
   const setWorkspaceFullscreen = (fullscreen) => {
     workspaceIsFullscreen = fullscreen;
@@ -194,15 +203,9 @@ document.addEventListener('DOMContentLoaded', () => {
       .querySelector('hq-icon')
       ?.setAttribute('name', fullscreen ? 'collapse' : 'expand');
 
-    if (fullscreen && usesSplitFilesLayout() && !currentWorkspaceFile) {
-      const editor = ensurePreviewEditor();
-      editor.setOption('mode', null);
-      editor.setValue('Select a file to preview.');
-    }
     syncWorkspaceFilesLayout();
     previewEditor?.refresh();
   };
-
   workspaceFullscreen.addEventListener('click', () =>
     setWorkspaceFullscreen(!workspaceIsFullscreen),
   );
@@ -226,12 +229,13 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const setWorkspaceTab = (tab) => {
-    workspaceTab = tab;
     const filesActive = tab === 'files';
     workspaceTabFiles.setAttribute('aria-selected', String(filesActive));
     workspaceTabTerminal.setAttribute('aria-selected', String(!filesActive));
     workspaceFilesPane.classList.toggle('hidden', !filesActive);
     workspaceTerminalPane.classList.toggle('hidden', filesActive);
+    // Refreshing only applies to the file browser.
+    workspaceRefresh.classList.toggle('hidden', !filesActive);
     if (filesActive) {
       loadWorkspaceFiles();
       // The editor was display:none while the terminal tab was active.
@@ -319,12 +323,136 @@ document.addEventListener('DOMContentLoaded', () => {
   // Full screen on a wide viewport keeps the picker and preview side by side.
   const usesSplitFilesLayout = () => workspaceIsFullscreen && isWideWorkspace();
 
+  // ---- Panel visibility and width ----
+
+  const WORKSPACE_WIDTH_KEY = 'hq-workspace-width';
+  const WORKSPACE_COLLAPSED_KEY = 'hq-workspace-collapsed';
+  const WORKSPACE_MIN_WIDTH = 320;
+
+  // Leave room for the conversation on the left.
+  const maxWorkspaceWidth = () =>
+    Math.max(WORKSPACE_MIN_WIDTH, Math.min(1000, window.innerWidth - 360));
+
+  const clampWorkspaceWidth = (width) =>
+    Math.min(maxWorkspaceWidth(), Math.max(WORKSPACE_MIN_WIDTH, width));
+
+  const applyWorkspaceWidth = (width) => {
+    workspacePanel.style.setProperty(
+      '--workspace-width',
+      `${Math.round(clampWorkspaceWidth(width))}px`,
+    );
+  };
+
+  const storedWorkspaceWidth = Number.parseInt(
+    localStorage.getItem(WORKSPACE_WIDTH_KEY),
+    10,
+  );
+  let workspaceWidth = Number.isFinite(storedWorkspaceWidth)
+    ? clampWorkspaceWidth(storedWorkspaceWidth)
+    : null;
+  if (workspaceWidth) applyWorkspaceWidth(workspaceWidth);
+
+  let resizingPointerId = null;
+
+  workspaceResizer.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resizingPointerId = event.pointerId;
+    workspaceResizer.setPointerCapture(event.pointerId);
+    workspaceResizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  workspaceResizer.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== resizingPointerId) return;
+    workspaceWidth = clampWorkspaceWidth(window.innerWidth - event.clientX);
+    applyWorkspaceWidth(workspaceWidth);
+    previewEditor?.refresh();
+  });
+
+  const endWorkspaceResize = (event) => {
+    if (event.pointerId !== resizingPointerId) return;
+    resizingPointerId = null;
+    workspaceResizer.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    if (workspaceWidth) {
+      localStorage.setItem(
+        WORKSPACE_WIDTH_KEY,
+        String(Math.round(workspaceWidth)),
+      );
+    }
+    previewEditor?.refresh();
+  };
+
+  workspaceResizer.addEventListener('pointerup', endWorkspaceResize);
+  workspaceResizer.addEventListener('pointercancel', endWorkspaceResize);
+  workspaceResizer.addEventListener('lostpointercapture', endWorkspaceResize);
+
+  // Keyboard resizing for the separator role.
+  workspaceResizer.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowLeft' ? 16 : -16;
+    workspaceWidth = clampWorkspaceWidth(
+      (workspaceWidth ?? workspacePanel.offsetWidth) + delta,
+    );
+    applyWorkspaceWidth(workspaceWidth);
+    localStorage.setItem(
+      WORKSPACE_WIDTH_KEY,
+      String(Math.round(workspaceWidth)),
+    );
+    previewEditor?.refresh();
+  });
+
+  const setWorkspaceCollapsed = (collapsed) => {
+    chatBody.classList.toggle('workspace-collapsed', collapsed);
+    workspaceCollapse.setAttribute('aria-expanded', String(!collapsed));
+    workspaceToggle.setAttribute('aria-expanded', String(!collapsed));
+    localStorage.setItem(WORKSPACE_COLLAPSED_KEY, collapsed ? '1' : '0');
+    if (!collapsed) {
+      // The editor was display:none while the panel was collapsed.
+      previewEditor?.refresh();
+    }
+  };
+
+  workspaceCollapse.addEventListener('click', () => {
+    if (workspaceIsFullscreen) setWorkspaceFullscreen(false);
+    setWorkspaceCollapsed(true);
+  });
+  workspaceToggle.addEventListener('click', () => {
+    const collapsed = !chatBody.classList.contains('workspace-collapsed');
+    if (collapsed && workspaceIsFullscreen) setWorkspaceFullscreen(false);
+    setWorkspaceCollapsed(collapsed);
+  });
+
+  setWorkspaceCollapsed(localStorage.getItem(WORKSPACE_COLLAPSED_KEY) === '1');
+
   let currentWorkspaceFile = null;
 
+  // Full screen with an empty workspace shows the empty state on its own —
+  // there is nothing to pick from, so the file picker column is unnecessary.
+  const isEmptyWorkspaceFullscreen = () =>
+    workspaceIsFullscreen && !workspaceHasFiles;
+
   const syncWorkspaceFilesLayout = () => {
+    const emptyFullscreen = isEmptyWorkspaceFullscreen();
+    workspacePanel.classList.toggle('empty-workspace', emptyFullscreen);
+    workspaceFilesEmpty.classList.toggle('hidden', !emptyFullscreen);
+    if (emptyFullscreen) {
+      workspaceTreeView.classList.add('hidden');
+      workspacePreview.classList.add('hidden');
+      return;
+    }
     if (usesSplitFilesLayout()) {
       workspaceTreeView.classList.remove('hidden');
       workspacePreview.classList.remove('hidden');
+      if (!currentWorkspaceFile) {
+        const editor = ensurePreviewEditor();
+        editor.setOption('mode', null);
+        editor.setValue('Select a file to preview.');
+      }
       return;
     }
     workspaceTreeView.classList.toggle('hidden', !!currentWorkspaceFile);
@@ -338,8 +466,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Removing the attribute re-renders the tree, but call render() as well so
     // the highlight is cleared even if the attribute was already absent.
     workspaceFileTree.render?.();
-    workspacePreview.classList.add('hidden');
-    workspaceTreeView.classList.remove('hidden');
+    syncWorkspaceFilesLayout();
   };
 
   const loadWorkspaceFiles = async () => {
@@ -349,7 +476,13 @@ document.addEventListener('DOMContentLoaded', () => {
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const { files } = await response.json();
+      workspaceHasFiles = (files || []).length > 0;
+      if (!workspaceHasFiles) {
+        currentWorkspaceFile = null;
+        workspaceFileTree.removeAttribute('selected');
+      }
       workspaceFileTree.setAttribute('files', JSON.stringify(files || []));
+      syncWorkspaceFilesLayout();
     } catch (error) {
       console.warn('Failed to load workspace files:', error);
     }
@@ -404,13 +537,13 @@ document.addEventListener('DOMContentLoaded', () => {
   workspacePreviewBack.addEventListener('click', showWorkspaceTree);
 
   window.addEventListener('resize', () => {
+    if (workspaceWidth) applyWorkspaceWidth(workspaceWidth);
     syncWorkspaceFilesLayout();
     previewEditor?.refresh();
   });
 
   workspaceRefresh.addEventListener('click', () => {
     loadWorkspaceFiles();
-    if (workspaceTab === 'terminal') refreshTerminalPrompt();
   });
 
   loadWorkspaceFiles();
