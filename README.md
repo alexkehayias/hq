@@ -93,9 +93,9 @@ docker run -p 2222:2222 -d hq:latest
 - `HQ_LOCAL_LLM_MODEL` for the OpenAI model to use (defaults to "gpt-4.1-mini" if not set)
 - `HQ_SYSTEM_MESSAGE` to customize the base system message for chat sessions
 - `OPENAI_API_KEY` for OpenAI API authentication (ignored when using a local LLM server)
-- `DOKKU_DOCKERFILE_START_CMD` to `serve --host 0.0.0.0 --port 2222`
 12. On local, add remote `git remote add dokku dokku@<dokku-host>:hq`
 13. Build and deploy locally (avoids Rust compilation on the Dokku server): `./bin/build-deploy.sh`
+    The image contains a `Procfile` that Dokku reads from the image working directory. Its `web` process starts the server and its `release` process runs `hq migrate` before the new containers are scheduled, so database migrations are applied automatically on the server on every deploy. `DOKKU_DOCKERFILE_START_CMD` is no longer needed.
 14. Increase the default proxy timeout `dokku nginx:set hq proxy-read-timeout 5m` and max body size `dokku nginx:set lm-proxy client-max-body-size 10m`
 15. Redeploy the app so the `nginx` changes take effect `dokku deploy hq`
 

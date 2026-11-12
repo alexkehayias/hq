@@ -1,5 +1,6 @@
 use sqlite_vec::sqlite3_vec_init;
 use std::os::raw::c_char;
+use std::time::Duration;
 use tokio_rusqlite::{Connection, ffi::sqlite3_auto_extension, rusqlite};
 
 pub mod migrations;
@@ -24,8 +25,15 @@ pub async fn async_db(path_to_db_file: &str) -> anyhow::Result<Connection, anyho
             ) -> i32,
         >(sqlite3_vec_init as *const ())));
     }
-    let db = Connection::open(format!("{}/vector.db", path_to_db_file)).await;
-    Ok(db?)
+    let db = Connection::open(format!("{}/vector.db", path_to_db_file)).await?;
+
+    // Dokku's release step migrates the database while the previous container
+    // may still be serving requests. Wait briefly for a write lock instead of
+    // failing the deploy immediately with SQLITE_BUSY.
+    db.call(|conn| conn.busy_timeout(Duration::from_secs(5)))
+        .await?;
+
+    Ok(db)
 }
 
 #[cfg(test)]
