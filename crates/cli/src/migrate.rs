@@ -51,12 +51,6 @@ pub async fn run(
         return Ok(());
     }
 
-    // The deploy release step runs before anything else has touched storage, so
-    // create the database directory rather than failing on a fresh install.
-    tokio::fs::create_dir_all(vec_db_path)
-        .await
-        .with_context(|| format!("failed to create {vec_db_path}"))?;
-
     let db = async_db(vec_db_path).await?;
 
     match command {
