@@ -266,25 +266,26 @@ pub async fn finish_loop_run(
 }
 
 /// Columns selected for a run row, shared by the per-loop and global queries.
-const RUN_COLUMNS: &str = "r.id, r.loop_id, r.channel_id, r.event, r.status, r.session_id,
-        r.started_at, r.finished_at, r.duration_ms, r.response, r.error,
+const RUN_COLUMNS: &str = "r.id, r.loop_id, l.title, r.channel_id, r.event, r.status,
+        r.session_id, r.started_at, r.finished_at, r.duration_ms, r.response, r.error,
         EXISTS(SELECT 1 FROM session s WHERE s.id = r.session_id)";
 
 fn map_loop_run(i: &rusqlite::Row) -> rusqlite::Result<LoopRun> {
-    let status: String = i.get(4)?;
+    let status: String = i.get(5)?;
     Ok(LoopRun {
         id: i.get(0)?,
         loop_id: i.get(1)?,
-        channel_id: i.get(2)?,
-        event: i.get(3)?,
+        loop_title: i.get(2)?,
+        channel_id: i.get(3)?,
+        event: i.get(4)?,
         status: status.parse().unwrap_or(RunStatus::Error),
-        session_id: i.get(5)?,
-        started_at: i.get(6)?,
-        finished_at: i.get(7)?,
-        duration_ms: i.get(8)?,
-        response: i.get(9)?,
-        error: i.get(10)?,
-        has_transcript: i.get(11)?,
+        session_id: i.get(6)?,
+        started_at: i.get(7)?,
+        finished_at: i.get(8)?,
+        duration_ms: i.get(9)?,
+        response: i.get(10)?,
+        error: i.get(11)?,
+        has_transcript: i.get(12)?,
     })
 }
 
@@ -295,6 +296,7 @@ pub async fn find_loop_runs(db: &Connection, loop_id: &str, limit: usize) -> Res
         let mut stmt = conn.prepare(&format!(
             "SELECT {RUN_COLUMNS}
              FROM loop_run r
+             JOIN loop l ON l.id = r.loop_id
              WHERE r.loop_id = ?1
              ORDER BY r.started_at DESC, r.rowid DESC
              LIMIT ?2"
@@ -318,6 +320,7 @@ pub async fn find_loop_runs_page(
         let mut stmt = conn.prepare(&format!(
             "SELECT {RUN_COLUMNS}
              FROM loop_run r
+             JOIN loop l ON l.id = r.loop_id
              ORDER BY r.started_at DESC, r.rowid DESC
              LIMIT ?1 OFFSET ?2"
         ))?;
@@ -668,6 +671,7 @@ mod tests {
         let runs = find_loop_runs(&db, "loop-1", 10).await.unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, "run-1");
+        assert_eq!(runs[0].loop_title, "Test loop");
         assert_eq!(runs[0].session_id, "run-1");
         assert_eq!(runs[0].status, RunStatus::Running);
         assert_eq!(runs[0].event, "hello");
@@ -714,6 +718,7 @@ mod tests {
         insert_loop(&db, &sample_loop()).await.unwrap();
         let mut second = sample_loop();
         second.id = "loop-2".to_string();
+        second.title = "Second loop".to_string();
         insert_loop(&db, &second).await.unwrap();
 
         insert_loop_run(&db, "run-1", "loop-1", "alpha", "one")
@@ -736,6 +741,7 @@ mod tests {
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].id, "run-2");
         assert_eq!(page[0].loop_id, "loop-2");
+        assert_eq!(page[0].loop_title, "Second loop");
     }
 
     #[tokio::test]

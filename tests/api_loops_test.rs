@@ -301,11 +301,11 @@ mod tests {
         let db = state.db.clone();
 
         db.call(|conn| {
-            for id in ["loop-1", "loop-2"] {
+            for (id, title) in [("loop-1", "Inbox triage"), ("loop-2", "Daily digest")] {
                 conn.execute(
-                    "INSERT INTO loop (id, system_prompt, tools)
-                     VALUES (?1, 'You are a loop.', '[\"bash\"]')",
-                    [id],
+                    "INSERT INTO loop (id, title, system_prompt, tools)
+                     VALUES (?1, ?2, 'You are a loop.', '[\"bash\"]')",
+                    rusqlite::params![id, title],
                 )?;
             }
             conn.execute(
@@ -353,6 +353,8 @@ mod tests {
         assert!(body.contains("\"run-3\""), "{body}");
         assert!(body.contains("\"run-2\""), "{body}");
         assert!(!body.contains("\"run-1\""), "{body}");
+        assert!(body.contains("\"loop_title\":\"Inbox triage\""), "{body}");
+        assert!(body.contains("\"loop_title\":\"Daily digest\""), "{body}");
 
         let response = app
             .oneshot(
