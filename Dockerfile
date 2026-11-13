@@ -89,9 +89,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # web-ui directory is needed at runtime.
 COPY --from=builder /target/x86_64-unknown-linux-gnu/release/hq /hq
 
+# Dokku reads the Procfile from the image WORKDIR (here `/`) for
+# `git:load-image` deploys. Its `release` step runs `./hq migrate` before the
+# new containers start, so schema changes are applied on every deploy without
+# a server-side build. Commands are passed as arguments to the ENTRYPOINT.
+COPY ./Procfile /Procfile
+
 EXPOSE 2222
 
-# Default command with run in docker so we can use `dokku run`
-# Need to update $DOKKU_DOCKERFILE_START_CMD so that the server starts
-#  with `./hq serve --host 0.0.0.0 --port 2222`
+# Default command when run in docker so we can use `dokku run`. Dokku uses the
+# `web` process from the Procfile instead; the command is passed to this
+# entrypoint as arguments.
 ENTRYPOINT ["./hq"]
