@@ -1,6 +1,6 @@
 //! The default `new-notes` channel, fed when new entries are indexed.
 //!
-//! [`publish_new_note`] is called by the indexer (`crate::search::indexing`)
+//! [`publish_new_note`] is called by the indexer (`crate::search::index`)
 //! after a note's metadata is written, so loops subscribed to
 //! [`NEW_NOTE_CHANNEL`] can react to entries arriving in the notes repo. It
 //! publishes to the in-process [`registry`]; with no registered publisher (for

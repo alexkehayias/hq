@@ -2369,17 +2369,16 @@ dependencies = [
  "chrono",
  "clap",
  "erased-serde",
- "fastembed",
  "futures",
  "futures-util",
  "handlebars",
  "hq-api",
  "hq-bash",
  "hq-cli",
+ "hq-search",
  "htmd",
  "http 1.4.2",
  "image",
- "itertools 0.15.0",
  "libc",
  "mockito",
  "once_cell",
@@ -2392,12 +2391,9 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "sqlite-vec",
- "tantivy",
  "tempfile",
  "terminal_size",
- "text-splitter",
  "thiserror 2.0.18",
- "tiktoken-rs",
  "tokio",
  "tokio-rusqlite",
  "tokio-stream",
@@ -2411,8 +2407,6 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-io",
  "web-push",
- "winnow",
- "zerocopy",
 ]
 
 [[package]]
@@ -2497,6 +2491,24 @@ dependencies = [
  "tracing-subscriber",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "hq-search"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastembed",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "text-splitter",
+ "tiktoken-rs",
+ "tokio",
+ "tokio-rusqlite",
+ "tracing",
+ "winnow",
+ "zerocopy",
 ]
 
 [[package]]
@@ -3073,15 +3085,6 @@ name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
 dependencies = [
  "either",
 ]
@@ -4732,7 +4735,7 @@ dependencies = [
  "built",
  "cfg-if",
  "interpolate_name",
- "itertools 0.14.0",
+ "itertools",
  "libc",
  "libfuzzer-sys",
  "log",
@@ -4789,7 +4792,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2964d0cf57a3e7a06e8183d14a8b527195c706b7983549cd5462d5aa3747438f"
 dependencies = [
  "either",
- "itertools 0.14.0",
+ "itertools",
  "rayon",
 ]
 
@@ -5893,7 +5896,7 @@ dependencies = [
  "fnv",
  "fs4",
  "htmlescape",
- "itertools 0.14.0",
+ "itertools",
  "levenshtein_automata",
  "log",
  "lru",
@@ -5942,7 +5945,7 @@ checksum = "c57166f5bcfd478f370ab8445afb4678dce44801fa5ce5c451aaf8595583c5dc"
 dependencies = [
  "downcast-rs",
  "fastdivide",
- "itertools 0.14.0",
+ "itertools",
  "serde",
  "tantivy-bitpacker",
  "tantivy-common",
@@ -5994,7 +5997,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a2cfc3ac5164cbadc28965ffb145a8f47582a60ae5897859ad8d4316596c606"
 dependencies = [
  "futures-util",
- "itertools 0.14.0",
+ "itertools",
  "tantivy-bitpacker",
  "tantivy-common",
  "tantivy-fst",
@@ -6085,7 +6088,7 @@ dependencies = [
  "either",
  "icu_provider",
  "icu_segmenter",
- "itertools 0.14.0",
+ "itertools",
  "memchr",
  "strum",
  "thiserror 2.0.18",
@@ -6239,7 +6242,7 @@ dependencies = [
  "derive_builder",
  "esaxx-rs",
  "getrandom 0.3.4",
- "itertools 0.14.0",
+ "itertools",
  "log",
  "macro_rules_attribute",
  "monostate",
@@ -7133,7 +7136,7 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-native",
  "gimli",
- "itertools 0.14.0",
+ "itertools",
  "log",
  "object",
  "pulley-interpreter",

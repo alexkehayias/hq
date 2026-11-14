@@ -1,0 +1,19 @@
+[package]
+name = "hq-search"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+
+[dependencies]
+anyhow = "1.0.103"
+fastembed = "5.17.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tantivy = "0.26.1"
+text-splitter = { version = "0.32.0", features = ["tiktoken-rs"] }
+tiktoken-rs = "0.12.0"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "fs", "sync"] }
+tokio-rusqlite = { version = "0.8.0", features = ["bundled", "load_extension"] }
+tracing = "0.1.44"
+winnow = "1.0.3"
+zerocopy = "0.8.14"

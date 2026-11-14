@@ -17,13 +17,17 @@ crates so editing them does not recompile the large library.
 
 | Crate | Path | Contents |
 |-------|------|----------|
-| `hq` (lib) | `src/` | core, ai, search, channels, loops, jobs, google, openai, anthropic, notify, eval, org, `types` |
+| `hq` (lib) | `src/` | core, ai, channels, loops, jobs, google, openai, anthropic, notify, eval, org, `types` |
 | `hq-bash` | `crates/bash/` | vendored bashkit virtual shell (self-contained) |
+| `hq-search` | `crates/search/` | Tantivy full-text index, sqlite-vec embeddings, note metadata store, AQL |
 | `hq-api` | `crates/api/` | Axum HTTP server and routes |
 | `hq-cli` | `crates/cli/` | CLI dispatch and the `hq` binary |
 
-Dependency direction: `hq` → `hq-bash`; `hq-api` → `hq`, `hq-bash`;
+Dependency direction: `hq` → `hq-bash`, `hq-search`; `hq-api` → `hq`, `hq-bash`;
 `hq-cli` → `hq`, `hq-api`, `hq-bash`.
+
+`hq-search` is a document-oriented index engine: it knows nothing about Org
+mode. `hq` parses Org notes and translates them into `IndexDocument`s.
 
 Because the library cannot depend on the CLI, the `hq` sandbox builtin is
 injected: the CLI registers a factory with `hq::ai::tools::set_hq_builtin_factory`
@@ -157,9 +161,12 @@ migration in its own transaction, and runs `down` in reverse for rollbacks.
 `initialize_db` runs all pending migrations, so `hq init --db` and tests get the
 latest schema.
 
-### Search (`src/search/`)
-- **Tantivy** for full-text search (FTS) indexing of notes
-- **sqlite-vec** for semantic/vector similarity search via Fastembed embeddings
+### Search (`src/search/` + `crates/search/`)
+- **`hq-search`** owns the index engine: **Tantivy** full-text search,
+  **sqlite-vec** semantic search via Fastembed embeddings, and the `note_meta`
+  document store
+- **`src/search/`** is the Org-aware façade: parsing, note→document translation,
+  chat indexing/hydration, git sync, and result composition
 - **AQL (Alex Query Language)** - custom query syntax for fielded terms, phrases, negation, ranges
 
 ### AI (`src/ai/`)
