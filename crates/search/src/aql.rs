@@ -47,9 +47,9 @@ fn resolve_field_alias(field: &str) -> &str {
     }
 }
 
-pub fn parse_query(input: &str) -> Result<Expr, ErrMode<InputError<&str>>> {
+pub fn parse_query(input: &str) -> anyhow::Result<Expr> {
     let mut input = input;
-    parse_expr(&mut input)
+    parse_expr(&mut input).map_err(|e| anyhow::anyhow!("failed to parse query: {e:?}"))
 }
 
 fn parse_expr<'a>(input: &mut &'a str) -> Result<Expr, ErrMode<InputError<&'a str>>> {
