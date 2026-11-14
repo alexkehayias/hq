@@ -103,6 +103,30 @@ impl Chat {
         ))
     }
 
+    /// Execute the requested tool calls, or, when the request carried no
+    /// tools at all, return an error result for each call so the model can
+    /// recover. Some models emit tool calls even when none were offered
+    /// (e.g. a resumed session that no longer registers tools), and that
+    /// must not panic the turn.
+    async fn execute_tool_calls(
+        tools: &Option<Vec<BoxedToolCall>>,
+        tool_calls: &[FunctionCall],
+    ) -> Result<Vec<Message>, Error> {
+        match tools {
+            Some(tools) => Self::handle_tool_calls(tools, tool_calls).await,
+            None => Ok(tool_calls
+                .iter()
+                .map(|call| {
+                    Message::new_tool_call_response(
+                        "Error: no tools are available in this conversation. \
+                         Answer the user using the information you already have.",
+                        &call.id,
+                    )
+                })
+                .collect()),
+        }
+    }
+
     async fn handle_tool_calls(
         tools: &Vec<BoxedToolCall>,
         tool_calls: &[FunctionCall],
@@ -288,11 +312,7 @@ impl Chat {
             // Run middleware before executing tool calls
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
-                    let tools_ref = tools
-                        .as_ref()
-                        .expect("Received tool call but no tools were specified");
-
-                    let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
+                    let tool_call_msgs = Self::execute_tool_calls(tools, &calls).await?;
                     // Run after_tool_calls middleware and substitute
                     // rejection messages for any results that contain
                     // invisible characters (or other issues middleware
@@ -375,12 +395,8 @@ impl Chat {
             // Run middleware before executing tool calls
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
-                    let tools_ref = tools
-                        .as_ref()
-                        .expect("Received tool call but no tools were specified");
-
                     // TODO: Update this to be streaming
-                    let tool_call_msgs = Self::handle_tool_calls(tools_ref, &calls).await?;
+                    let tool_call_msgs = Self::execute_tool_calls(tools, &calls).await?;
                     // Run after_tool_calls middleware and substitute
                     // rejection messages for results that contain
                     // invisible characters (or other issues middleware
@@ -1343,6 +1359,145 @@ data: [DONE]
         assert_eq!(
             tool_response.text().unwrap(),
             "Error: unknown tool `website_view`. Available tools: mock_tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_tool_call_and_no_tools() {
+        let mut server = mockito::Server::new_async().await;
+
+        // The model emits a tool call even though the request carried no
+        // tools at all. The turn must recover instead of panicking.
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_no_tools",
+                        "type": "function",
+                        "function": {
+                            "name": "note_search",
+                            "arguments": "{\"query\":\"test\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I can't use tools here."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
+            .create();
+
+        let url = server.url();
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4").build();
+
+        let msg = Message::new(Role::User, "Search for test");
+        let result = chat.next_msg(msg).await;
+
+        mock1.assert();
+        mock2.assert();
+
+        let messages = result.expect("turn should recover when no tools are available");
+        assert_eq!(messages.len(), 3);
+
+        // Each call gets an error result so the model can answer without tools.
+        let tool_response = &messages[1];
+        assert_eq!(*tool_response.role(), Role::Tool);
+        assert_eq!(tool_response.tool_call_id(), Some("call_no_tools"));
+        assert!(
+            tool_response
+                .text()
+                .unwrap()
+                .contains("no tools are available")
+        );
+        assert_eq!(messages[2].text().unwrap(), "I can't use tools here.");
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_with_tool_call_and_no_tools() {
+        let mut server = mockito::Server::new_async().await;
+
+        let sse_tool_call = r#"data: {"id":"chunk1","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_no_tools","index":0,"function":{"name":"note_search","arguments":"{\"query\":"},"type":"function"}]},"finish_reason":null}]}
+
+data: {"id":"chunk2","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"test\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chunk3","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let sse_final = r#"data: {"id":"chunk4","created":1234567890,"model":"gpt-4","system_fingerprint":"fp1","choices":[{"index":0,"delta":{"content":"I can't use tools here."},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+
+        let mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_tool_call)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_final)
+            .create();
+
+        let url = server.url();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut chat = ChatBuilder::new(&url, "test-key", "gpt-4")
+            .streaming(tx)
+            .build();
+
+        let msg = Message::new(Role::User, "Search for test");
+        let result = chat.next_msg(msg).await;
+
+        mock1.assert();
+        mock2.assert();
+
+        let messages = result.expect("streamed turn should recover when no tools are available");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(*messages[1].role(), Role::Tool);
+        assert!(
+            messages[1]
+                .text()
+                .unwrap()
+                .contains("no tools are available")
         );
     }
 
