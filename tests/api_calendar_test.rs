@@ -33,10 +33,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// Tests calendar endpoint returns 500 when no refresh token exists
+    /// Tests calendar endpoint returns 401 when no refresh token exists
     #[tokio::test]
     #[serial]
-    async fn it_returns_500_for_missing_refresh_token() {
+    async fn it_returns_401_for_missing_refresh_token() {
         let app = test_app().await;
 
         // Request with email but no refresh token in DB
@@ -50,8 +50,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return 500 when no refresh token found for the email
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // A missing authorization is a client error, not a server fault
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests calendar endpoint accepts days_ahead parameter
@@ -71,8 +71,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Returns 500 because no refresh token, but accepts the param
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // No refresh token means 401, but the param is accepted
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests calendar endpoint accepts calendar_id parameter
@@ -92,8 +92,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Returns 500 because no refresh token, but accepts the param
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // No refresh token means 401, but the param is accepted
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests calendar endpoint handles negative days_ahead
@@ -113,7 +113,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Returns 500 because no refresh token, but accepts negative param
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // No refresh token means 401, but the negative param is accepted
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -1,7 +1,6 @@
 //! Router for the email API
 
 use std::sync::{Arc, RwLock};
-use tokio_rusqlite::rusqlite;
 
 use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
@@ -13,7 +12,7 @@ use hq::core::AppConfig;
 use hq::google::gmail::{
     Thread, extract_body, fetch_thread, list_messages_by_query, list_unread_messages,
 };
-use hq::google::oauth::refresh_access_token;
+use hq::google::oauth::{find_refresh_token, refresh_access_token};
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -21,17 +20,8 @@ async fn email_unread_handler(
     State(state): State<SharedState>,
     Query(params): Query<public::EmailUnreadQuery>,
 ) -> Result<Json<Vec<public::EmailThread>>, crate::public::ApiError> {
-    let refresh_token: String = {
-        let db = state.read().unwrap().db.clone();
-
-        db.call(move |conn| {
-            let result = conn
-                .prepare("SELECT refresh_token FROM auth WHERE id = ?1")
-                .and_then(|mut stmt| stmt.query_row([&params.email], |row| row.get(0)))?;
-            Ok::<_, rusqlite::Error>(result)
-        })
-        .await?
-    };
+    let db = state.read().unwrap().db.clone();
+    let refresh_token = find_refresh_token(&db, &params.email).await?;
 
     let (client_id, client_secret) = {
         let shared_state = state.read().expect("Unable to read share state");
@@ -57,17 +47,8 @@ async fn email_search_handler(
     State(state): State<SharedState>,
     Query(params): Query<public::EmailSearchQuery>,
 ) -> Result<Json<Vec<public::EmailThread>>, crate::public::ApiError> {
-    let refresh_token: String = {
-        let db = state.read().unwrap().db.clone();
-
-        db.call(move |conn| {
-            let result = conn
-                .prepare("SELECT refresh_token FROM auth WHERE id = ?1")
-                .and_then(|mut stmt| stmt.query_row([&params.email], |row| row.get(0)))?;
-            Ok::<_, rusqlite::Error>(result)
-        })
-        .await?
-    };
+    let db = state.read().unwrap().db.clone();
+    let refresh_token = find_refresh_token(&db, &params.email).await?;
 
     let (client_id, client_secret) = {
         let shared_state = state.read().expect("Unable to read share state");
