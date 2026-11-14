@@ -1,7 +1,8 @@
-use tantivy;
 use tantivy::schema::*;
 
-pub fn note_schema() -> Schema {
+/// Tantivy schema for indexed documents (notes, tasks, meetings, headings,
+/// and chat messages).
+pub(crate) fn document_schema() -> Schema {
     let mut schema_builder = Schema::builder();
     // There is no primary ID concept in tantivy so this needs to be
     // stored as a raw value using the index type `STRING` instead of

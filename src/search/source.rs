@@ -1,6 +1,8 @@
 /// Utilities for getting source documents for indexing
 use std::path::PathBuf;
 
+use crate::core::orgmode::is_archive_file;
+
 /// Recursively walk `roots` (absolute paths) for `.org` and `.org_archive` files.
 async fn walk_org_files(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut result = Vec::new();
@@ -22,7 +24,7 @@ async fn walk_org_files(roots: Vec<PathBuf>) -> Vec<PathBuf> {
                 // `org-archive-location` convention), so index them alongside
                 // plain `.org` notes.
                 let name = p.to_string_lossy();
-                if name.ends_with(".org") || crate::core::orgmode::is_archive_file(&name) {
+                if name.ends_with(".org") || is_archive_file(&name) {
                     result.push(p);
                 }
             }
