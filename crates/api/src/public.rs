@@ -1,6 +1,7 @@
 //! Public API types
 
 use axum::response::{IntoResponse, Response};
+use hq::google::oauth::AuthorizationError;
 use http::StatusCode;
 
 // Errors
@@ -9,6 +10,14 @@ pub struct ApiError(anyhow::Error);
 /// Convert `AppError` into an Axum compatible response.
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // A missing or expired OAuth grant is expected: the account just needs
+        // to be connected. Warn rather than log a server error, and tell the
+        // client it must re-authorize instead of reporting a 500.
+        if let Some(auth) = self.0.downcast_ref::<AuthorizationError>() {
+            tracing::warn!("{auth}");
+            return (StatusCode::UNAUTHORIZED, auth.to_string()).into_response();
+        }
+
         // Always log the error
         tracing::error!("{}\n{}", self.0, self.0.backtrace());
 

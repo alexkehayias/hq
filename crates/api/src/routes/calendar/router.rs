@@ -1,7 +1,6 @@
 //! Router for the calendar API
 
 use std::sync::{Arc, RwLock};
-use tokio_rusqlite::rusqlite;
 
 use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
@@ -10,7 +9,7 @@ use super::public;
 use crate::state::AppState;
 use hq::core::AppConfig;
 use hq::google::gcal::list_events;
-use hq::google::oauth::refresh_access_token;
+use hq::google::oauth::{find_refresh_token, refresh_access_token};
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -18,17 +17,8 @@ async fn calendar_handler(
     State(state): State<SharedState>,
     Query(params): Query<public::CalendarQuery>,
 ) -> Result<Json<Vec<public::CalendarResponse>>, crate::public::ApiError> {
-    let refresh_token: String = {
-        let db = state.read().unwrap().db.clone();
-
-        db.call(move |conn| {
-            let result = conn
-                .prepare("SELECT refresh_token FROM auth WHERE id = ?1")
-                .and_then(|mut stmt| stmt.query_row([&params.email], |row| row.get(0)))?;
-            Ok::<_, rusqlite::Error>(result)
-        })
-        .await?
-    };
+    let db = state.read().unwrap().db.clone();
+    let refresh_token = find_refresh_token(&db, &params.email).await?;
 
     let (client_id, client_secret) = {
         let shared_state = state.read().expect("Unable to read share state");
