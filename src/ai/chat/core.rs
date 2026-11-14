@@ -21,6 +21,13 @@ use crate::openai::{
     completion_stream,
 };
 
+/// Tool result returned to the model when it requests a tool call in a
+/// conversation that was started without tools. Some models emit tool calls
+/// even when none were offered (e.g. a resumed session that no longer
+/// registers tools), and the turn must recover rather than panic.
+const NO_TOOLS_MSG: &str = "Error: no tools are available in this conversation. \
+                            Answer the user using the information you already have.";
+
 /// The core abstraction around interacting with an LLM in a chat
 /// completion style using an OpenAI compatible API.
 ///
@@ -53,7 +60,7 @@ pub struct Chat {
 
 impl Chat {
     async fn handle_tool_call(
-        tools: &Vec<BoxedToolCall>,
+        tools: &[BoxedToolCall],
         tool_call: &FunctionCall,
     ) -> Result<Message, Error> {
         let tool_call_name = &tool_call.function.name;
@@ -105,28 +112,10 @@ impl Chat {
 
     /// Run each requested tool call concurrently and return the results in
     /// order.
-    ///
-    /// When the request carried no tools at all, return an error result for
-    /// each call so the model can recover. Some models emit tool calls even
-    /// when none were offered (e.g. a resumed session that no longer
-    /// registers tools), and that must not panic the turn.
     async fn handle_tool_calls(
-        tools: &Option<Vec<BoxedToolCall>>,
+        tools: &[BoxedToolCall],
         tool_calls: &[FunctionCall],
     ) -> Result<Vec<Message>, Error> {
-        let Some(tools) = tools else {
-            return Ok(tool_calls
-                .iter()
-                .map(|call| {
-                    Message::new_tool_call_response(
-                        "Error: no tools are available in this conversation. \
-                         Answer the user using the information you already have.",
-                        &call.id,
-                    )
-                })
-                .collect());
-        };
-
         // Run each tool call concurrently and return them in order. I'm
         // not sure if ordering really matters for OpenAI compatible API
         // implementations, but better to be safe. This could also be
@@ -308,7 +297,13 @@ impl Chat {
             // Run middleware before executing tool calls
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
-                    let tool_call_msgs = Self::handle_tool_calls(tools, &calls).await?;
+                    let tool_call_msgs = match tools.as_deref() {
+                        Some(tools) => Self::handle_tool_calls(tools, &calls).await?,
+                        None => calls
+                            .iter()
+                            .map(|call| Message::new_tool_call_response(NO_TOOLS_MSG, &call.id))
+                            .collect(),
+                    };
                     // Run after_tool_calls middleware and substitute
                     // rejection messages for any results that contain
                     // invisible characters (or other issues middleware
@@ -392,7 +387,13 @@ impl Chat {
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
                     // TODO: Update this to be streaming
-                    let tool_call_msgs = Self::handle_tool_calls(tools, &calls).await?;
+                    let tool_call_msgs = match tools.as_deref() {
+                        Some(tools) => Self::handle_tool_calls(tools, &calls).await?,
+                        None => calls
+                            .iter()
+                            .map(|call| Message::new_tool_call_response(NO_TOOLS_MSG, &call.id))
+                            .collect(),
+                    };
                     // Run after_tool_calls middleware and substitute
                     // rejection messages for results that contain
                     // invisible characters (or other issues middleware
