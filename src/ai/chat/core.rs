@@ -103,18 +103,19 @@ impl Chat {
         ))
     }
 
-    /// Execute the requested tool calls, or, when the request carried no
-    /// tools at all, return an error result for each call so the model can
-    /// recover. Some models emit tool calls even when none were offered
-    /// (e.g. a resumed session that no longer registers tools), and that
-    /// must not panic the turn.
-    async fn execute_tool_calls(
+    /// Run each requested tool call concurrently and return the results in
+    /// order.
+    ///
+    /// When the request carried no tools at all, return an error result for
+    /// each call so the model can recover. Some models emit tool calls even
+    /// when none were offered (e.g. a resumed session that no longer
+    /// registers tools), and that must not panic the turn.
+    async fn handle_tool_calls(
         tools: &Option<Vec<BoxedToolCall>>,
         tool_calls: &[FunctionCall],
     ) -> Result<Vec<Message>, Error> {
-        match tools {
-            Some(tools) => Self::handle_tool_calls(tools, tool_calls).await,
-            None => Ok(tool_calls
+        let Some(tools) = tools else {
+            return Ok(tool_calls
                 .iter()
                 .map(|call| {
                     Message::new_tool_call_response(
@@ -123,14 +124,9 @@ impl Chat {
                         &call.id,
                     )
                 })
-                .collect()),
-        }
-    }
+                .collect());
+        };
 
-    async fn handle_tool_calls(
-        tools: &Vec<BoxedToolCall>,
-        tool_calls: &[FunctionCall],
-    ) -> Result<Vec<Message>, Error> {
         // Run each tool call concurrently and return them in order. I'm
         // not sure if ordering really matters for OpenAI compatible API
         // implementations, but better to be safe. This could also be
@@ -312,7 +308,7 @@ impl Chat {
             // Run middleware before executing tool calls
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
-                    let tool_call_msgs = Self::execute_tool_calls(tools, &calls).await?;
+                    let tool_call_msgs = Self::handle_tool_calls(tools, &calls).await?;
                     // Run after_tool_calls middleware and substitute
                     // rejection messages for any results that contain
                     // invisible characters (or other issues middleware
@@ -396,7 +392,7 @@ impl Chat {
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
                     // TODO: Update this to be streaming
-                    let tool_call_msgs = Self::execute_tool_calls(tools, &calls).await?;
+                    let tool_call_msgs = Self::handle_tool_calls(tools, &calls).await?;
                     // Run after_tool_calls middleware and substitute
                     // rejection messages for results that contain
                     // invisible characters (or other issues middleware
