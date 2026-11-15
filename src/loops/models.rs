@@ -63,6 +63,8 @@ impl FromStr for RunStatus {
 pub struct LoopRun {
     pub id: String,
     pub loop_id: String,
+    /// Title of the loop that produced this run, denormalized for display.
+    pub loop_title: String,
     pub channel_id: String,
     pub event: String,
     pub status: RunStatus,

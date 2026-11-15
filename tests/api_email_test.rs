@@ -34,10 +34,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// Tests the email unread endpoint returns 500 when no refresh token exists
+    /// Tests the email unread endpoint returns 401 when no refresh token exists
     #[tokio::test]
     #[serial]
-    async fn it_returns_500_for_missing_refresh_token() {
+    async fn it_returns_401_for_missing_refresh_token() {
         let app = test_app().await;
 
         // Request with email but no refresh token in DB
@@ -51,8 +51,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return 500 when no refresh token found for the email
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // A missing authorization is a client error, not a server fault
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests the email unread endpoint accepts limit parameter
@@ -72,8 +72,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Should still return 500 because no refresh token, but it accepts the param
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // No refresh token means 401, but the limit param parses fine
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests the email unread endpoint handles negative limit gracefully
@@ -93,8 +93,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Negative limit results in a server error (not 400) since it's parsed as i64
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // Negative limit parses as i64; the missing authorization is checked first
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests the email search endpoint returns 400 when email is missing
@@ -139,10 +139,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// Tests the email search endpoint returns 500 when no refresh token exists
+    /// Tests the email search endpoint returns 401 when no refresh token exists
     #[tokio::test]
     #[serial]
-    async fn it_search_returns_500_for_missing_refresh_token() {
+    async fn it_search_returns_401_for_missing_refresh_token() {
         let app = test_app().await;
 
         // Request with email and query but no refresh token in DB
@@ -156,8 +156,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return 500 when no refresh token found for the email
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // A missing authorization is a client error, not a server fault
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// Tests the email search endpoint accepts complex Gmail search queries
@@ -167,7 +167,7 @@ mod tests {
         let app = test_app().await;
 
         // A complex query with multiple operators — no refresh token means
-        // a 500 response, but the request itself parses fine.
+        // a 401 response, but the request itself parses fine.
         let response = app
             .oneshot(
                 Request::builder()
@@ -178,7 +178,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return 500 because no refresh token, but it accepts the query
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // No refresh token means 401, but it accepts the query
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

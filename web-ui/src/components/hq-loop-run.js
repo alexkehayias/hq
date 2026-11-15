@@ -2,9 +2,9 @@
  * <hq-loop-run> — one loop run row.
  *
  * @attr {string} run - JSON string of a loop run: { status, loop_id,
- *   channel_id, started_at, duration_ms, error?, response?, event,
- *   session_id, has_transcript }
- * @attr {boolean} show-loop - show the id of the loop that produced the run
+ *   loop_title, channel_id, started_at, duration_ms, error?, response?,
+ *   event, session_id, has_transcript }
+ * @attr {boolean} show-loop - show the title of the loop that produced the run
  *
  * Renders the status icon, loop/channel, start time, duration, and a preview
  * of the run's error, response, or event. Links to the run's transcript when
@@ -49,7 +49,7 @@ class HqLoopRun extends HTMLElement {
       <div class="flex items-center justify-between gap-2">
         <div class="flex flex-wrap items-center gap-2">
           ${statusIcon(run.status)}
-          ${showLoop ? html`<span class="font-mono text-xs text-body">${run.loop_id}</span>` : ''}
+          ${showLoop ? html`<span class="text-xs font-medium text-body">${run.loop_title}</span>` : ''}
           <span class="font-mono text-xs text-muted">${run.channel_id}</span>
           <span class="text-xs text-muted">${formatTime(run.started_at)}</span>
           ${run.duration_ms != null ? html`<span class="text-xs text-muted">${formatDuration(run.duration_ms)}</span>` : ''}

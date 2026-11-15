@@ -1,0 +1,5 @@
+# Wait seven days before resolving a newly published crate version. This gives
+# the ecosystem time to catch malicious or broken releases. Versions already in
+# Cargo.lock are unaffected; the cooldown applies when resolving new versions.
+[registry]
+global-min-publish-age = "7 days"

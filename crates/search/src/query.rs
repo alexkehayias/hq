@@ -1,4 +1,4 @@
-use crate::search::aql::{Expr, RangeOp};
+use crate::aql::{Expr, RangeOp};
 use std::ops::Bound;
 use tantivy::Index;
 use tantivy::Term;
@@ -155,7 +155,11 @@ fn build_field_query(
     }
 }
 
-pub fn aql_to_index_query(idx: &Index, schema: &Schema, expr: &Expr) -> Option<Box<dyn Query>> {
+pub(crate) fn aql_to_index_query(
+    idx: &Index,
+    schema: &Schema,
+    expr: &Expr,
+) -> Option<Box<dyn Query>> {
     match expr {
         Expr::Term {
             field: Some(field), ..
@@ -305,7 +309,7 @@ pub fn aql_to_index_query(idx: &Index, schema: &Schema, expr: &Expr) -> Option<B
     }
 }
 
-pub fn expr_to_sql(expr: &Expr) -> Option<String> {
+pub(crate) fn expr_to_sql(expr: &Expr) -> Option<String> {
     fn is_allowed(field: &str) -> bool {
         matches!(field, "scheduled" | "deadline" | "closed" | "date")
     }
@@ -396,7 +400,7 @@ pub fn expr_to_sql(expr: &Expr) -> Option<String> {
     }
 }
 
-pub fn query_to_similarity(expr: &Expr) -> Option<String> {
+pub(crate) fn query_to_similarity(expr: &Expr) -> Option<String> {
     fn is_allowed(field: &str) -> bool {
         matches!(field, "title" | "body")
     }
@@ -444,8 +448,8 @@ pub fn query_to_similarity(expr: &Expr) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::aql::parse_query;
-    use crate::search::fts::schema::note_schema;
+    use crate::aql::parse_query;
+    use crate::schema::document_schema;
     use tantivy::directory::RamDirectory;
     use tantivy::schema::{Document as _, TantivyDocument, Value as _};
     use tantivy::{IndexWriter, ReloadPolicy, doc};
@@ -453,7 +457,7 @@ mod tests {
     /// Build an in-memory Tantivy index with the note schema. Used by
     /// tests that need to exercise tokenization via `tokenizer_for_field`.
     fn build_test_index() -> (Schema, Index) {
-        let schema = note_schema();
+        let schema = document_schema();
         let directory = RamDirectory::create();
         let idx = Index::open_or_create(directory, schema.clone()).unwrap();
         (schema, idx)

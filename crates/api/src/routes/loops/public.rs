@@ -11,7 +11,10 @@ pub struct LoopListResponse {
 
 #[derive(Deserialize)]
 pub struct UpdateLoopRequest {
-    pub system_prompt: String,
+    /// New human-readable name; omitted leaves the title unchanged.
+    pub title: Option<String>,
+    /// New system prompt; omitted leaves the prompt unchanged.
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -60,6 +63,7 @@ pub struct LoopRunsPageResponse {
 pub struct LoopRunResponse {
     pub id: String,
     pub loop_id: String,
+    pub loop_title: String,
     pub channel_id: String,
     pub event: String,
     pub status: String,
@@ -77,6 +81,7 @@ impl From<LoopRun> for LoopRunResponse {
         Self {
             id: run.id,
             loop_id: run.loop_id,
+            loop_title: run.loop_title,
             channel_id: run.channel_id,
             event: run.event,
             status: run.status.to_string(),
