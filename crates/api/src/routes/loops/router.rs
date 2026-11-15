@@ -20,7 +20,7 @@ use crate::state::AppState;
 use hq::core::AppConfig;
 use hq::loops::db::{
     count_loop_runs, find_all_loops, find_loop, find_loop_runs, find_loop_runs_page,
-    update_loop_system_prompt,
+    update_loop_system_prompt, update_loop_title,
 };
 use hq::loops::supervisor::{self, LoopSupervisorConfig};
 
@@ -54,14 +54,36 @@ async fn list_loops(State(state): State<SharedState>) -> Result<impl IntoRespons
     Ok(Json(LoopListResponse { loops }))
 }
 
-/// Replace a loop's system prompt, restarting it if it is currently running so
-/// the new prompt applies to subsequent events.
+/// Update a loop's title and/or system prompt. Restarts the loop when its
+/// prompt changes so the new prompt applies to subsequent events.
 async fn update_loop(
     State(state): State<SharedState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateLoopRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if body.system_prompt.trim().is_empty() {
+    let title = body.title.map(|title| title.trim().to_string());
+    let system_prompt = body.system_prompt;
+
+    if title.is_none() && system_prompt.is_none() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Nothing to update"})),
+        )
+            .into_response());
+    }
+
+    if title.as_deref().is_some_and(str::is_empty) {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Title cannot be empty"})),
+        )
+            .into_response());
+    }
+
+    if system_prompt
+        .as_deref()
+        .is_some_and(|prompt| prompt.trim().is_empty())
+    {
         return Ok((
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "System prompt cannot be empty"})),
@@ -93,21 +115,34 @@ async fn update_loop(
         (state.db.clone(), config)
     };
 
-    let updated = update_loop_system_prompt(&db, &id, &body.system_prompt).await?;
-    if updated == 0 {
-        return Ok((
+    let not_found = || {
+        (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("Loop '{}' not found", id)})),
         )
-            .into_response());
+            .into_response()
+    };
+
+    if let Some(title) = &title
+        && update_loop_title(&db, &id, title).await? == 0
+    {
+        return Ok(not_found());
+    }
+
+    if let Some(system_prompt) = &system_prompt
+        && update_loop_system_prompt(&db, &id, system_prompt).await? == 0
+    {
+        return Ok(not_found());
     }
 
     // The running task holds its own copy of the prompt, so restart it to pick
-    // up the change. A failed restart is logged but does not undo the save —
-    // the loop respawns from the DB on the next server boot.
-    if supervisor::running_ids()
-        .iter()
-        .any(|running| running == &id)
+    // up the change. A title change needs no restart. A failed restart is
+    // logged but does not undo the save — the loop respawns from the DB on the
+    // next server boot.
+    if system_prompt.is_some()
+        && supervisor::running_ids()
+            .iter()
+            .any(|running| running == &id)
         && let Some(record) = find_loop(&db, &id).await?
         && let Err(e) = supervisor::start(record, loop_config).await
     {

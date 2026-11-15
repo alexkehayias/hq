@@ -96,7 +96,21 @@
           <div slot="header">
             <div class="flex items-start justify-between flex-wrap gap-4">
               <div class="min-w-0">
-                <h1 id="loop-detail-title" class="text-2xl font-bold text-ink">Loop</h1>
+                <div id="loop-title-view" class="flex items-center gap-1">
+                  <h1 id="loop-detail-title" class="min-w-0 truncate text-2xl font-bold text-ink">Loop</h1>
+                  <button id="loop-title-edit" type="button" aria-label="Rename loop" title="Rename loop"
+                    class="inline-flex shrink-0 items-center justify-center rounded-[8px] p-1 text-muted transition-colors hover:bg-mist hover:text-ink">
+                    <hq-icon name="pencil" size="sm" class="flex"></hq-icon>
+                  </button>
+                </div>
+                <div id="loop-title-form" class="hidden items-center gap-2">
+                  <input id="loop-title-input" type="text" maxlength="120" autocomplete="off"
+                    aria-label="Loop name"
+                    class="h-10 min-w-0 flex-1 rounded-[10px] border border-line bg-mist px-3 text-xl font-bold text-ink placeholder:text-muted focus:ring-2 focus:ring-teal">
+                  <hq-button id="loop-title-save" variant="primary">Save</hq-button>
+                  <hq-button id="loop-title-cancel" variant="secondary">Cancel</hq-button>
+                </div>
+                <p id="loop-title-error" class="mt-1 hidden text-sm text-rust"></p>
                 <p id="loop-detail-id" class="mt-1 text-sm text-muted font-mono truncate"></p>
               </div>
               <div id="loop-detail-status" class="flex flex-wrap gap-2"></div>

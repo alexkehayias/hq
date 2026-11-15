@@ -104,6 +104,20 @@ pub async fn find_loop(db: &Connection, id: &str) -> Result<Option<Loop>> {
     Ok(record.await?)
 }
 
+/// Replace a loop's title. Returns the number of rows updated (0 if no loop
+/// with `id` exists).
+pub async fn update_loop_title(db: &Connection, id: &str, title: &str) -> Result<usize> {
+    let id = id.to_string();
+    let title = title.to_string();
+    let updated = db.call(move |conn| {
+        conn.execute(
+            "UPDATE loop SET title = ?1 WHERE id = ?2",
+            rusqlite::params![title, id],
+        )
+    });
+    Ok(updated.await?)
+}
+
 /// Replace a loop's system prompt. Returns the number of rows updated (0 if no
 /// loop with `id` exists).
 pub async fn update_loop_system_prompt(
@@ -631,6 +645,29 @@ mod tests {
         let missing = update_loop_system_prompt(&db, "does-not-exist", "x")
             .await
             .unwrap();
+        assert_eq!(missing, 0);
+    }
+
+    #[tokio::test]
+    async fn update_loop_title_changes_title() {
+        let (_dir, db) = setup_db().await;
+        insert_raw_channel(&db, "alpha", "socket").await;
+        insert_raw_channel(&db, "beta", "server").await;
+        insert_loop(&db, &sample_loop()).await.unwrap();
+
+        let updated = update_loop_title(&db, "loop-1", "Renamed loop")
+            .await
+            .unwrap();
+        assert_eq!(updated, 1);
+
+        let found = find_loop(&db, "loop-1").await.unwrap().unwrap();
+        assert_eq!(found.title, "Renamed loop");
+        // Unrelated fields are untouched.
+        assert_eq!(found.system_prompt, sample_loop().system_prompt);
+        assert_eq!(found.tools, sample_loop().tools);
+        assert_eq!(found.subscribe_channels, sample_loop().subscribe_channels);
+
+        let missing = update_loop_title(&db, "does-not-exist", "x").await.unwrap();
         assert_eq!(missing, 0);
     }
 
