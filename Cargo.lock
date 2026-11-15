@@ -2491,7 +2491,6 @@ dependencies = [
  "tiktoken-rs",
  "tokio",
  "tokio-rusqlite",
- "tracing",
  "winnow",
  "zerocopy",
 ]
