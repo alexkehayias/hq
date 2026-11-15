@@ -15,6 +15,9 @@ use crate::index::{DocumentType, Index};
 use crate::query::{aql_to_index_query, expr_to_sql, query_to_similarity};
 use crate::schema::document_schema;
 
+/// The largest `k` sqlite-vec accepts in a `vec0` KNN query.
+const SQLITE_VEC_K_MAX: usize = 4096;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DocumentHit {
     pub(crate) id: String,
@@ -90,6 +93,24 @@ impl Index {
             chat_message_ids,
         })
     }
+
+    /// Find the documents whose embeddings are nearest to `query_vector`,
+    /// ordered by distance. Returns each document's id and type.
+    ///
+    /// Callers that have the query text should use [`Index::search`], which
+    /// embeds it first; this is the seam for callers that already hold a
+    /// vector.
+    pub async fn similar_document_ids(
+        &self,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(String, DocumentType)>> {
+        let hits = nearest_documents(&self.db, query_vector, limit).await?;
+        Ok(hits
+            .into_iter()
+            .map(|hit| (hit.id, hit.document_type))
+            .collect())
+    }
 }
 
 fn full_text_search(index_path: &Path, query: &Expr, limit: usize) -> Result<Vec<DocumentHit>> {
@@ -149,8 +170,14 @@ async fn similar_documents(
         return Ok(Vec::new());
     };
 
+    let query_vector = embed_query(embedding_cache_dir, similarity_string).await?;
+    nearest_documents(db, &query_vector, limit).await
+}
+
+/// Generate the embedding for a similarity query.
+async fn embed_query(embedding_cache_dir: &Path, text: String) -> Result<Vec<f32>> {
     let cache_dir = embedding_cache_dir.to_path_buf();
-    let query_vector = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let mut model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::BGESmallENV15)
                 .with_show_download_progress(true)
@@ -158,12 +185,23 @@ async fn similar_documents(
         )
         .expect("Failed to initialize embedding model");
         model
-            .embed(vec![similarity_string], None)
+            .embed(vec![text], None)
             .expect("Failed to generate embeddings")
             .remove(0)
     })
     .await
-    .context("Query embedding task failed")?;
+    .context("Query embedding task failed")
+}
+
+/// Query sqlite-vec for the `limit` documents nearest to `query_vector`.
+async fn nearest_documents(
+    db: &Connection,
+    query_vector: &[f32],
+    limit: usize,
+) -> Result<Vec<DocumentHit>> {
+    // sqlite-vec reads `k` as an integer and rejects values above this cap.
+    let k = limit.min(SQLITE_VEC_K_MAX) as i64;
+    let query_vector = query_vector.to_vec();
 
     let result = db
         .call(move |conn| {
@@ -179,17 +217,14 @@ async fn similar_documents(
                 "#,
             )?;
             let found = stmt
-                .query_map(
-                    [query_vector.as_bytes(), limit.as_bytes(), limit.as_bytes()],
-                    |row| {
-                        let id: String = row.get(0)?;
-                        let document_type: String = row.get(1)?;
-                        Ok(DocumentHit {
-                            id,
-                            document_type: document_type.parse().expect("Invalid document type"),
-                        })
-                    },
-                )?
+                .query_map(rusqlite::params![query_vector.as_bytes(), k, k], |row| {
+                    let id: String = row.get(0)?;
+                    let document_type: String = row.get(1)?;
+                    Ok(DocumentHit {
+                        id,
+                        document_type: document_type.parse().expect("Invalid document type"),
+                    })
+                })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok::<_, rusqlite::Error>(found)
         })

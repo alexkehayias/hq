@@ -74,7 +74,10 @@ pub struct IndexDocument {
     pub file_name: String,
     pub chat_role: Option<String>,
     /// Generate and store a vector embedding for this document's body.
-    /// Only note-level documents are embedded.
+    ///
+    /// Set this only on note-level documents (`DocumentType::Note`); the
+    /// indexer never embeds tasks, meetings, or headings. Chat documents are
+    /// always skipped regardless of this flag.
     pub embed: bool,
 }
 
@@ -146,9 +149,10 @@ impl Index {
                 for doc in &docs {
                     let is_new = match doc.document_type {
                         DocumentType::Chat => continue,
-                        DocumentType::Note => upsert_note(conn, doc)?,
+                        DocumentType::Note | DocumentType::Heading => {
+                            upsert_note_or_heading(conn, doc)?
+                        }
                         DocumentType::Meeting => upsert_meeting(conn, doc)?,
-                        DocumentType::Heading => upsert_heading(conn, doc)?,
                         DocumentType::Task => upsert_task(conn, doc)?,
                     };
                     if is_new {
@@ -376,7 +380,13 @@ fn write_full_text_document(
     Ok(())
 }
 
-fn upsert_note(conn: &mut rusqlite::Connection, doc: &IndexDocument) -> rusqlite::Result<bool> {
+/// Upsert a note- or heading-level row. Both store the same columns, so the
+/// only difference between them is the `type` value, which is taken from the
+/// document itself.
+fn upsert_note_or_heading(
+    conn: &mut rusqlite::Connection,
+    doc: &IndexDocument,
+) -> rusqlite::Result<bool> {
     let mut stmt = conn.prepare(
         "INSERT INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(id) DO UPDATE SET type = excluded.type, category = excluded.category, \
@@ -388,7 +398,7 @@ fn upsert_note(conn: &mut rusqlite::Connection, doc: &IndexDocument) -> rusqlite
     stmt.query_row(
         rusqlite::params![
             doc.id,
-            "note",
+            doc.document_type.as_str(),
             doc.category,
             doc.file_name,
             doc.title,
@@ -419,29 +429,6 @@ fn upsert_meeting(conn: &mut rusqlite::Connection, doc: &IndexDocument) -> rusql
             doc.tags,
             doc.body,
             doc.date
-        ],
-        |row| row.get(0),
-    )
-}
-
-fn upsert_heading(conn: &mut rusqlite::Connection, doc: &IndexDocument) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare(
-        "INSERT INTO note_meta(id, type, category, file_name, title, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO UPDATE SET type = excluded.type, category = excluded.category, \
-         file_name = excluded.file_name, title = excluded.title, tags = excluded.tags, \
-         body = excluded.body, status = NULL, scheduled = NULL, deadline = NULL, \
-         closed = NULL, date = NULL, index_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
-         RETURNING (index_updated_at IS NULL) AS is_new",
-    )?;
-    stmt.query_row(
-        rusqlite::params![
-            doc.id,
-            "heading",
-            doc.category,
-            doc.file_name,
-            doc.title,
-            doc.tags,
-            doc.body
         ],
         |row| row.get(0),
     )

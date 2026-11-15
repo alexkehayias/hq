@@ -278,6 +278,7 @@ mod tests {
     use super::*;
     use crate::core::db::{async_db, initialize_db};
     use tempfile::TempDir;
+    use tokio_rusqlite::rusqlite;
 
     async fn test_db() -> (Connection, TempDir) {
         let dir = TempDir::new().unwrap();
@@ -362,5 +363,43 @@ mod tests {
             new_documents.is_empty(),
             "re-indexing should not report new rows"
         );
+    }
+
+    /// A similarity hit reports the type stored in `note_meta.type`; reading
+    /// any other column (e.g. `title`) would misparse it.
+    #[tokio::test]
+    async fn test_similar_document_ids_reports_note_meta_type() {
+        let (db, _db_dir) = test_db().await;
+        let index_dir = TempDir::new().unwrap();
+        let index = Index::open(db.clone(), index_dir.path(), fastembed_cache_dir());
+
+        let mut embedding = vec![0f32; 384];
+        embedding[0] = 1.0;
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_ne_bytes()).collect();
+
+        db.call(move |conn| {
+            conn.execute(
+                "INSERT INTO note_meta(id, type, title, category, file_name, body) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    "note-1",
+                    "task",
+                    "A task",
+                    "inbox",
+                    "notes/first.org",
+                    "body"
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO vec_items(note_meta_id, embedding) VALUES (?, ?)",
+                rusqlite::params!["note-1", embedding_bytes],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await
+        .unwrap();
+
+        let hits = index.similar_document_ids(&embedding, 5).await.unwrap();
+        assert_eq!(hits, vec![("note-1".to_string(), DocumentType::Task)]);
     }
 }

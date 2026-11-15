@@ -44,14 +44,15 @@ ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
 ## Cache rust dependencies
 ## https://stackoverflow.com/questions/58473606/cache-rust-dependencies-with-docker-build
 ## --locked ensures the build uses Cargo.lock exactly as committed, with no registry resolution drift.
-## This is a Cargo workspace (root lib + crates/bash, crates/api, crates/cli), so
-## every manifest must exist and every package needs a placeholder source file
-## before the dependency-only build can resolve.
-RUN mkdir -p ./src ./crates/bash/src ./crates/api/src ./crates/cli/src
+## This is a Cargo workspace (root lib + crates/bash, crates/api, crates/cli,
+## crates/search), so every manifest must exist and every package needs a
+## placeholder source file before the dependency-only build can resolve.
+RUN mkdir -p ./src ./crates/bash/src ./crates/api/src ./crates/cli/src ./crates/search/src
 COPY ./Cargo.toml ./Cargo.lock ./
 COPY ./crates/bash/Cargo.toml ./crates/bash/
 COPY ./crates/api/Cargo.toml ./crates/api/
 COPY ./crates/cli/Cargo.toml ./crates/cli/
+COPY ./crates/search/Cargo.toml ./crates/search/
 # build.rs generates the migration registry into OUT_DIR, which src/core/db/migrations
 # includes via `env!("OUT_DIR")`. Without it Cargo sets no OUT_DIR and the build fails.
 COPY ./build.rs ./build.rs
@@ -60,6 +61,7 @@ RUN echo '' > ./src/lib.rs && \
     echo '' > ./crates/bash/src/lib.rs && \
     echo '' > ./crates/api/src/lib.rs && \
     echo '' > ./crates/cli/src/lib.rs && \
+    echo '' > ./crates/search/src/lib.rs && \
     echo 'fn main() {}' > ./crates/cli/src/main.rs
 RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets -p hq-cli
 
