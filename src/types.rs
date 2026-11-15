@@ -7,27 +7,7 @@
 pub mod notes {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
-    pub struct SearchResult {
-        pub id: String,
-        pub r#type: String,
-        pub title: String,
-        pub category: String,
-        pub file_name: String,
-        pub tags: Option<String>,
-        pub is_task: bool,
-        pub task_status: Option<String>,
-        pub task_scheduled: Option<String>,
-        pub task_deadline: Option<String>,
-        pub task_closed: Option<String>,
-        pub meeting_date: Option<String>,
-        pub body: String,
-        #[serde(default)]
-        pub chat_role: Option<String>,
-        /// For chat results, the session the message belongs to.
-        #[serde(default)]
-        pub session_id: Option<String>,
-    }
+    pub use hq_search::SearchResult;
 
     #[derive(Serialize, Deserialize)]
     pub struct SearchResponse {
