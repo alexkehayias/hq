@@ -91,9 +91,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # web-ui directory is needed at runtime.
 COPY --from=builder /target/x86_64-unknown-linux-gnu/release/hq /hq
 
+# Applies pending migrations before starting the server. Dokku passes its start
+# command (`serve --host 0.0.0.0 --port 2222`) to the entrypoint as arguments,
+# so schema changes ship with each deploy. Other commands pass through
+# unchanged, which keeps `dokku run` usable.
+COPY ./bin/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 2222
 
-# Default command with run in docker so we can use `dokku run`
-# Need to update $DOKKU_DOCKERFILE_START_CMD so that the server starts
-#  with `./hq serve --host 0.0.0.0 --port 2222`
-ENTRYPOINT ["./hq"]
+ENTRYPOINT ["/docker-entrypoint.sh"]

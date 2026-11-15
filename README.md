@@ -96,6 +96,7 @@ docker run -p 2222:2222 -d hq:latest
 - `DOKKU_DOCKERFILE_START_CMD` to `serve --host 0.0.0.0 --port 2222`
 12. On local, add remote `git remote add dokku dokku@<dokku-host>:hq`
 13. Build and deploy locally (avoids Rust compilation on the Dokku server): `./bin/build-deploy.sh`
+    The container runs `hq migrate` before starting the server, so schema changes ship with each deploy.
 14. Increase the default proxy timeout `dokku nginx:set hq proxy-read-timeout 5m` and max body size `dokku nginx:set lm-proxy client-max-body-size 10m`
 15. Redeploy the app so the `nginx` changes take effect `dokku deploy hq`
 
