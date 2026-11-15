@@ -1,8 +1,10 @@
 //! Session terminal: run bashkit commands against a session's workspace.
 //!
-//! Each session gets one long-lived [`Bash`] instance, so working directory,
+//! Each workspace gets one long-lived [`Bash`] instance, so working directory,
 //! variables, and functions persist across commands. The shell's filesystem is
-//! the session workspace (`{storage}/workspace/{session_id}`) mounted at `/`.
+//! the workspace directory (`{storage}/workspace/{workspace_id}`) mounted at
+//! `/`. A loop run resolves to its loop's workspace id, so opening any run of a
+//! loop mounts the same files and shell the loop uses.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,6 +26,7 @@ use hq::ai::chat::db::session_exists;
 use hq::ai::chat::models::is_valid_session_id;
 use hq::ai::chat::workspace::workspace_root;
 use hq::ai::tools::new_sandbox;
+use hq::loops::db::workspace_id_for_session;
 use hq_bash::Bash;
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -38,27 +41,29 @@ struct ShellEntry {
     last_used: Instant,
 }
 
-/// One shell per session, keyed by session id. The async mutex serializes
-/// commands within a session while letting different sessions run concurrently.
+/// One shell per workspace, keyed by workspace id. The async mutex serializes
+/// commands within a workspace while letting different workspaces run
+/// concurrently. Loop runs share their loop's workspace, so they also share
+/// its shell.
 #[derive(Clone, Default)]
 pub struct TerminalRegistry {
     shells: Arc<Mutex<HashMap<String, ShellEntry>>>,
 }
 
 impl TerminalRegistry {
-    fn get(&self, session_id: &str) -> Option<Arc<AsyncMutex<Bash>>> {
+    fn get(&self, workspace_id: &str) -> Option<Arc<AsyncMutex<Bash>>> {
         let mut shells = self.shells.lock().expect("terminal registry lock poisoned");
-        let entry = shells.get_mut(session_id)?;
+        let entry = shells.get_mut(workspace_id)?;
         entry.last_used = Instant::now();
         Some(Arc::clone(&entry.shell))
     }
 
     /// Insert a newly built shell, returning the one that ended up in the
     /// registry (an existing shell wins a race with a concurrent first request).
-    fn insert(&self, session_id: &str, shell: Arc<AsyncMutex<Bash>>) -> Arc<AsyncMutex<Bash>> {
+    fn insert(&self, workspace_id: &str, shell: Arc<AsyncMutex<Bash>>) -> Arc<AsyncMutex<Bash>> {
         let mut shells = self.shells.lock().expect("terminal registry lock poisoned");
 
-        if let Some(existing) = shells.get(session_id) {
+        if let Some(existing) = shells.get(workspace_id) {
             return Arc::clone(&existing.shell);
         }
 
@@ -72,7 +77,7 @@ impl TerminalRegistry {
         }
 
         shells.insert(
-            session_id.to_string(),
+            workspace_id.to_string(),
             ShellEntry {
                 shell: Arc::clone(&shell),
                 last_used: Instant::now(),
@@ -82,20 +87,20 @@ impl TerminalRegistry {
     }
 }
 
-/// Look up a session's shell, creating it on first use. Concurrent first
+/// Look up a workspace's shell, creating it on first use. Concurrent first
 /// requests may build two shells; the loser is dropped.
 async fn get_or_create_shell(
     registry: &TerminalRegistry,
     storage_path: &str,
     workspace_path: &Path,
-    session_id: &str,
+    workspace_id: &str,
 ) -> Result<Arc<AsyncMutex<Bash>>, ApiError> {
-    if let Some(shell) = registry.get(session_id) {
+    if let Some(shell) = registry.get(workspace_id) {
         return Ok(shell);
     }
 
     let bash = new_sandbox(storage_path, workspace_path, "/").await?;
-    Ok(registry.insert(session_id, Arc::new(AsyncMutex::new(bash))))
+    Ok(registry.insert(workspace_id, Arc::new(AsyncMutex::new(bash))))
 }
 
 /// Return the shell's current working directory without running a command.
@@ -119,7 +124,11 @@ pub async fn terminal_cwd_handler(
         return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
     }
 
-    let cwd = match registry.get(&session_id) {
+    // A loop run's transcript session is keyed by the run id, but its shell
+    // lives in the loop's workspace (see `workspace_id_for_session`).
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
+
+    let cwd = match registry.get(&workspace_id) {
         Some(shell) => {
             let bash = shell.lock().await;
             bash.cwd().to_string_lossy().to_string()
@@ -153,7 +162,8 @@ pub async fn terminal_handler(
         return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
     }
 
-    let workspace_path = workspace_root(&storage_path, &session_id);
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
+    let workspace_path = workspace_root(&storage_path, &workspace_id);
     let workspace_exists = tokio::fs::metadata(&workspace_path)
         .await
         .map(|metadata| metadata.is_dir())
@@ -162,7 +172,8 @@ pub async fn terminal_handler(
         return Ok((StatusCode::NOT_FOUND, "Workspace not found").into_response());
     }
 
-    let shell = get_or_create_shell(&registry, &storage_path, &workspace_path, &session_id).await?;
+    let shell =
+        get_or_create_shell(&registry, &storage_path, &workspace_path, &workspace_id).await?;
 
     let mut bash = shell.lock().await;
     let result = bash.exec(&body.command).await;
