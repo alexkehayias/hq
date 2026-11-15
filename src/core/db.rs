@@ -27,9 +27,9 @@ pub async fn async_db(path_to_db_file: &str) -> anyhow::Result<Connection, anyho
     }
     let db = Connection::open(format!("{}/vector.db", path_to_db_file)).await?;
 
-    // Dokku's release step migrates the database while the previous container
-    // may still be serving requests. Wait briefly for a write lock instead of
-    // failing the deploy immediately with SQLITE_BUSY.
+    // The container migrates the database before starting the server while the
+    // previous container may still be serving requests. Wait briefly for a
+    // write lock instead of failing the deploy immediately with SQLITE_BUSY.
     db.call(|conn| conn.busy_timeout(Duration::from_secs(5)))
         .await?;
 
