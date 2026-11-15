@@ -11,7 +11,10 @@ pub struct LoopListResponse {
 
 #[derive(Deserialize)]
 pub struct UpdateLoopRequest {
-    pub system_prompt: String,
+    /// New human-readable name; omitted leaves the title unchanged.
+    pub title: Option<String>,
+    /// New system prompt; omitted leaves the prompt unchanged.
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Serialize)]

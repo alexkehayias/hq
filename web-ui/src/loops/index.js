@@ -30,6 +30,10 @@ const activityList = document.getElementById('activity-list');
 const activityPagination = document.getElementById('activity-pagination');
 const promptSection = document.getElementById('loop-detail-prompt');
 const promptEditor = document.getElementById('prompt-editor');
+const titleView = document.getElementById('loop-title-view');
+const titleForm = document.getElementById('loop-title-form');
+const titleInput = document.getElementById('loop-title-input');
+const titleError = document.getElementById('loop-title-error');
 
 // Dark mode sync for CodeMirror
 const darkMode = window.matchMedia('(prefers-color-scheme: dark)');
@@ -232,6 +236,7 @@ async function showLoopDetail(id) {
   pageShell.setAttribute('back-label', 'Loops');
 
   currentLoop = null;
+  cancelTitleEdit();
   promptSection.classList.add('hidden');
   document.getElementById('loop-detail-title').textContent = 'Loop';
   document.getElementById('loop-detail-id').textContent = id;
@@ -310,6 +315,97 @@ async function showLoopDetail(id) {
   promptSection.classList.remove('hidden');
   promptEditor.open('', loop.system_prompt, 'markdown');
 }
+
+/* ===== Loop Title ===== */
+function startTitleEdit() {
+  if (!currentLoop) return;
+  titleInput.value = currentLoop.title;
+  titleView.classList.add('hidden');
+  titleForm.classList.remove('hidden');
+  titleForm.classList.add('flex');
+  clearTitleError();
+  titleInput.focus();
+  titleInput.select();
+}
+
+function cancelTitleEdit() {
+  titleView.classList.remove('hidden');
+  titleForm.classList.add('hidden');
+  titleForm.classList.remove('flex');
+  clearTitleError();
+}
+
+function showTitleError(message) {
+  titleError.textContent = message;
+  titleError.classList.remove('hidden');
+}
+
+function clearTitleError() {
+  titleError.textContent = '';
+  titleError.classList.add('hidden');
+}
+
+async function saveTitle() {
+  if (!currentLoop) return;
+
+  const title = titleInput.value.trim();
+  if (!title) {
+    showTitleError('Loop name cannot be empty.');
+    titleInput.focus();
+    return;
+  }
+  if (title === currentLoop.title) {
+    cancelTitleEdit();
+    return;
+  }
+
+  const saveButton = document.getElementById('loop-title-save');
+  saveButton.setAttribute('disabled', '');
+
+  try {
+    const res = await fetch(
+      `/api/loops/${encodeURIComponent(currentLoop.id)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title }),
+      },
+    );
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${res.status}`);
+    }
+
+    currentLoop.title = title;
+    const loop = loops.find((l) => l.id === currentLoop.id);
+    if (loop) loop.title = title;
+    document.getElementById('loop-detail-title').textContent = title;
+    pageShell.setAttribute('meta-title', title);
+    cancelTitleEdit();
+  } catch (err) {
+    showTitleError(`Failed to rename loop: ${err.message}`);
+  } finally {
+    saveButton.removeAttribute('disabled');
+  }
+}
+
+document
+  .getElementById('loop-title-edit')
+  .addEventListener('click', startTitleEdit);
+document
+  .getElementById('loop-title-cancel')
+  .addEventListener('click', cancelTitleEdit);
+document.getElementById('loop-title-save').addEventListener('click', saveTitle);
+titleInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    saveTitle();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelTitleEdit();
+  }
+});
 
 /* ===== Prompt Save ===== */
 promptEditor.addEventListener('save-request', savePrompt);

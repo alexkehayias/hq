@@ -141,6 +141,118 @@ mod tests {
         assert_eq!(prompt, "New prompt.");
     }
 
+    /// Tests that a loop's title can be changed without touching its prompt.
+    #[tokio::test]
+    #[serial]
+    async fn it_updates_loop_title() {
+        let (app, state) = test_app_with_state().await;
+        let db = state.db.clone();
+
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO loop (id, title, system_prompt, tools)
+                 VALUES ('loop-1', 'Old name', 'Old prompt.', '[\"bash\"]')",
+                [],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/loops/loop-1")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"title": "  New name  "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("\"success\":true"), "{body}");
+
+        let (title, prompt): (String, String) = db
+            .call(|conn| {
+                conn.query_row(
+                    "SELECT title, system_prompt FROM loop WHERE id = 'loop-1'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(title, "New name");
+        assert_eq!(prompt, "Old prompt.");
+    }
+
+    /// Tests that a blank title is rejected and the stored title is kept.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_blank_loop_title() {
+        let (app, state) = test_app_with_state().await;
+        let db = state.db.clone();
+
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO loop (id, title, system_prompt, tools)
+                 VALUES ('loop-1', 'Old name', 'Old prompt.', '[\"bash\"]')",
+                [],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/loops/loop-1")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"title": "   "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let title: String = db
+            .call(|conn| {
+                conn.query_row("SELECT title FROM loop WHERE id = 'loop-1'", [], |row| {
+                    row.get(0)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(title, "Old name");
+    }
+
+    /// Tests that an update with neither a title nor a prompt is rejected.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_empty_loop_update() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/loops/loop-1")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     /// Tests that updating a missing loop returns 404.
     #[tokio::test]
     #[serial]
