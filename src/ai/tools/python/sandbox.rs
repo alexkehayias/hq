@@ -182,19 +182,21 @@ impl PySandbox {
     /// Returns the last expression's value plus any captured stdout/stderr.
     /// `workspace` is exposed to guest code as the root directory (`/`) — the
     /// same directory the bash tool mounts — so files are shared between the two
-    /// tools. Guest code cannot reach anything outside it, nor the host's
-    /// stdin/stdout/stderr, environment, or network. The caller must ensure
-    /// `workspace` already exists on the host; the preopen fails otherwise.
-    pub fn exec(&self, code: &str, workspace: &Path) -> Result<ExecResult> {
+    /// tools. `stdin` is the guest's standard input; pass an empty slice to
+    /// make reads see EOF immediately. Guest code cannot reach anything outside
+    /// the workspace, nor the host's stdout/stderr, environment, or network.
+    /// The caller must ensure `workspace` already exists on the host; the
+    /// preopen fails otherwise.
+    pub fn exec(&self, code: &str, workspace: &Path, stdin: &[u8]) -> Result<ExecResult> {
         let stdout_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
         let stderr_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
 
-        // Grant no ambient capabilities beyond the workspace: empty stdin (reads
-        // see EOF immediately) and bounded in-memory stdout/stderr. The single
-        // preopened directory is confined to `workspace` by WASI/cap-std, so
-        // `..` and symlinks cannot escape it.
+        // Grant no ambient capabilities beyond the workspace: caller-provided
+        // stdin and bounded in-memory stdout/stderr. The single preopened
+        // directory is confined to `workspace` by WASI/cap-std, so `..` and
+        // symlinks cannot escape it.
         let mut builder = WasiCtxBuilder::new();
-        builder.stdin(MemoryInputPipe::new(Vec::<u8>::new()));
+        builder.stdin(MemoryInputPipe::new(stdin.to_vec()));
         builder.stdout(stdout_pipe.clone());
         builder.stderr(stderr_pipe.clone());
         builder.preopened_dir(workspace, "/", FsPerms::ReadWrite)?;

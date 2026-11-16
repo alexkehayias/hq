@@ -61,7 +61,7 @@ impl ToolCall for PythonTool {
                 let sandbox =
                     shared_sandbox().map_err(|e| RecoverableToolError::new(&e.to_string()))?;
                 sandbox
-                    .exec(&code, &workspace)
+                    .exec(&code, &workspace, b"")
                     .map_err(|e| RecoverableToolError::new(&e.to_string()))
             })
             .await??;

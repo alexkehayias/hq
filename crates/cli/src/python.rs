@@ -16,7 +16,7 @@ pub async fn run(command: Option<String>, file: Option<PathBuf>) -> Result<()> {
     // the async runtime's worker threads.
     let result = tokio::task::spawn_blocking(move || {
         let sandbox = shared_sandbox()?;
-        sandbox.exec(&code, &workspace)
+        sandbox.exec(&code, &workspace, b"")
     })
     .await?;
 
