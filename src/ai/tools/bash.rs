@@ -1,3 +1,4 @@
+use super::python::PythonBuiltin;
 use super::registry::{Tool, ToolConfig};
 use crate::ai::chat::workspace::workspace_root;
 use crate::bash::builtins::DEFAULT_HOME;
@@ -149,7 +150,9 @@ pub async fn new_sandbox(
         .map_err(|e| anyhow::anyhow!("Failed to create RealFs: {e}"))?;
     let fs = Arc::new(PosixFs::new(backend));
 
-    let mut builder = Bash::builder();
+    let mut builder = Bash::builder()
+        .builtin("python", Box::new(PythonBuiltin::new(workspace_path)))
+        .builtin("python3", Box::new(PythonBuiltin::new(workspace_path)));
     if let Some(factory) = HQ_BUILTIN_FACTORY.get() {
         builder = builder.builtin("hq", factory(storage_path));
     }
