@@ -1,7 +1,8 @@
 //! Session workspace files: list and preview what a session owns.
 //!
 //! The terminal and the agent's bash tool both operate on
-//! `{storage}/workspace/{session_id}`. These handlers expose that directory to
+//! `{storage}/workspace/{workspace_id}`, where a loop run's transcript session
+//! resolves to its loop's workspace id. These handlers expose that directory to
 //! the chat UI's workspace panel without letting a request escape it.
 
 use std::path::{Component, Path, PathBuf};
@@ -21,6 +22,7 @@ use crate::state::AppState;
 use hq::ai::chat::db::session_exists;
 use hq::ai::chat::models::is_valid_session_id;
 use hq::ai::chat::workspace::workspace_root;
+use hq::loops::db::workspace_id_for_session;
 
 type SharedState = Arc<RwLock<AppState>>;
 
@@ -120,7 +122,10 @@ pub async fn list_workspace_files(
         return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
     }
 
-    let root = workspace_root(&storage_path, &session_id);
+    // A loop run's transcript session is keyed by the run id, but its files
+    // live in the loop's workspace (see `workspace_id_for_session`).
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
+    let root = workspace_root(&storage_path, &workspace_id);
 
     let files = tokio::task::spawn_blocking(move || {
         let mut files = Vec::new();
@@ -154,7 +159,8 @@ pub async fn read_workspace_file(
         return Ok((StatusCode::NOT_FOUND, "Session not found").into_response());
     }
 
-    let root = workspace_root(&storage_path, &session_id);
+    let workspace_id = workspace_id_for_session(&db, &session_id).await?;
+    let root = workspace_root(&storage_path, &workspace_id);
     let target = root.join(&relative);
 
     // Resolve symlinks before reading so a link inside the workspace cannot

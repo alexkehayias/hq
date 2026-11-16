@@ -157,9 +157,9 @@ pub async fn loop_may_emit(db: &Connection, loop_id: &str, channel_id: &str) -> 
 /// A loop runs every event against one shared workspace keyed by the loop id
 /// (see [`crate::loops::supervisor`]), while each run's transcript session is
 /// keyed by the run id. Opening a run's transcript in the chat UI therefore
-/// resolves back to the loop id, so its bash/python tools mount the loop's
-/// existing files instead of an empty per-run directory. Every other session
-/// owns its workspace and resolves to itself.
+/// resolves back to the loop id, so its bash/python tools, terminal, and
+/// workspace panel mount the loop's existing files instead of an empty per-run
+/// directory. Every other session owns its workspace and resolves to itself.
 pub async fn workspace_id_for_session(db: &Connection, session_id: &str) -> Result<String> {
     let id = session_id.to_string();
     let loop_id: Option<String> = db

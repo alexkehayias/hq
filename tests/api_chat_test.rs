@@ -986,6 +986,97 @@ mod tests {
         assert_eq!(body["truncated"], false);
     }
 
+    /// A loop run's transcript session is keyed by the run id, but its
+    /// workspace panel and terminal mount the loop's shared workspace, so the
+    /// run sees the files and shell state the loop itself produced.
+    #[tokio::test]
+    #[serial]
+    async fn it_mounts_the_loop_workspace_for_a_loop_run() {
+        let (app, state) = test_app_with_state().await;
+        let loop_id = "loop-workspace";
+        let run_id = "run-workspace";
+        let second_run_id = "run-workspace-2";
+
+        create_session(&state, run_id).await;
+        create_session(&state, second_run_id).await;
+        create_workspace(&state, loop_id);
+
+        state
+            .db
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO loop (id, system_prompt, tools)
+                     VALUES (?1, 'You are a loop.', '[]')",
+                    [loop_id],
+                )?;
+                for run in [run_id, second_run_id] {
+                    conn.execute(
+                        "INSERT INTO loop_run
+                         (id, loop_id, channel_id, event, status, session_id)
+                         VALUES (?1, ?2, 'alpha', 'event', 'success', ?1)",
+                        rusqlite::params![run, loop_id],
+                    )?;
+                }
+                Ok::<_, rusqlite::Error>(())
+            })
+            .await
+            .unwrap();
+
+        // Files written through the run's terminal land in the loop workspace.
+        run_terminal(
+            &app,
+            run_id,
+            "mkdir -p notes && echo hello > notes/todo.txt",
+        )
+        .await;
+        assert!(
+            workspace_path(&state, loop_id)
+                .join("notes/todo.txt")
+                .exists()
+        );
+
+        // The workspace panel lists the loop's files, not an empty per-run dir.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{run_id}/workspace"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_to_string(response.into_body()).await;
+        assert!(
+            body.contains("\"path\":\"notes/todo.txt\""),
+            "body was: {body}"
+        );
+
+        // The run can preview what the loop wrote.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{run_id}/workspace/notes/todo.txt"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        assert_eq!(body["content"], "hello\n");
+
+        // Another run of the same loop shares the shell, including its cwd.
+        let output = run_terminal(&app, run_id, "cd notes").await;
+        assert_eq!(output["cwd"], "/notes");
+        let output = run_terminal(&app, second_run_id, "pwd").await;
+        assert_eq!(output["cwd"], "/notes");
+        assert_eq!(output["stdout"], "/notes\n");
+    }
+
     /// Missing files return 404 instead of an empty preview.
     #[tokio::test]
     #[serial]
