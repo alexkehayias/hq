@@ -32,3 +32,12 @@ web-ui/node_modules/
 # Tests and examples
 tests/
 examples/
+
+# Python sandbox artifacts. The Docker build compiles the component from
+# guest.py inside the builder, so a locally built wasm must not leak in.
+src/ai/tools/python/sandbox.wasm
+src/ai/tools/python/__pycache__/
+
+# Vendored macOS uv binary. The builder copies the Linux build from the official
+# uv image instead.
+bin/uv

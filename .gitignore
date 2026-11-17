@@ -11,3 +11,7 @@ marginalia.org
 .claude/settings.local.json
 .claude/worktrees
 .hq-data
+
+# Compiled Python sandbox component. `build.rs` generates it from guest.py.
+/src/ai/tools/python/sandbox.wasm
+/src/ai/tools/python/__pycache__/

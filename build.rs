@@ -1,5 +1,6 @@
 //! Generates the migration registry from the files in
-//! `src/core/db/migrations/`.
+//! `src/core/db/migrations/` and builds the embedded Python sandbox component
+//! from `src/ai/tools/python/guest.py`.
 //!
 //! Every `migration_<version>_<name>.rs` file becomes a module and an entry in
 //! `all()`, in version order. Adding a migration is just adding a file; there
@@ -8,13 +9,45 @@
 //! The generated file lives in `OUT_DIR` and is `include!`d by `mod.rs`. The
 //! modules are declared with `#[path]` because a `mod` inside an included file
 //! resolves relative to the included file, not to `mod.rs`.
+//!
+//! # Python sandbox
+//!
+//! `src/ai/tools/python/sandbox.rs` embeds the compiled component with
+//! `include_bytes!`. The ~40 MB artifact is not committed; this script builds
+//! it with `componentize-py` whenever `guest.py` or `sandbox.wit` changes, and
+//! reuses the previous build otherwise (keyed by a content hash in `OUT_DIR`).
+//!
+//! The build shells out to the vendored `bin/uv`, which provisions a pinned
+//! `componentize-py` in an isolated environment, so no Python project setup is
+//! required and no system uv is consulted. There is no fallback: if `bin/uv`
+//! is missing, the build fails. `HQ_UV` overrides the path for platforms the
+//! committed binary does not cover (Linux CI/Docker). Set `HQ_SANDBOX_WASM` to
+//! a prebuilt component to skip componentize-py entirely (useful for offline
+//! or multi-stage builds).
 
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 const MIGRATIONS_DIR: &str = "src/core/db/migrations";
+
+const SANDBOX_DIR: &str = "src/ai/tools/python";
+const SANDBOX_GUEST: &str = "src/ai/tools/python/guest.py";
+const SANDBOX_WIT: &str = "src/ai/tools/python/sandbox.wit";
+const SANDBOX_WASM: &str = "sandbox.wasm";
+const SANDBOX_STAMP: &str = "sandbox.wasm.stamp";
+
+/// Pinned so a rebuild is reproducible and does not pick up a new release
+/// between checkouts. Override with `HQ_COMPONENTIZE_PY_VERSION`.
+const COMPONENTIZE_PY_VERSION: &str = "0.19.3";
+/// Exact patch so a new 3.13.x release cannot silently change the component.
+const PYTHON_VERSION: &str = "3.13.17";
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 struct Discovered {
     version: i64,
@@ -62,6 +95,148 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("migrations.rs");
     fs::write(&out, generated)
         .unwrap_or_else(|err| panic!("failed to write {}: {err}", out.display()));
+
+    build_sandbox_component(&manifest_dir);
+}
+
+/// Build the Python sandbox component into `OUT_DIR/sandbox.wasm`.
+///
+/// The previous build is reused when the content hash of `guest.py`,
+/// `sandbox.wit`, and the `componentize-py` version still matches. A content
+/// hash (rather than mtimes) keeps a fresh checkout or `touch` from triggering
+/// a rebuild, while an actual edit always does.
+fn build_sandbox_component(manifest_dir: &Path) {
+    let sandbox_dir = manifest_dir.join(SANDBOX_DIR);
+    let guest = manifest_dir.join(SANDBOX_GUEST);
+    let wit = manifest_dir.join(SANDBOX_WIT);
+
+    println!("cargo:rerun-if-changed={}", guest.display());
+    println!("cargo:rerun-if-changed={}", wit.display());
+    println!("cargo:rerun-if-env-changed=HQ_SANDBOX_WASM");
+    println!("cargo:rerun-if-env-changed=HQ_COMPONENTIZE_PY_VERSION");
+    println!("cargo:rerun-if-env-changed=HQ_UV");
+
+    let version = env::var("HQ_COMPONENTIZE_PY_VERSION")
+        .unwrap_or_else(|_| COMPONENTIZE_PY_VERSION.to_owned());
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let wasm = out_dir.join(SANDBOX_WASM);
+    let stamp_path = out_dir.join(SANDBOX_STAMP);
+
+    let mut hash = FNV_OFFSET;
+    for path in [&guest, &wit] {
+        let source = fs::read(path).unwrap_or_else(|err| {
+            panic!(
+                "failed to read {}: {err}\n\
+                 The Python sandbox source is required to build hq.",
+                path.display()
+            )
+        });
+        hash_bytes(&mut hash, &source);
+    }
+    hash_bytes(&mut hash, version.as_bytes());
+    hash_bytes(&mut hash, PYTHON_VERSION.as_bytes());
+    let stamp = format!("{hash:016x}");
+
+    // An explicit prebuilt component always wins, and is marked as such so
+    // unsetting `HQ_SANDBOX_WASM` rebuilds from source instead of reusing it.
+    if let Ok(prebuilt) = env::var("HQ_SANDBOX_WASM") {
+        let prebuilt = PathBuf::from(prebuilt);
+        fs::copy(&prebuilt, &wasm).unwrap_or_else(|err| {
+            panic!(
+                "failed to copy HQ_SANDBOX_WASM {} to {}: {err}",
+                prebuilt.display(),
+                wasm.display()
+            )
+        });
+        fs::write(&stamp_path, format!("{stamp}+prebuilt")).expect("failed to write sandbox stamp");
+        return;
+    }
+
+    let current = fs::read_to_string(&stamp_path)
+        .map(|previous| previous.trim() == stamp)
+        .unwrap_or(false);
+    if wasm.exists() && current {
+        return;
+    }
+
+    let uv = uv_path(manifest_dir);
+    eprintln!(
+        "building {} from {} with componentize-py {version} via {}",
+        wasm.display(),
+        guest.display(),
+        uv.display()
+    );
+
+    let output = componentize(&uv, &sandbox_dir, &wasm, &version).unwrap_or_else(|err| {
+        panic!(
+            "failed to run {}: {err}\n\n\
+             Building the Python sandbox requires the vendored uv binary. \
+             Restore it with `git checkout -- bin/uv`, set HQ_UV to a uv \
+             executable, or set HQ_SANDBOX_WASM to a prebuilt component.",
+            uv.display()
+        )
+    });
+
+    if !output.status.success() {
+        panic!(
+            "componentize-py failed ({})\n\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(
+        wasm.exists(),
+        "componentize-py reported success but {} is missing",
+        wasm.display()
+    );
+    fs::write(&stamp_path, stamp).expect("failed to write sandbox stamp");
+}
+
+/// The vendored uv executable. `HQ_UV` overrides the path for platforms the
+/// committed binary does not cover (Linux CI/Docker); there is deliberately no
+/// fallback to a uv on `PATH`, so a build either uses the pinned toolchain or
+/// fails.
+fn uv_path(manifest_dir: &Path) -> PathBuf {
+    if let Ok(uv) = env::var("HQ_UV") {
+        return PathBuf::from(uv);
+    }
+    manifest_dir.join("bin/uv")
+}
+
+/// Run `componentize-py` through the vendored uv, which provisions the pinned
+/// version in an isolated environment.
+fn componentize(uv: &Path, sandbox_dir: &Path, wasm: &Path, version: &str) -> io::Result<Output> {
+    let output = wasm.to_str().expect("OUT_DIR must be valid UTF-8");
+
+    Command::new(uv)
+        .current_dir(sandbox_dir)
+        .args([
+            "run",
+            "--no-project",
+            "--python",
+            PYTHON_VERSION,
+            "--with",
+            &format!("componentize-py=={version}"),
+            "--",
+            "componentize-py",
+            "-d",
+            "sandbox.wit",
+            "componentize",
+            "guest",
+            "-o",
+            output,
+        ])
+        .output()
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
 }
 
 fn discover(dir: &Path) -> Vec<Discovered> {

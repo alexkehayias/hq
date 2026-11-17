@@ -85,6 +85,22 @@ cargo run -p hq-cli -- query "search term" --vector
 cargo run -p hq-cli -- chat
 ```
 
+### Python Sandbox Build
+
+`src/ai/tools/python/sandbox.rs` embeds a ~40 MB WASM component generated from
+`src/ai/tools/python/guest.py`. The artifact is **not committed**; `build.rs`
+compiles it with `componentize-py` when `guest.py` or `sandbox.wit` changes and
+caches it in `OUT_DIR` (keyed by a content hash, so it is not rebuilt on every
+`cargo build`).
+
+- The build shells out to the vendored `bin/uv` (macOS arm64), which provisions
+  the pinned `componentize-py` in an isolated environment. There is no fallback
+  to a system uv: a missing `bin/uv` fails the build.
+- Linux CI/Docker set `HQ_UV` to their uv binary; `HQ_UV` overrides the path.
+- Set `HQ_SANDBOX_WASM` to a prebuilt component to bypass the build.
+- The version is pinned in `build.rs` and mirrored in the Dockerfile and CI
+  workflows; keep them in sync. Override with `HQ_COMPONENTIZE_PY_VERSION`.
+
 ### Web UI
 ```bash
 # Lint with Biome (vendored binary — always run from web-ui/)

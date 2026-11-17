@@ -47,6 +47,21 @@ cargo install --locked watchexec-cli
 ./bin/watch.sh
 ```
 
+## Python sandbox
+
+The `python` tool and the `python`/`python3` shell builtin run guest code in a
+WASM component compiled from `src/ai/tools/python/guest.py`. The ~40 MB
+`sandbox.wasm` is not committed: `build.rs` compiles it with
+[componentize-py](https://github.com/bytecodealliance/componentize-py) the first
+time you build, and again whenever `guest.py` or `sandbox.wit` changes.
+
+The build uses the vendored `bin/uv` (no system install required) to provision
+a pinned `componentize-py`; uv downloads a managed Python 3.13 and the wheel on
+the first build and caches them. There is no fallback to a system uv. On
+platforms the committed binary does not cover (Linux CI/Docker), set `HQ_UV` to
+a uv executable. To skip the build entirely, point `HQ_SANDBOX_WASM` at a
+prebuilt component.
+
 ## Git hooks
 
 A pre-commit hook runs `cargo fmt --all -- --check` and `cargo clippy --all-targets --locked -- -D warnings`, aborting the commit if either fails. Enable it once per clone:

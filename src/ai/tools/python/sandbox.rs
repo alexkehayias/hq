@@ -36,7 +36,9 @@ const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 // The sandbox component is embedded so the binary is self-contained and never
 // loads executable code from the (potentially untrusted) working directory.
-const SANDBOX_WASM: &[u8] = include_bytes!("sandbox.wasm");
+// `build.rs` compiles it from `guest.py` into OUT_DIR; the artifact is not
+// committed.
+const SANDBOX_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sandbox.wasm"));
 
 struct SandboxState {
     wasi_ctx: WasiCtx,
