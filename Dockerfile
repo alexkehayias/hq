@@ -5,6 +5,16 @@
 # fails at link time with "undefined symbol: __isoc23_strtoll".
 FROM rust:trixie AS builder
 
+# `uv` provisions the pinned componentize-py toolchain that build.rs uses to
+# compile the Python sandbox component (src/ai/tools/python/guest.py). The
+# resulting wasm is architecture-independent, so it can be built on either the
+# arm64 host or an amd64 builder.
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
+
+# The committed bin/uv is a macOS arm64 binary, so the builder points build.rs
+# at the Linux build instead. build.rs has no fallback to a uv on PATH.
+ENV HQ_UV=/bin/uv
+
 # The package must not live at the filesystem root. Cargo walks the package
 # directory to fingerprint it whenever a build script is present (build.rs
 # generates the migration registry), so `WORKDIR /` makes it stat the whole
@@ -57,6 +67,10 @@ COPY ./crates/search/Cargo.toml ./crates/search/
 # includes via `env!("OUT_DIR")`. Without it Cargo sets no OUT_DIR and the build fails.
 COPY ./build.rs ./build.rs
 COPY ./src/core/db/migrations ./src/core/db/migrations
+# build.rs also compiles the Python sandbox component into OUT_DIR, so the
+# guest source and WIT must be present for the dependency-only build too.
+COPY ./src/ai/tools/python/guest.py ./src/ai/tools/python/guest.py
+COPY ./src/ai/tools/python/sandbox.wit ./src/ai/tools/python/sandbox.wit
 RUN echo '' > ./src/lib.rs && \
     echo '' > ./crates/bash/src/lib.rs && \
     echo '' > ./crates/api/src/lib.rs && \

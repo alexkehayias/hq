@@ -30,5 +30,16 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+    # build.rs compiles the Python sandbox component with componentize-py,
+    # provisioned through the vendored uv. The committed bin/uv is macOS arm64,
+    # so CI points HQ_UV at the Linux build. Keep the version in sync with the
+    # Dockerfile.
+    - name: Install uv
+      id: setup-uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "0.13.5"
     - name: Run tests
+      env:
+        HQ_UV: ${{ steps.setup-uv.outputs.uv-path }}
       run: cargo test --workspace --locked
