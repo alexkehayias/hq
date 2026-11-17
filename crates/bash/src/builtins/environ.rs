@@ -268,7 +268,7 @@ impl Builtin for History {
 
         let history = shell.history_entries();
         let limits = shell.limits();
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         let matches_entry = |entry: &crate::interpreter::HistoryEntry| {
             if let Some(ref pat) = grep_pattern
                 && !entry.command.contains(pat.as_str())

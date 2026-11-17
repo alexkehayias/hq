@@ -42,8 +42,11 @@ async fn calendar_handler(
         .unwrap_or_else(|| "primary".to_string());
 
     // Get the current time and calculate the end time
-    let now = chrono::Utc::now();
-    let end_time = now + chrono::Duration::days(days_ahead);
+    let now = jiff::Timestamp::now();
+    let seconds = days_ahead
+        .checked_mul(86_400)
+        .ok_or_else(|| anyhow::anyhow!("days_ahead is out of range: {days_ahead}"))?;
+    let end_time = now.checked_add(jiff::SignedDuration::from_secs(seconds))?;
 
     // Fetch upcoming events
     let events = list_events(&access_token, &calendar_id, now, end_time).await?;
@@ -56,8 +59,8 @@ async fn calendar_handler(
             public::CalendarResponse {
                 id: event.id,
                 summary,
-                start: event.start.to_rfc3339(),
-                end: event.end.to_rfc3339(),
+                start: event.start.to_string(),
+                end: event.end.to_string(),
                 attendees: event.attendees.map(|attendees| {
                     attendees
                         .into_iter()

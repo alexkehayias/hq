@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
-use chrono::Local;
+use jiff::ZonedDateTime;
 use once_cell::sync::Lazy;
 use orgize::SyntaxElement;
 use orgize::ast::Drawer;
@@ -108,7 +108,9 @@ where
 /// Format the current local time as an inactive org timestamp:
 /// `[YYYY-MM-DD Ddd HH:MM]`.
 fn now_timestamp() -> String {
-    Local::now().format("[%Y-%m-%d %a %H:%M]").to_string()
+    ZonedDateTime::now()
+        .strftime("[%Y-%m-%d %a %H:%M]")
+        .to_string()
 }
 
 /// Format a state-change logbook entry matching emacs' `org-log-into-drawer`:

@@ -730,7 +730,6 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
- "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -2356,7 +2355,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "chrono",
  "clap",
  "erased-serde",
  "futures",
@@ -2369,6 +2367,7 @@ dependencies = [
  "htmd",
  "http 1.4.2",
  "image",
+ "jiff",
  "libc",
  "mockito",
  "once_cell",
@@ -2405,12 +2404,12 @@ dependencies = [
  "async-stream",
  "axum",
  "axum-extra",
- "chrono",
  "futures-util",
  "hq",
  "hq-bash",
  "http 1.4.2",
  "include_dir",
+ "jiff",
  "mime_guess",
  "serde",
  "serde_json",
@@ -2432,11 +2431,11 @@ dependencies = [
  "base64 0.22.1",
  "bigdecimal",
  "bitflags",
- "chrono",
  "clap",
  "fancy-regex 0.18.0",
  "futures-util",
  "getrandom 0.4.3",
+ "jiff",
  "md-5",
  "num-traits",
  "os_display",
@@ -2458,13 +2457,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
- "chrono",
  "clap",
  "futures",
  "hq",
  "hq-api",
  "hq-bash",
  "http 1.4.2",
+ "jiff",
  "libc",
  "orgize",
  "rustyline",
@@ -3104,6 +3103,58 @@ name = "jetscii"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47f142fe24a9c9944451e8349de0a56af5f3e7226dc46f3ed4d4ecc0b85af75e"
+
+[[package]]
+name = "jiff"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cc767b5763de45e810109520123bb2829a653f3a7ed9be40b2bc4f81158f595"
+dependencies = [
+ "jiff-core",
+ "jiff-static",
+ "jiff-tzdb-platform",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+ "windows-link",
+]
+
+[[package]]
+name = "jiff-core"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "894f7ac42105f584100691b3bf6e6b92dd12fcfa225f6c397f95c8a94b47b68f"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "jiff-static"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "955491488dc99b572ea6d67b172dcd98787d00744b1fb44a5689b4e6413695a6"
+dependencies = [
+ "jiff-core",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "jiff-tzdb"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12e71a1b68a875a44a33bb7a1dd84392cb77145a3367a552a3cfe6a4f5cf3afc"
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc65b284afcfa8f6cf189c7274c805505314a7ab975c60e1f548bff56525420e"
+dependencies = [
+ "jiff-tzdb",
+]
 
 [[package]]
 name = "jni"

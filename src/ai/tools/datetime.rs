@@ -4,7 +4,11 @@ use crate::openai::{
 };
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use chrono::{Days, Months, NaiveDate, NaiveDateTime, Utc};
+use jiff::{
+    Span, Timestamp,
+    civil::{Date, DateTime, Time},
+    tz::TimeZone,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -139,14 +143,14 @@ impl Default for DateTimeTool {
 }
 
 fn current_time() -> String {
-    let now = Utc::now();
-    let day_of_week = now.format("%A").to_string();
-    let iso = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let now = Timestamp::now();
+    let day_of_week = now.strftime("%A").to_string();
+    let iso = now.strftime("%Y-%m-%dT%H:%M:%SZ").to_string();
     format!(
         "Current time: {}\nDay of week: {}\nUnix timestamp: {}",
         iso,
         day_of_week,
-        now.timestamp()
+        now.as_second()
     )
 }
 
@@ -158,33 +162,22 @@ fn add_duration(
     let base_date = parse_date_or_today(date)?;
 
     let after_months = match months {
-        Some(m) if m > 0 => base_date.checked_add_months(Months::new(m as u32)),
-        Some(m) => base_date.checked_sub_months(Months::new(m.unsigned_abs())),
-        None => Some(base_date),
-    }
-    .ok_or_else(|| {
-        anyhow::Error::from(RecoverableToolError::new(
-            "Date overflow when adding months",
-        ))
-    })?;
+        Some(m) => base_date.checked_add(Span::new().months(m)).map_err(|_| {
+            anyhow::Error::from(RecoverableToolError::new(
+                "Date overflow when adding months",
+            ))
+        }),
+        None => Ok(base_date),
+    }?;
 
     let result = match days {
-        Some(d) if d >= 0 => after_months
-            .checked_add_days(Days::new(d as u64))
-            .ok_or_else(|| {
-                anyhow::Error::from(RecoverableToolError::new("Date overflow when adding days"))
-            }),
-        Some(d) => after_months
-            .checked_sub_days(Days::new(d.unsigned_abs()))
-            .ok_or_else(|| {
-                anyhow::Error::from(RecoverableToolError::new(
-                    "Date overflow when subtracting days",
-                ))
-            }),
+        Some(d) => after_months.checked_add(Span::new().days(d)).map_err(|_| {
+            anyhow::Error::from(RecoverableToolError::new("Date overflow when adding days"))
+        }),
         None => Ok(after_months),
     }?;
 
-    Ok(format!("Result: {}", result.format("%Y-%m-%d")))
+    Ok(format!("Result: {}", result.strftime("%Y-%m-%d")))
 }
 
 fn time_until(target: Option<String>, date: Option<String>) -> Result<String, Error> {
@@ -196,24 +189,19 @@ fn time_until(target: Option<String>, date: Option<String>) -> Result<String, Er
 
     let target_dt = parse_datetime(&target_str)?;
     let now = match date {
-        Some(d) => {
-            let base = parse_date_or_today(Some(d))?;
-            base.and_hms_opt(0, 0, 0).ok_or_else(|| {
-                anyhow::Error::from(RecoverableToolError::new("Invalid time conversion"))
-            })?
-        }
-        None => Utc::now().naive_utc(),
+        Some(d) => parse_date_or_today(Some(d))?.to_datetime(Time::midnight()),
+        None => TimeZone::UTC.to_datetime(Timestamp::now()),
     };
 
     let (diff, preposition) = if target_dt > now {
-        (target_dt - now, "until")
+        (now.until(target_dt)?, "until")
     } else {
-        (now - target_dt, "since")
+        (target_dt.until(now)?, "since")
     };
 
-    let total_days = diff.num_days();
-    let remaining_hours = diff.num_hours() - total_days * 24;
-    let remaining_minutes = diff.num_minutes() - diff.num_hours() * 60;
+    let total_days = diff.get_days();
+    let remaining_hours = diff.get_hours();
+    let remaining_minutes = diff.get_minutes();
 
     Ok(format!(
         "{} days, {} hours, {} minutes {} {}",
@@ -221,32 +209,30 @@ fn time_until(target: Option<String>, date: Option<String>) -> Result<String, Er
     ))
 }
 
-fn parse_date_or_today(date: Option<String>) -> Result<NaiveDate, Error> {
+fn parse_date_or_today(date: Option<String>) -> Result<Date, Error> {
     match date {
         Some(d) => {
             let d = d.trim();
-            NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| {
+            Date::strptime("%Y-%m-%d", d).map_err(|_| {
                 anyhow::Error::from(RecoverableToolError::new(&format!(
                     "Invalid date format '{}'. Expected ISO 8601 format: YYYY-MM-DD (e.g. 2026-05-23)",
                     d
                 )))
             })
         }
-        None => Ok(Utc::now().date_naive()),
+        None => Ok(TimeZone::UTC.to_datetime(Timestamp::now()).date()),
     }
 }
 
-fn parse_datetime(s: &str) -> Result<NaiveDateTime, Error> {
+fn parse_datetime(s: &str) -> Result<DateTime, Error> {
     let s = s.trim();
     // Try full datetime format first
-    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+    if let Ok(dt) = DateTime::strptime("%Y-%m-%dT%H:%M:%S", s) {
         return Ok(dt);
     }
     // Try date-only format (assume midnight)
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return d.and_hms_opt(0, 0, 0).ok_or_else(|| {
-            anyhow::Error::from(RecoverableToolError::new("Invalid date conversion"))
-        });
+    if let Ok(d) = Date::strptime("%Y-%m-%d", s) {
+        return Ok(d.to_datetime(Time::midnight()));
     }
     Err(anyhow::Error::from(RecoverableToolError::new(&format!(
         "Invalid datetime format '{}'. Expected ISO 8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS",
@@ -322,7 +308,7 @@ mod tests {
     async fn test_add_duration_no_params_returns_today() -> Result<()> {
         let tool = DateTimeTool::new();
         let result = tool.call(r#"{"operation": "add_duration"}"#).await?;
-        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let today = Timestamp::now().strftime("%Y-%m-%d").to_string();
         assert_eq!(result, format!("Result: {}", today));
         Ok(())
     }

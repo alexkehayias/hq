@@ -3,7 +3,7 @@ use crate::openai::{Function, Parameters, ToolCall, ToolType};
 use crate::types::notes::SearchResponse;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use chrono::Utc;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -22,7 +22,7 @@ pub struct TasksDueTodayTool {
 #[async_trait]
 impl ToolCall for TasksDueTodayTool {
     async fn call(&self, _args: &str) -> Result<String, Error> {
-        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let today = Timestamp::now().strftime("%Y-%m-%d").to_string();
 
         // Build query: deadline:<TODAY> -status:done -status:canceled -title:journal
         let query = format!("deadline:<={} -status:done -status:canceled", today);
@@ -112,7 +112,7 @@ pub struct TasksScheduledTodayTool {
 #[async_trait]
 impl ToolCall for TasksScheduledTodayTool {
     async fn call(&self, _args: &str) -> Result<String, Error> {
-        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let today = Timestamp::now().strftime("%Y-%m-%d").to_string();
 
         // Build query: scheduled:<TODAY> -status:done -status:canceled -title:journal
         let query = format!("scheduled:<={} -status:done -status:canceled", today);

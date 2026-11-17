@@ -9,7 +9,7 @@ async-trait = "0.1.92"
 base64 = "0.22.1"
 bigdecimal = "0.4"
 bitflags = "2"
-chrono = { version = "0.4.45", features = ["serde"] }
+jiff = "1.0.0"
 clap = { version = "4.6.1", features = ["derive"] }
 fancy-regex = "0.18"
 futures-util = "0.3.32"
