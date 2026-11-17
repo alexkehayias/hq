@@ -5,11 +5,13 @@
 //! Additionally, runtime format errors (e.g., timezone unavailable) are
 //! caught and return graceful errors.
 
-use std::fmt::Write;
-
 use async_trait::async_trait;
-use chrono::format::{Item, StrftimeItems};
-use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use jiff::{
+    SignedDuration, Timestamp,
+    civil::{Date as CivilDate, DateTime as CivilDateTime, Time},
+    fmt::{rfc2822::DateTimeParser, strtime},
+    tz::TimeZone,
+};
 
 use super::{Builtin, Context, resolve_path};
 use crate::error::Result;
@@ -52,8 +54,8 @@ use crate::interpreter::ExecResult;
 /// — `fixed_epoch` wins if both are set.
 pub struct Date {
     /// Fixed UTC epoch for virtualized time. None = use real system clock.
-    fixed_epoch: Option<DateTime<Utc>>,
-    /// Constant offset applied to `Utc::now()` when `fixed_epoch` is None.
+    fixed_epoch: Option<Timestamp>,
+    /// Constant offset applied to `Timestamp::now()` when `fixed_epoch` is None.
     offset_seconds: i64,
 }
 
@@ -72,7 +74,7 @@ impl Date {
     }
 
     /// Create a Date builtin with a fixed epoch (for sandboxing).
-    pub fn with_fixed_epoch(epoch: DateTime<Utc>) -> Self {
+    pub fn with_fixed_epoch(epoch: Timestamp) -> Self {
         Self {
             fixed_epoch: Some(epoch),
             offset_seconds: 0,
@@ -89,32 +91,17 @@ impl Date {
         }
     }
 
-    fn now(&self) -> DateTime<Utc> {
+    fn now(&self) -> Timestamp {
         if let Some(t) = self.fixed_epoch {
             return t;
         }
         if self.offset_seconds == 0 {
-            return Utc::now();
+            return Timestamp::now();
         }
-        Utc::now()
-            .checked_add_signed(chrono::Duration::seconds(self.offset_seconds))
-            .unwrap_or_else(Utc::now)
+        Timestamp::now()
+            .checked_add(SignedDuration::from_secs(self.offset_seconds))
+            .unwrap_or_else(|_| Timestamp::now())
     }
-}
-
-/// Validate a strftime format string.
-/// Returns Ok(()) if valid, or an error message describing the issue.
-///
-/// THREAT[TM-INT-003]: chrono::format() can panic on invalid format specifiers
-/// Mitigation: Pre-validate format string and return human-readable error
-fn validate_format(format: &str) -> std::result::Result<(), String> {
-    // StrftimeItems parses the format string and yields Item::Error for invalid specifiers
-    for item in StrftimeItems::new(format) {
-        if let Item::Error = item {
-            return Err(format!("invalid format string: '{}'", format));
-        }
-    }
-    Ok(())
 }
 
 /// Strip surrounding quotes from a string (handles parser bug where
@@ -135,7 +122,7 @@ fn uses_epoch_input(s: &str) -> bool {
 }
 
 /// Parse a base date expression (no compound modifiers).
-fn parse_base_date(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTime<Utc>, String> {
+fn parse_base_date(s: &str, now: Timestamp) -> std::result::Result<Timestamp, String> {
     let lower = s.to_lowercase();
 
     // Epoch timestamp: @1234567890
@@ -144,62 +131,59 @@ fn parse_base_date(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTime<
             .trim()
             .parse()
             .map_err(|_| format!("invalid date '{}'", s))?;
-        return DateTime::from_timestamp(ts, 0).ok_or_else(|| format!("invalid date '{}'", s));
+        return Timestamp::from_second(ts).map_err(|_| format!("invalid date '{}'", s));
     }
 
     // Special words
     match lower.as_str() {
         "now" => return Ok(now),
-        "yesterday" => return Ok(now - Duration::days(1)),
-        "tomorrow" => return Ok(now + Duration::days(1)),
+        "yesterday" => {
+            return now
+                .checked_sub(SignedDuration::from_secs(86_400))
+                .map_err(|_| format!("date out of range: '{}'", s));
+        }
+        "tomorrow" => {
+            return now
+                .checked_add(SignedDuration::from_secs(86_400))
+                .map_err(|_| format!("date out of range: '{}'", s));
+        }
         _ => {}
     }
 
     // Relative: "N unit(s) ago" or "+N unit(s)" or "-N unit(s)"
     if let Some(duration) = parse_relative_date(&lower) {
         return now
-            .checked_add_signed(duration)
-            .ok_or_else(|| format!("date out of range: '{}'", s));
+            .checked_add(duration)
+            .map_err(|_| format!("date out of range: '{}'", s));
     }
 
     // Try ISO-like formats: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD
-    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+    if let Ok(dt) = CivilDateTime::strptime("%Y-%m-%d %H:%M:%S", s) {
         return local_naive_to_utc(dt, s);
     }
-    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+    if let Ok(dt) = CivilDateTime::strptime("%Y-%m-%dT%H:%M:%S", s) {
         return local_naive_to_utc(dt, s);
     }
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let dt = d
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| format!("invalid date '{}'", s))?;
-        return local_naive_to_utc(dt, s);
+    if let Ok(d) = CivilDate::strptime("%Y-%m-%d", s) {
+        return local_naive_to_utc(d.to_datetime(Time::midnight()), s);
     }
 
     // Try "Mon DD, YYYY" format
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%b %d, %Y") {
-        let dt = d
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| format!("invalid date '{}'", s))?;
-        return local_naive_to_utc(dt, s);
+    if let Ok(d) = CivilDate::strptime("%b %d, %Y", s) {
+        return local_naive_to_utc(d.to_datetime(Time::midnight()), s);
     }
 
     // Try RFC 2822: "Mon, 06 Apr 2026 12:00:00 +0000"
-    // GNU date ignores incorrect day-of-week, so if strict parsing fails we
-    // strip the DOW prefix and retry — chrono validates DOW strictly.
-    if let Ok(dt) = DateTime::parse_from_rfc2822(s) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    if let Some((_, rest)) = s.split_once(", ") {
-        // Parse the date/time/tz portion directly, bypassing DOW validation.
-        if let Ok(dt) = DateTime::parse_from_str(rest.trim(), "%d %b %Y %H:%M:%S %z") {
-            return Ok(dt.with_timezone(&Utc));
-        }
+    // GNU date ignores an incorrect day-of-week, so the weekday check is
+    // relaxed here.
+    static RFC2822_PARSER: DateTimeParser = DateTimeParser::new().relaxed_weekday(true);
+    if let Ok(dt) = RFC2822_PARSER.parse_timestamp(s) {
+        return Ok(dt);
     }
 
     // Try RFC 3339 / ISO 8601 with timezone: "2024-01-15T12:00:00+00:00"
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
+    if let Ok(dt) = s.parse::<Timestamp>() {
+        return Ok(dt);
     }
 
     Err(format!("date: invalid date '{}'", s))
@@ -215,7 +199,7 @@ fn parse_base_date(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTime<
 /// Supports compound expressions (base ± modifier):
 ///   "2024-01-15 + 30 days", "yesterday - 2 hours",
 ///   "@1700000000 + 1 week", "2024-01-15 - 1 month"
-fn parse_date_string(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTime<Utc>, String> {
+fn parse_date_string(s: &str, now: Timestamp) -> std::result::Result<Timestamp, String> {
     let s = strip_surrounding_quotes(s.trim());
 
     // Try compound expression: <base> [+-] <N unit(s)>
@@ -245,8 +229,8 @@ fn parse_date_string(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTim
                 )
                 .ok_or_else(|| format!("date out of range: '{}'", s))?;
                 return base_dt
-                    .checked_add_signed(offset)
-                    .ok_or_else(|| format!("date out of range: '{}'", s));
+                    .checked_add(offset)
+                    .map_err(|_| format!("date out of range: '{}'", s));
             }
         }
     }
@@ -254,20 +238,14 @@ fn parse_date_string(s: &str, now: DateTime<Utc>) -> std::result::Result<DateTim
     parse_base_date(s, now)
 }
 
-fn local_naive_to_utc(
-    dt: NaiveDateTime,
-    original: &str,
-) -> std::result::Result<DateTime<Utc>, String> {
-    Local
-        .from_local_datetime(&dt)
-        .single()
-        .or_else(|| Local.from_local_datetime(&dt).earliest())
-        .map(|local_dt| local_dt.with_timezone(&Utc))
-        .ok_or_else(|| format!("date: invalid date '{}'", original))
+fn local_naive_to_utc(dt: CivilDateTime, original: &str) -> std::result::Result<Timestamp, String> {
+    TimeZone::system()
+        .to_timestamp(dt)
+        .map_err(|_| format!("date: invalid date '{}'", original))
 }
 
 /// Parse relative date expressions like "30 days ago", "+2 weeks", "-1 month"
-fn parse_relative_date(s: &str) -> Option<Duration> {
+fn parse_relative_date(s: &str) -> Option<SignedDuration> {
     // "N unit(s) ago"
     let re_ago =
         regex::Regex::new(r"^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$").ok()?;
@@ -298,92 +276,75 @@ fn parse_relative_date(s: &str) -> Option<Duration> {
     None
 }
 
-// Returns None when the requested offset overflows i64 (the multiply) or the
-// chrono Duration range, so callers can report "date out of range" instead of
-// panicking on inputs like `date -d "30000000000000000 years"`.
-fn unit_duration(unit: &str, n: i64) -> Option<Duration> {
-    match unit {
-        "second" => Duration::try_seconds(n),
-        "minute" => Duration::try_minutes(n),
-        "hour" => Duration::try_hours(n),
-        "day" => Duration::try_days(n),
-        "week" => Duration::try_weeks(n),
-        "month" => n.checked_mul(30).and_then(Duration::try_days), // Approximate
-        "year" => n.checked_mul(365).and_then(Duration::try_days), // Approximate
-        _ => Some(Duration::zero()),
-    }
-}
-
-/// Expand `%N` (nanoseconds) in a format string, replacing it with the
-/// zero-padded nanosecond value from the given datetime.
-fn expand_nanoseconds(format: &str, nanos: u32) -> String {
-    // Replace %N with the 9-digit nanosecond value
-    // Must not replace %%N (literal %N)
-    let mut result = String::with_capacity(format.len());
-    let mut chars = format.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '%' {
-            match chars.peek() {
-                Some(&'%') => {
-                    // %% → pass through both (chrono will render as literal %)
-                    result.push('%');
-                    result.push('%');
-                    chars.next();
-                }
-                Some(&'N') => {
-                    chars.next();
-                    let _ = write!(result, "{:09}", nanos);
-                }
-                _ => {
-                    result.push('%');
-                }
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-    result
+// Returns None when the requested offset overflows i64, so callers can report
+// "date out of range" instead of panicking on inputs like
+// `date -d "30000000000000000 years"`.
+fn unit_duration(unit: &str, n: i64) -> Option<SignedDuration> {
+    let seconds_per_unit: i64 = match unit {
+        "second" => 1,
+        "minute" => 60,
+        "hour" => 60 * 60,
+        "day" => 24 * 60 * 60,
+        "week" => 7 * 24 * 60 * 60,
+        "month" => 30 * 24 * 60 * 60, // Approximate
+        "year" => 365 * 24 * 60 * 60, // Approximate
+        _ => return Some(SignedDuration::ZERO),
+    };
+    n.checked_mul(seconds_per_unit)
+        .map(SignedDuration::from_secs)
 }
 
 /// Format an RFC 2822 date string from a UTC datetime.
-fn format_rfc2822(dt: &DateTime<Utc>, force_utc: bool) -> String {
+fn format_rfc2822(dt: &Timestamp, force_utc: bool) -> String {
     if force_utc {
-        dt.format("%a, %d %b %Y %H:%M:%S +0000").to_string()
+        dt.to_zoned_datetime(TimeZone::UTC)
+            .strftime("%a, %d %b %Y %H:%M:%S +0000")
+            .to_string()
     } else {
-        let local_dt: DateTime<Local> = (*dt).into();
-        local_dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()
+        dt.to_zoned_datetime(TimeZone::system())
+            .strftime("%a, %d %b %Y %H:%M:%S %z")
+            .to_string()
     }
 }
 
 /// Format an ISO 8601 date string.
-fn format_iso8601(dt: &DateTime<Utc>, force_utc: bool, precision: &str) -> String {
+fn format_iso8601(dt: &Timestamp, force_utc: bool, precision: &str) -> String {
     match precision {
         "hours" => {
             if force_utc {
-                dt.format("%Y-%m-%dT%H+00:00").to_string()
+                dt.to_zoned_datetime(TimeZone::UTC)
+                    .strftime("%Y-%m-%dT%H+00:00")
+                    .to_string()
             } else {
-                let local_dt: DateTime<Local> = (*dt).into();
-                local_dt.format("%Y-%m-%dT%H%:z").to_string()
+                dt.to_zoned_datetime(TimeZone::system())
+                    .strftime("%Y-%m-%dT%H%:z")
+                    .to_string()
             }
         }
         "minutes" => {
             if force_utc {
-                dt.format("%Y-%m-%dT%H:%M+00:00").to_string()
+                dt.to_zoned_datetime(TimeZone::UTC)
+                    .strftime("%Y-%m-%dT%H:%M+00:00")
+                    .to_string()
             } else {
-                let local_dt: DateTime<Local> = (*dt).into();
-                local_dt.format("%Y-%m-%dT%H:%M%:z").to_string()
+                dt.to_zoned_datetime(TimeZone::system())
+                    .strftime("%Y-%m-%dT%H:%M%:z")
+                    .to_string()
             }
         }
         "seconds" | "s" => {
             if force_utc {
-                dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+                dt.to_zoned_datetime(TimeZone::UTC)
+                    .strftime("%Y-%m-%dT%H:%M:%S+00:00")
+                    .to_string()
             } else {
-                let local_dt: DateTime<Local> = (*dt).into();
-                local_dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+                dt.to_zoned_datetime(TimeZone::system())
+                    .strftime("%Y-%m-%dT%H:%M:%S%:z")
+                    .to_string()
             }
         }
         // "date" or default
-        _ => dt.format("%Y-%m-%d").to_string(),
+        _ => dt.strftime("%Y-%m-%d").to_string(),
     }
 }
 
@@ -456,10 +417,18 @@ impl Builtin for Date {
             // Resolve relative paths against CWD (fix for issue #1225)
             let path = resolve_path(ctx.cwd, file);
             match ctx.fs.stat(&path).await {
-                Ok(meta) => {
-                    dt_utc = meta.modified.into();
-                    epoch_input = false;
-                }
+                Ok(meta) => match Timestamp::try_from(meta.modified) {
+                    Ok(ts) => {
+                        dt_utc = ts;
+                        epoch_input = false;
+                    }
+                    Err(_) => {
+                        return Ok(ExecResult::err(
+                            format!("date: cannot stat '{}': Invalid modification time\n", file),
+                            1,
+                        ));
+                    }
+                },
                 Err(_) => {
                     return Ok(ExecResult::err(
                         format!("date: cannot stat '{}': No such file or directory\n", file),
@@ -504,35 +473,21 @@ impl Builtin for Date {
             None => &default_format,
         };
 
-        // Expand %N before chrono validation (chrono doesn't know %N)
-        let nanos = dt_utc.timestamp_subsec_nanos();
-        let format = expand_nanoseconds(format, nanos);
-
-        // SECURITY: Validate format string before use to prevent panics
-        // THREAT[TM-INT-003]: Invalid format strings could cause chrono to panic
-        if let Err(e) = validate_format(&format) {
-            return Ok(ExecResult {
-                stdout: String::new(),
-                stderr: format!("date: {}\n", e),
-                exit_code: 1,
-                control_flow: crate::interpreter::ControlFlow::None,
-                ..Default::default()
-            });
-        }
-
         // Format the date, handling potential errors gracefully.
-        let mut output = String::new();
-        let format_result = if force_utc {
-            write!(output, "{}", dt_utc.format(&format))
+        // THREAT[TM-INT-003]: Invalid format strings must not panic; jiff's
+        // strict formatter reports them as errors instead.
+        let zoned = if force_utc {
+            dt_utc.to_zoned_datetime(TimeZone::UTC)
         } else {
-            let local_dt: DateTime<Local> = dt_utc.into();
-            write!(output, "{}", local_dt.format(&format))
+            dt_utc.to_zoned_datetime(TimeZone::system())
         };
 
-        match format_result {
-            Ok(()) => Ok(ExecResult::ok(format!("{}\n", output))),
+        match strtime::format(format, &zoned) {
+            Ok(output) => Ok(ExecResult::ok(format!("{}\n", output))),
+            // Normalize the error instead of surfacing jiff's internal
+            // phrasing (TM-INF-022).
             Err(_) => Ok(ExecResult::err(
-                format!("date: failed to format date with '{}'\n", format),
+                format!("date: invalid format string: '{}'\n", format),
                 1,
             )),
         }
@@ -586,7 +541,7 @@ mod tests {
     /// TM-INF-018: fixed_epoch wins over real clock.
     #[test]
     fn date_fixed_epoch_returns_fixed_time() {
-        let fixed = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let fixed = Timestamp::from_second(1_700_000_000).unwrap();
         let d = Date::with_fixed_epoch(fixed);
         assert_eq!(d.now(), fixed);
     }
@@ -598,11 +553,15 @@ mod tests {
     fn date_offset_seconds_shifts_real_clock() {
         let offset: i64 = 365 * 24 * 60 * 60; // +1 year
         let d = Date::with_offset_seconds(offset);
-        let before = Utc::now();
+        let before = Timestamp::now();
         let observed = d.now();
-        let after = Utc::now();
-        let expected_low = before + chrono::Duration::seconds(offset);
-        let expected_high = after + chrono::Duration::seconds(offset);
+        let after = Timestamp::now();
+        let expected_low = before
+            .checked_add(SignedDuration::from_secs(offset))
+            .unwrap();
+        let expected_high = after
+            .checked_add(SignedDuration::from_secs(offset))
+            .unwrap();
         assert!(
             observed >= expected_low && observed <= expected_high,
             "offset clock {observed} not in [{expected_low}, {expected_high}]"
@@ -614,7 +573,7 @@ mod tests {
     /// fields are pub(crate)-ish and could be combined directly).
     #[test]
     fn date_fixed_epoch_overrides_offset() {
-        let fixed = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let fixed = Timestamp::from_second(1_700_000_000).unwrap();
         let d = Date {
             fixed_epoch: Some(fixed),
             offset_seconds: 99_999,
@@ -626,9 +585,9 @@ mod tests {
     #[test]
     fn date_zero_offset_uses_real_clock() {
         let d = Date::with_offset_seconds(0);
-        let before = Utc::now();
+        let before = Timestamp::now();
         let observed = d.now();
-        let after = Utc::now();
+        let after = Timestamp::now();
         assert!(observed >= before && observed <= after);
     }
 
@@ -719,7 +678,6 @@ mod tests {
         } else {
             // Failed gracefully: should have error message
             assert!(result.stderr.contains("date:"));
-            assert!(result.stderr.contains("failed to format"));
         }
     }
 
@@ -755,7 +713,7 @@ mod tests {
     #[tokio::test]
     async fn test_date_invalid_format_specifier() {
         // Invalid format specifier should return error, not panic
-        let result = run_date(&["+%Q"]).await;
+        let result = run_date(&["+%J"]).await;
         assert_eq!(result.exit_code, 1);
         assert!(result.stderr.contains("invalid format string"));
         assert!(result.stdout.is_empty());
@@ -772,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn test_date_mixed_valid_invalid_format() {
         // Mix of valid and invalid should still error
-        let result = run_date(&["+%Y-%Q-%d"]).await;
+        let result = run_date(&["+%Y-%J-%d"]).await;
         assert_eq!(result.exit_code, 1);
         assert!(result.stderr.contains("invalid format string"));
     }
@@ -795,8 +753,8 @@ mod tests {
         assert_eq!(date.len(), 10);
     }
 
-    /// Relative offsets that overflow i64 or the chrono range must report an
-    /// error, not panic (e.g. `n * 365` in unit_duration, then base + offset).
+    /// Relative offsets that overflow i64 or the timestamp range must report
+    /// an error, not panic (e.g. `n * 365` in unit_duration, then base + offset).
     #[tokio::test]
     async fn test_date_d_relative_overflow_no_panic() {
         for spec in [
@@ -1059,18 +1017,11 @@ mod tests {
         assert_eq!(parts[1].len(), 9);
     }
 
-    #[test]
-    fn test_expand_nanoseconds_basic() {
-        assert_eq!(expand_nanoseconds("%N", 123456789), "123456789");
-        assert_eq!(expand_nanoseconds("%N", 0), "000000000");
-        assert_eq!(expand_nanoseconds("%S.%N", 42), "%S.000000042");
-    }
-
-    #[test]
-    fn test_expand_nanoseconds_double_percent() {
-        // %%N should become %N (literal %) after chrono processes %%
-        // We only expand single %N, not %%N
-        assert_eq!(expand_nanoseconds("%%N", 123), "%%N");
+    #[tokio::test]
+    async fn test_nanoseconds_double_percent() {
+        // %%N is a literal `%N`, not the nanosecond field.
+        let result = run_date(&["+%%N"]).await;
+        assert_eq!(result.stdout.trim(), "%N");
     }
 
     // Helper to run date with a pre-configured filesystem
@@ -1178,7 +1129,7 @@ mod tests {
         assert!(tz.contains("UTC") || tz == "+0000" || tz == "+00:00");
     }
 
-    // TM-INF-022: invalid-date stderr must not leak `chrono` Debug shapes.
+    // TM-INF-022: invalid-date stderr must not leak `jiff` Debug shapes.
     #[tokio::test]
     async fn no_leak_invalid_format() {
         let r =
@@ -1186,7 +1137,7 @@ mod tests {
         crate::builtins::debug_leak_check::assert_no_leak(
             &r,
             "date_invalid_format",
-            &["chrono::ParseError", "ParseError {"],
+            &["jiff::", "Error {", "Timestamp {"],
         );
     }
 }

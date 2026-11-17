@@ -5,8 +5,8 @@
 //! as it's super bespoke and edge-case-y.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
-use chrono::{Duration, Utc};
 use htmd::HtmlToMarkdown;
+use jiff::{SignedDuration, Timestamp};
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -508,8 +508,12 @@ pub async fn list_unread_messages(
     n_days: i64,
 ) -> Result<Vec<MessageResponse>, anyhow::Error> {
     let client = Client::new();
-    let after_date = (Utc::now() - Duration::days(n_days))
-        .format("%Y/%m/%d")
+    let seconds = n_days
+        .checked_mul(86_400)
+        .ok_or_else(|| anyhow::anyhow!("invalid day offset: {}", n_days))?;
+    let after_date = Timestamp::now()
+        .checked_sub(SignedDuration::from_secs(seconds))?
+        .strftime("%Y/%m/%d")
         .to_string();
     let url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",
@@ -1073,8 +1077,10 @@ mod tests {
 
         // Override the URL construction to use mock server
         let client = reqwest::Client::new();
-        let after_date = (chrono::Utc::now() - chrono::Duration::days(1))
-            .format("%Y/%m/%d")
+        let after_date = jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_hours(24))
+            .unwrap()
+            .strftime("%Y/%m/%d")
             .to_string();
         let request_url = format!(
             "{}/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",
@@ -1164,8 +1170,10 @@ mod tests {
             .create();
 
         let client = reqwest::Client::new();
-        let after_date = (chrono::Utc::now() - chrono::Duration::days(1))
-            .format("%Y/%m/%d")
+        let after_date = jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_hours(24))
+            .unwrap()
+            .strftime("%Y/%m/%d")
             .to_string();
         let request_url = format!(
             "{}/gmail/v1/users/me/messages?labelIds=UNREAD&q=is:unread%20after:{}%20in:inbox",

@@ -1,7 +1,7 @@
 //! Google Calendar API client for listing meetings and attendees
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct Event {
     pub id: String,
     pub summary: Option<String>,
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
+    pub start: Timestamp,
+    pub end: Timestamp,
     pub attendees: Option<Vec<Attendee>>,
 }
 
@@ -68,18 +68,18 @@ impl From<CalendarEvent> for Event {
         Event {
             id: calendar_event.id,
             summary: calendar_event.summary,
-            start: DateTime::parse_from_rfc3339(start)
+            start: start
+                .parse::<Timestamp>()
                 .inspect_err(|e| {
                     tracing::error!("Error {} while parsing start date {}", start, e.to_string());
                 })
-                .unwrap()
-                .with_timezone(&Utc),
-            end: DateTime::parse_from_rfc3339(end)
+                .unwrap(),
+            end: end
+                .parse::<Timestamp>()
                 .inspect_err(|e| {
                     tracing::error!("Error {} while parsing end date {}", start, e.to_string());
                 })
-                .unwrap()
-                .with_timezone(&Utc),
+                .unwrap(),
             attendees: calendar_event
                 .attendees
                 .map(|atts| atts.into_iter().map(|a| a.into()).collect()),
@@ -100,8 +100,8 @@ impl From<EventAttendee> for Attendee {
 pub async fn list_events(
     access_token: &str,
     calendar_id: &str,
-    start_time: DateTime<Utc>,
-    end_time: DateTime<Utc>,
+    start_time: Timestamp,
+    end_time: Timestamp,
 ) -> Result<Vec<Event>> {
     let client = Client::new();
     let url = format!(
@@ -113,8 +113,8 @@ pub async fn list_events(
         .get(&url)
         .bearer_auth(access_token)
         .query(&[
-            ("timeMin", start_time.to_rfc3339()),
-            ("timeMax", end_time.to_rfc3339()),
+            ("timeMin", start_time.to_string()),
+            ("timeMax", end_time.to_string()),
             ("singleEvents", "true".to_string()),
             ("orderBy", "startTime".to_string()),
         ])
@@ -153,8 +153,8 @@ mod tests {
             .with_body(mock_resp)
             .create();
 
-        let start: DateTime<Utc> = Utc::now();
-        let end: DateTime<Utc> = Utc::now();
+        let start = Timestamp::now();
+        let end = Timestamp::now();
         let result = list_events("fake-token", "primary", start, end).await;
 
         assert!(result.is_ok());

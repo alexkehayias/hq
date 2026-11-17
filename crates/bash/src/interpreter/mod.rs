@@ -1423,9 +1423,8 @@ impl Interpreter {
         builtins.insert(
             "date".to_string(),
             Arc::new(if let Some(epoch) = fixed_epoch {
-                use chrono::DateTime;
                 builtins::Date::with_fixed_epoch(
-                    DateTime::from_timestamp(epoch, 0).unwrap_or_default(),
+                    jiff::Timestamp::from_second(epoch).unwrap_or_default(),
                 )
             } else if let Some(offset) = epoch_offset {
                 builtins::Date::with_offset_seconds(offset)

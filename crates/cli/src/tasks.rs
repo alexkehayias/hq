@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use chrono::Local;
+use jiff::ZonedDateTime;
 use orgize::rowan::ast::AstNode;
 use tokio::fs;
 use tokio_rusqlite::{Connection, rusqlite};
@@ -35,7 +35,7 @@ fn is_archive_path(path: &std::path::Path) -> bool {
 /// appended.
 fn project_file_path(notes_path: &str, project_name: &str) -> Result<PathBuf> {
     let slug = slugify(project_name)?;
-    let today = Local::now().format("%Y-%m-%d");
+    let today = ZonedDateTime::now().strftime("%Y-%m-%d").to_string();
 
     // Special files (capture, refile, personal, work) are addressed by their
     // bare name with no date prefix — e.g. `work.org` rather than
@@ -57,7 +57,7 @@ async fn create_project_file(
 ) -> Result<PathBuf> {
     let project_id = Uuid::new_v4().to_string();
     let slug = slugify(project_name)?;
-    let today = Local::now().format("%Y-%m-%d");
+    let today = ZonedDateTime::now().strftime("%Y-%m-%d").to_string();
     let special = projects::db::is_special_file(project_name);
     let full_path = project_file_path(notes_path, project_name)?;
     let filename = full_path
@@ -177,7 +177,7 @@ pub async fn run_create(
                 fs::read_to_string(&capture_path).await?
             } else {
                 let capture_id = Uuid::new_v4().to_string();
-                let today = Local::now().format("%Y-%m-%d");
+                let today = ZonedDateTime::now().strftime("%Y-%m-%d").to_string();
                 org::Document::builder()
                     .property("ID", &capture_id)
                     .title("Capture")

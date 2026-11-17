@@ -82,7 +82,9 @@ fn format_event(event: &Event<'_>) -> Option<String> {
 
 /// Current UTC time as an RFC 3339 string with second precision.
 fn timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    jiff::Timestamp::now()
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
 }
 
 /// Collects an event's `message` and remaining fields for formatting.

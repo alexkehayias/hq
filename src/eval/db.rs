@@ -18,7 +18,7 @@ pub async fn insert_run(db: &Connection, id: &str, name: &str, model: &str) -> a
 }
 
 pub async fn update_run_status(db: &Connection, run_id: &str, status: &str) -> anyhow::Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = jiff::Timestamp::now().to_string();
     let run_id = run_id.to_string();
     let status = status.to_string();
 

@@ -3,7 +3,11 @@
 // and `touch -t` stay consistent across in-memory, overlay, and realfs backends.
 
 use async_trait::async_trait;
-use chrono::{Datelike, Local, LocalResult, NaiveDate, TimeZone};
+use jiff::{
+    ZonedDateTime,
+    civil::{Date, Time},
+    tz::TimeZone,
+};
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -327,7 +331,7 @@ fn parse_touch_timestamp(raw: &str) -> std::result::Result<SystemTime, String> {
                 return Err(format!("touch: invalid date format '{}'\n", raw));
             }
             let seconds = seconds
-                .parse::<u32>()
+                .parse::<i8>()
                 .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
             (main, seconds)
         }
@@ -339,44 +343,42 @@ fn parse_touch_timestamp(raw: &str) -> std::result::Result<SystemTime, String> {
     }
 
     let year = match main.len() {
-        8 => Local::now().year(),
+        8 => ZonedDateTime::now().year(),
         10 => {
             let yy = main[0..2]
-                .parse::<i32>()
+                .parse::<i16>()
                 .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
             if yy >= 69 { 1900 + yy } else { 2000 + yy }
         }
         12 => main[0..4]
-            .parse::<i32>()
+            .parse::<i16>()
             .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?,
         _ => return Err(format!("touch: invalid date format '{}'\n", raw)),
     };
 
     let offset = main.len() - 8;
     let month = main[offset..offset + 2]
-        .parse::<u32>()
+        .parse::<i8>()
         .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
     let day = main[offset + 2..offset + 4]
-        .parse::<u32>()
+        .parse::<i8>()
         .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
     let hour = main[offset + 4..offset + 6]
-        .parse::<u32>()
+        .parse::<i8>()
         .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
     let minute = main[offset + 6..offset + 8]
-        .parse::<u32>()
+        .parse::<i8>()
         .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
 
-    let naive = NaiveDate::from_ymd_opt(year, month, day)
-        .and_then(|date| date.and_hms_opt(hour, minute, seconds))
-        .ok_or_else(|| format!("touch: invalid date format '{}'\n", raw))?;
+    let date = Date::new(year, month, day)
+        .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
+    let time = Time::new(hour, minute, seconds, 0)
+        .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
+    let timestamp = TimeZone::system()
+        .to_timestamp(date.to_datetime(time))
+        .map_err(|_| format!("touch: invalid date format '{}'\n", raw))?;
 
-    let local = match Local.from_local_datetime(&naive) {
-        LocalResult::Single(dt) => dt,
-        LocalResult::Ambiguous(dt, _) => dt,
-        LocalResult::None => return Err(format!("touch: invalid date format '{}'\n", raw)),
-    };
-
-    Ok(local.into())
+    SystemTime::try_from(timestamp).map_err(|_| format!("touch: invalid date format '{}'\n", raw))
 }
 
 #[async_trait]
@@ -947,7 +949,6 @@ impl Builtin for Mktemp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Datelike, Local, Timelike};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1078,7 +1079,7 @@ mod tests {
         assert_eq!(result.exit_code, 0);
 
         let metadata = fs.stat(&file).await.unwrap();
-        let modified: DateTime<Local> = metadata.modified.into();
+        let modified = ZonedDateTime::try_from(metadata.modified).unwrap();
         assert_eq!(modified.year(), 2026);
         assert_eq!(modified.month(), 4);
         assert_eq!(modified.day(), 6);
