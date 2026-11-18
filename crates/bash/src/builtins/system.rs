@@ -16,7 +16,7 @@ use crate::interpreter::ExecResult;
 
 /// Default virtual hostname.
 /// Using a clearly fake name prevents confusion with real hosts.
-pub const DEFAULT_HOSTNAME: &str = "bashkit-sandbox";
+pub const DEFAULT_HOSTNAME: &str = "bash-sandbox";
 
 /// Default virtual username.
 pub const DEFAULT_USERNAME: &str = "sandbox";
@@ -25,7 +25,7 @@ pub const DEFAULT_USERNAME: &str = "sandbox";
 ///
 /// This is the directory [`InMemoryFs`](crate::fs::InMemoryFs) creates and
 /// the initial working directory, so `cd ~` always lands somewhere that exists.
-pub const DEFAULT_HOME: &str = "/home/user";
+pub const DEFAULT_HOME: &str = "/";
 
 /// Hardcoded virtual user ID.
 pub const SANDBOX_UID: u32 = 1000;
@@ -336,7 +336,7 @@ mod tests {
     #[tokio::test]
     async fn test_hostname_returns_sandbox() {
         let result = run_builtin(&Hostname::new(), &[]).await;
-        assert_eq!(result.stdout, "bashkit-sandbox\n");
+        assert_eq!(result.stdout, "bash-sandbox\n");
         assert_eq!(result.exit_code, 0);
     }
 
@@ -364,7 +364,7 @@ mod tests {
     async fn test_uname_all() {
         let result = run_builtin(&Uname::new(), &["-a"]).await;
         assert!(result.stdout.contains("Linux"));
-        assert!(result.stdout.contains("bashkit-sandbox"));
+        assert!(result.stdout.contains("bash-sandbox"));
         assert!(result.stdout.contains("x86_64"));
     }
 
@@ -377,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn test_uname_nodename() {
         let result = run_builtin(&Uname::new(), &["-n"]).await;
-        assert_eq!(result.stdout, "bashkit-sandbox\n");
+        assert_eq!(result.stdout, "bash-sandbox\n");
     }
 
     #[tokio::test]
