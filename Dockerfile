@@ -77,7 +77,14 @@ RUN echo '' > ./src/lib.rs && \
     echo '' > ./crates/cli/src/lib.rs && \
     echo '' > ./crates/search/src/lib.rs && \
     echo 'fn main() {}' > ./crates/cli/src/main.rs
-RUN cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets -p hq-cli
+# The stubbed CLI source references none of its dependencies, so Cargo's
+# workspace-wide unused_dependencies lint flags the ones used only by the CLI
+# (hq-api, rustyline). They are used by the real sources, so allow the lint for
+# this dependency-only build and restore the manifest for the real build.
+RUN cp ./crates/cli/Cargo.toml /tmp/cli-Cargo.toml && \
+    printf '\n[lints.cargo]\nunused_dependencies = "allow"\n' >> ./crates/cli/Cargo.toml && \
+    cargo build --release --target x86_64-unknown-linux-gnu --locked --features embed-assets -p hq-cli && \
+    mv /tmp/cli-Cargo.toml ./crates/cli/Cargo.toml
 
 ## Actually build the app
 COPY ./src ./src
