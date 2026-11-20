@@ -61,6 +61,10 @@ pub struct MessagePart {
     #[serde(rename = "mimeType")]
     pub mimetype: String,
     pub body: Option<MessagePartBody>,
+    /// Child parts of a `multipart/*` part. Gmail nests the text bodies
+    /// under `multipart/mixed` or `multipart/related` whenever a message
+    /// has attachments or inline images.
+    pub parts: Option<Vec<MessagePart>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -334,9 +338,13 @@ fn strip_signature(content: &str) -> String {
         result.truncate(pos.start());
     }
 
-    // Remove signature keywords followed by content
+    // Remove signature keywords followed by content. The keyword must be a
+    // sign-off on its own line (optionally followed by punctuation), not a
+    // sentence that merely starts with the word — otherwise a closing line
+    // like "Thanks for reviewing them." is mistaken for a signature and
+    // truncated.
     let keyword_re = Regex::new(
-        r"(?is)\n\n\s*(?:Regards|Best regards,?|Kind regards,?|Thanks,?|Thank you,?|Sincerely,?|Cheers,?|Best,?|Warmly,?|With gratitude,?|All the best,?|Take care,?|Many thanks,?|Thanks and regards,?|Best wishes,?|Yours truly,?|Respectfully,?|Cordially,?).*(?:[^\n]{0,200}\n){0,5}$"
+        r"(?is)\n\n\s*(?:Best regards|Kind regards|Thanks and regards|Many thanks|Thank you|With gratitude|All the best|Best wishes|Yours truly|Regards|Thanks|Sincerely|Cheers|Best|Warmly|Take care|Respectfully|Cordially)\s*[,!.]?\s*(?:\n|$).*"
     ).unwrap();
     if let Some(pos) = keyword_re.find(&result) {
         result.truncate(pos.start());
@@ -346,6 +354,42 @@ fn strip_signature(content: &str) -> String {
     result.trim_end().to_string()
 }
 
+/// Convert an HTML email body to markdown.
+fn html_to_markdown(html: &str) -> String {
+    let converter = HtmlToMarkdown::builder()
+        .skip_tags(vec!["script", "style", "footer", "img", "svg"])
+        .build();
+    converter
+        .convert(html)
+        .expect("Failed to convert HTML to markdown")
+}
+
+/// Find the first non-empty, non-attachment body of `mimetype` in a MIME
+/// part tree, searching depth-first.
+///
+/// Gmail nests the text bodies under `multipart/mixed` or
+/// `multipart/related` whenever a message has attachments or inline
+/// images, so looking only at top-level parts misses the body entirely.
+fn find_part_data(parts: &[MessagePart], mimetype: &str) -> Option<String> {
+    for part in parts {
+        if part.mimetype == mimetype
+            && let Some(body) = &part.body
+            && body.attachment_id.is_none()
+            && let Some(data) = &body.data
+            && !data.is_empty()
+        {
+            return Some(decode_base64(data));
+        }
+
+        if let Some(nested) = &part.parts
+            && let Some(data) = find_part_data(nested, mimetype)
+        {
+            return Some(data);
+        }
+    }
+    None
+}
+
 /// Extract the body from the Gmail API message payload.
 ///
 /// To get the body of an email:
@@ -353,6 +397,8 @@ fn strip_signature(content: &str) -> String {
 /// - Parts might have an HTML version of the message as well as a plain text version of the body
 ///   Use the `parts[].mimetype` field to distinguish which it is
 /// - When there is a `body.attachment_id` that indicates a file that was attached
+/// - `parts` can nest (e.g. `multipart/mixed` -> `multipart/alternative`), so
+///   the search must recurse rather than only checking the top level
 pub fn extract_body(message: &Message) -> String {
     let payload = message.payload.clone().unwrap();
 
@@ -360,56 +406,19 @@ pub fn extract_body(message: &Message) -> String {
         && let Some(data) = &body.data
     {
         if &payload.mimetype == "text/html" {
-            let html = decode_base64(data);
-            let converter = HtmlToMarkdown::builder()
-                .skip_tags(vec!["script", "style", "footer", "img", "svg"])
-                .build();
-            return converter
-                .convert(&html)
-                .expect("Failed to convert HTML to markdown");
+            return html_to_markdown(&decode_base64(data));
         }
 
         return clean_and_strip_body(decode_base64(data));
     }
 
     if let Some(parts) = &payload.parts {
-        // Prefer plain text over HTML
-        for part in parts {
-            if part.mimetype == "text/plain"
-                && let Some(body) = &part.body
-            {
-                // Skip attachments
-                if body.attachment_id.is_some() {
-                    continue;
-                }
-                // Return the first non-empty body found in parts
-                if let Some(data) = &body.data
-                    && !data.is_empty()
-                {
-                    return clean_and_strip_body(decode_base64(data));
-                }
-            }
-
-            if part.mimetype == "text/html"
-                && let Some(body) = &part.body
-            {
-                // Skip attachments
-                if body.attachment_id.is_some() {
-                    continue;
-                }
-                // Return the first non-empty body found in parts
-                if let Some(data) = &body.data
-                    && !data.is_empty()
-                {
-                    let html = decode_base64(data);
-                    let converter = HtmlToMarkdown::builder()
-                        .skip_tags(vec!["script", "style", "footer", "img", "svg"])
-                        .build();
-                    return converter
-                        .convert(&html)
-                        .expect("Failed to convert HTML to markdown");
-                }
-            }
+        // Prefer plain text anywhere in the MIME tree over HTML.
+        if let Some(text) = find_part_data(parts, "text/plain") {
+            return clean_and_strip_body(text);
+        }
+        if let Some(html) = find_part_data(parts, "text/html") {
+            return html_to_markdown(&html);
         }
     }
 
@@ -982,6 +991,7 @@ mod tests {
                 size: 16,
                 data: Some(body_data),
             }),
+            parts: None,
         }];
         let payload = MessagePayload {
             headers: Some(vec![MessageHeader {
@@ -1023,6 +1033,46 @@ mod tests {
         };
         let result = extract_body(&message);
         assert_eq!(result, "This is a snippet...");
+    }
+
+    /// Gmail returns a MIME tree. A message with an attachment looks like
+    /// `multipart/mixed` -> `multipart/alternative` -> (`text/plain`,
+    /// `text/html`) plus the attachment part. The body lives in the nested
+    /// `text/plain` part, not at the top level.
+    #[test]
+    fn test_extract_body_nested_multipart() {
+        let plain = base64::Engine::encode(&URL_SAFE, "The real body text");
+        let html = base64::Engine::encode(&URL_SAFE, "<p>The real body text</p>");
+        let json = serde_json::json!({
+            "id": "msg_nested",
+            "threadId": "thr_nested",
+            "snippet": "The real body...",
+            "internalDate": "0",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "headers": [{"name": "Subject", "value": "Nested"}],
+                "parts": [
+                    {
+                        "partId": "1",
+                        "mimeType": "multipart/alternative",
+                        "body": {"size": 0},
+                        "parts": [
+                            {"partId": "1.1", "mimeType": "text/plain", "body": {"size": 17, "data": plain}},
+                            {"partId": "1.2", "mimeType": "text/html", "body": {"size": 26, "data": html}}
+                        ]
+                    },
+                    {"partId": "2", "mimeType": "application/pdf", "body": {"attachmentId": "att_1", "size": 1234}}
+                ]
+            }
+        });
+        let message: Message = serde_json::from_value(json).unwrap();
+        assert_eq!(extract_body(&message), "The real body text");
+    }
+
+    #[test]
+    fn test_strip_signature_does_not_cut_sentences() {
+        let input = "Here are the results.\n\nThanks for reviewing them.";
+        assert_eq!(strip_signature(input), input);
     }
 
     // Helper function to create a message with headers for testing

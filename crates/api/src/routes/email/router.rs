@@ -96,6 +96,11 @@ async fn fetch_and_transform_threads(
         .map(|i| i.unwrap())
         .collect();
 
+    Ok(transform_threads(results))
+}
+
+/// Transform fetched Gmail threads into the public `EmailThread` shape.
+fn transform_threads(results: Vec<Thread>) -> Vec<public::EmailThread> {
     let mut threads: Vec<public::EmailThread> = Vec::new();
     for t in results {
         let mut messages: Vec<public::EmailMessage> = Vec::new();
@@ -134,18 +139,122 @@ async fn fetch_and_transform_threads(
             })
         }
 
-        let latest_msg = messages[0].clone();
+        // Gmail returns thread messages oldest first, so the thread's
+        // headline (subject/from/received) is the newest message.
+        let Some(latest) = messages.last() else {
+            tracing::warn!("Thread {} has no messages; skipping", t.id);
+            continue;
+        };
+        let received = latest.received.clone();
+        let subject = latest.subject.clone();
+        let from = latest.from.clone();
+        let to = latest.to.clone();
 
         threads.push(public::EmailThread {
             id: t.id,
-            received: latest_msg.received,
-            subject: latest_msg.subject,
-            from: latest_msg.from,
-            to: latest_msg.to,
+            received,
+            subject,
+            from,
+            to,
             messages,
         })
     }
 
     threads.sort_by_key(|i| std::cmp::Reverse(i.received.clone()));
-    Ok(threads)
+    threads
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hq::google::gmail::{Message, MessageHeader, MessagePayload};
+
+    fn message(id: &str, subject: &str, from: &str, to: &str, received: &str) -> Message {
+        Message {
+            id: id.to_string(),
+            thread_id: "thr_1".to_string(),
+            snippet: Some(format!("body of {id}")),
+            payload: Some(MessagePayload {
+                headers: Some(vec![
+                    MessageHeader {
+                        name: "From".to_string(),
+                        value: from.to_string(),
+                    },
+                    MessageHeader {
+                        name: "To".to_string(),
+                        value: to.to_string(),
+                    },
+                    MessageHeader {
+                        name: "Subject".to_string(),
+                        value: subject.to_string(),
+                    },
+                ]),
+                mimetype: "text/plain".to_string(),
+                body: None,
+                parts: None,
+            }),
+            label_ids: None,
+            internal_date: received.to_string(),
+        }
+    }
+
+    #[test]
+    fn thread_headline_comes_from_newest_message() {
+        let threads = transform_threads(vec![Thread {
+            id: "thr_1".to_string(),
+            messages: vec![
+                message(
+                    "m1",
+                    "Original",
+                    "alice@example.com",
+                    "bob@example.com",
+                    "1000",
+                ),
+                message(
+                    "m2",
+                    "Re: Original",
+                    "bob@example.com",
+                    "alice@example.com",
+                    "2000",
+                ),
+            ],
+        }]);
+
+        assert_eq!(threads.len(), 1);
+        let thread = &threads[0];
+        assert_eq!(thread.subject, "Re: Original");
+        assert_eq!(thread.from, "bob@example.com");
+        assert_eq!(thread.to, "alice@example.com");
+        assert_eq!(thread.received, "2000");
+        assert_eq!(thread.messages.len(), 2);
+    }
+
+    #[test]
+    fn threads_sort_by_newest_message() {
+        let threads = transform_threads(vec![
+            Thread {
+                id: "old".to_string(),
+                messages: vec![message(
+                    "m1",
+                    "Old",
+                    "a@example.com",
+                    "b@example.com",
+                    "1000",
+                )],
+            },
+            Thread {
+                id: "new".to_string(),
+                messages: vec![message(
+                    "m2",
+                    "New",
+                    "a@example.com",
+                    "b@example.com",
+                    "2000",
+                )],
+            },
+        ]);
+
+        let ids: Vec<&str> = threads.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["new", "old"]);
+    }
 }
