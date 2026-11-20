@@ -128,9 +128,20 @@ def handle(e: BaseException) -> Err[str]:
     return Err(msg.rstrip())
 
 
+def _set_argv(argv: list[str]) -> None:
+    """Expose the caller's command line as ``sys.argv``.
+
+    The host passes the complete argument vector, including ``argv[0]`` (the
+    script name, ``-c``, or ``-``), so guest code sees the same shape it would
+    under CPython.
+    """
+    sys.argv = list(argv)
+
+
 class WitWorld(wit_world.WitWorld):
-    def eval(self, code: str) -> str:
+    def eval(self, code: str, argv: list[str]) -> str:
         try:
+            _set_argv(argv)
             _register_source("<input>", code)
             # Dedent so leading whitespace on the first line doesn't trip
             # Python's tokenizer (it raises IndentationError at module level).
@@ -139,8 +150,9 @@ class WitWorld(wit_world.WitWorld):
         except BaseException as e:
             raise handle(e)
 
-    def exec(self, code: str) -> str:
+    def exec(self, code: str, argv: list[str]) -> str:
         try:
+            _set_argv(argv)
             _register_source("<input>", code)
             tree = ast.parse(textwrap.dedent(code), filename="<input>")
 

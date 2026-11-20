@@ -1,7 +1,8 @@
 use crate::ai::chat::workspace::workspace_root;
 use crate::ai::tools::registry::{Tool, ToolConfig};
 use crate::openai::{
-    Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
+    ArrayProperty, Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType,
+    parse_tool_args,
 };
 use anyhow::{Error, Result};
 use async_trait::async_trait;
@@ -15,11 +16,15 @@ use super::sandbox::{ExecResult, shared_sandbox};
 pub struct PythonProps {
     /// The Python code to execute.
     pub code: Property,
+    /// Command-line arguments exposed to the code as `sys.argv[1:]`.
+    pub argv: ArrayProperty,
 }
 
 #[derive(Deserialize)]
 pub struct PythonArgs {
     pub code: String,
+    #[serde(default)]
+    pub argv: Vec<String>,
 }
 
 /// Result of running Python code in the sandbox.
@@ -55,13 +60,18 @@ impl ToolCall for PythonTool {
         // The sandbox is CPU-bound and can run for up to the timeout, so keep
         // it off the async runtime's worker threads.
         let code = fn_args.code;
+        // The code is an inline program, so mirror `python -c`: `sys.argv[0]`
+        // is `-c` and the caller's arguments follow.
+        let argv = std::iter::once("-c".to_string())
+            .chain(fn_args.argv)
+            .collect::<Vec<_>>();
         let workspace = self.workspace_path.clone();
         let exec =
             tokio::task::spawn_blocking(move || -> Result<ExecResult, RecoverableToolError> {
                 let sandbox =
                     shared_sandbox().map_err(|e| RecoverableToolError::new(&e.to_string()))?;
                 sandbox
-                    .exec(&code, &workspace, b"")
+                    .exec(&code, &workspace, b"", &argv)
                     .map_err(|e| RecoverableToolError::new(&e.to_string()))
             })
             .await??;
@@ -107,8 +117,13 @@ impl PythonTool {
                     ),
                     r#enum: None,
                 },
+                argv: ArrayProperty::strings(
+                    "Command-line arguments for the program, exposed as `sys.argv[1:]`. \
+                     `sys.argv[0]` is `-c`, matching `python -c`. Pass an empty array when the \
+                     code takes no arguments.",
+                ),
             },
-            required: vec![String::from("code")],
+            required: vec![String::from("code"), String::from("argv")],
             additional_properties: false,
         };
         let function = Function {
@@ -162,6 +177,20 @@ mod tests {
         let output: PythonOutput = serde_json::from_str(&result).unwrap();
 
         assert_eq!(output.value, serde_json::json!(55));
+    }
+
+    #[tokio::test]
+    async fn test_python_argv() {
+        let tool = temp_python_tool();
+        let args = serde_json::json!({
+            "code": "import sys\nsys.argv",
+            "argv": ["first", "second"],
+        })
+        .to_string();
+        let result = tool.call(&args).await.unwrap();
+        let output: PythonOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(output.value, serde_json::json!(["-c", "first", "second"]));
     }
 
     #[tokio::test]
