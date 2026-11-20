@@ -185,11 +185,18 @@ impl PySandbox {
     /// `workspace` is exposed to guest code as the root directory (`/`) — the
     /// same directory the bash tool mounts — so files are shared between the two
     /// tools. `stdin` is the guest's standard input; pass an empty slice to
-    /// make reads see EOF immediately. Guest code cannot reach anything outside
-    /// the workspace, nor the host's stdout/stderr, environment, or network.
-    /// The caller must ensure `workspace` already exists on the host; the
-    /// preopen fails otherwise.
-    pub fn exec(&self, code: &str, workspace: &Path, stdin: &[u8]) -> Result<ExecResult> {
+    /// make reads see EOF immediately. `argv` becomes `sys.argv` in the guest;
+    /// include `argv[0]` (the script name, `-c`, or `-`) to match CPython. Guest
+    /// code cannot reach anything outside the workspace, nor the host's
+    /// stdout/stderr, environment, or network. The caller must ensure
+    /// `workspace` already exists on the host; the preopen fails otherwise.
+    pub fn exec(
+        &self,
+        code: &str,
+        workspace: &Path,
+        stdin: &[u8],
+        argv: &[String],
+    ) -> Result<ExecResult> {
         let stdout_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
         let stderr_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
 
@@ -235,7 +242,7 @@ impl PySandbox {
         store.set_epoch_deadline(deadline);
 
         // Execute the code
-        let result = wasm_sandbox.call_exec(&mut store, code);
+        let result = wasm_sandbox.call_exec(&mut store, code, argv);
         let timed_out = store.data().timed_out;
 
         match result {
@@ -288,5 +295,18 @@ mod tests {
     fn test_sandbox_creates_successfully_with_wasm() {
         let result = PySandbox::new_for_test(None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sandbox_exposes_argv() {
+        let sandbox = PySandbox::new_for_test(None).expect("Failed to create sandbox");
+        let workspace = std::env::temp_dir();
+        let argv = vec!["-c".to_string(), "first".to_string(), "second".to_string()];
+
+        let result = sandbox
+            .exec("import sys\nsys.argv", &workspace, b"", &argv)
+            .unwrap();
+
+        assert_eq!(result.value, r#"["-c", "first", "second"]"#);
     }
 }

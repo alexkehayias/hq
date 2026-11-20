@@ -39,7 +39,7 @@ impl Builtin for PythonBuiltin {
         let workspace = self.workspace.clone();
         let result = tokio::task::spawn_blocking(move || {
             let sandbox = shared_sandbox()?;
-            sandbox.exec(&program.code, &workspace, &program.stdin)
+            sandbox.exec(&program.code, &workspace, &program.stdin, &program.argv)
         })
         .await;
 
@@ -67,11 +67,13 @@ impl Builtin for PythonBuiltin {
 struct Program {
     code: String,
     stdin: Vec<u8>,
+    /// The guest's `sys.argv`, including `argv[0]`.
+    argv: Vec<String>,
 }
 
 impl Program {
     /// Parse the `python` command line: `-c CODE`, `FILE`, `-`, or no argument
-    /// (read the program from stdin).
+    /// (read the program from stdin), each optionally followed by arguments.
     ///
     /// Errors are already-formed command results so the caller can return them
     /// without rebuilding the message.
@@ -82,9 +84,12 @@ impl Program {
         let stdin = ctx.stdin.unwrap_or_default().as_bytes().to_vec();
 
         let Some(first) = ctx.args.first() else {
+            // CPython sets `sys.argv` to `['']` when reading the program from
+            // stdin with no arguments.
             return Ok(Self {
                 code: ctx.stdin.unwrap_or_default().to_string(),
                 stdin: Vec::new(),
+                argv: vec![String::new()],
             });
         };
 
@@ -93,25 +98,21 @@ impl Program {
                 let Some(code) = ctx.args.get(1) else {
                     return Err(usage_error("argument expected for the -c option"));
                 };
-                if ctx.args.len() > 2 {
-                    return Err(usage_error("command-line arguments are not supported"));
-                }
                 Ok(Self {
                     code: code.clone(),
                     stdin,
+                    argv: argv_with("-c", &ctx.args[2..]),
                 })
             }
             "-" => Ok(Self {
                 code: ctx.stdin.unwrap_or_default().to_string(),
                 stdin: Vec::new(),
+                argv: argv_with("-", &ctx.args[1..]),
             }),
             "-h" | "--help" => Err(ExecResult::ok(HELP)),
             "-V" | "--version" => Err(ExecResult::ok("Python 3 (pybox WASM)\n")),
             arg if arg.starts_with('-') => Err(usage_error(&format!("unsupported option '{arg}'"))),
             file => {
-                if ctx.args.len() > 1 {
-                    return Err(usage_error("command-line arguments are not supported"));
-                }
                 let path = resolve_path(ctx.cwd.as_path(), file);
                 let bytes = ctx.fs.read_file(&path).await.map_err(|e| {
                     ExecResult::err(format!("python: can't open file '{file}': {e}\n"), 2)
@@ -119,14 +120,22 @@ impl Program {
                 Ok(Self {
                     code: String::from_utf8_lossy(&bytes).into_owned(),
                     stdin,
+                    argv: argv_with(file, &ctx.args[1..]),
                 })
             }
         }
     }
 }
 
+/// Build a CPython-shaped `sys.argv`: the program name followed by its args.
+fn argv_with(program: &str, args: &[String]) -> Vec<String> {
+    std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect()
+}
+
 const HELP: &str = "\
-Usage: python [-c cmd | - | file]
+Usage: python [-c cmd | - | file] [arg ...]
 Run Python in an isolated WebAssembly sandbox.
 
 Options:
@@ -135,6 +144,9 @@ Options:
   -h, --help   print this help
   -V, --version
                print the Python version
+
+Arguments after the program are exposed to it as sys.argv[1:], with the
+program name (`-c`, `-`, or the file path) as sys.argv[0].
 
 Files are read and written relative to `/`, the session workspace shared with
 the bash tool. There is no network or environment access and only a subset of
@@ -197,6 +209,21 @@ mod tests {
             run(r#"echo hello | python -c 'import sys; print(sys.stdin.read().strip())'"#).await;
         assert_eq!(output.exit_code, 0);
         assert_eq!(output.stdout.trim(), "hello");
+    }
+
+    #[tokio::test]
+    async fn passes_arguments_to_inline_program() {
+        let output = run(r#"python -c 'import sys; print(sys.argv)' one two"#).await;
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim(), "['-c', 'one', 'two']");
+    }
+
+    #[tokio::test]
+    async fn passes_arguments_to_script_file() {
+        let output =
+            run(r#"echo 'import sys; print(sys.argv)' > args.py && python args.py one two"#).await;
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim(), "['args.py', 'one', 'two']");
     }
 
     #[tokio::test]

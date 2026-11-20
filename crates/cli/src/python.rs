@@ -1,22 +1,22 @@
 use anyhow::{Context, Result, bail};
 use std::io::Write;
-use std::path::PathBuf;
 
 use hq::ai::tools::python::sandbox::shared_sandbox;
 
 /// Run Python code in the embedded pybox WASM sandbox, mirroring the `python`
-/// command line: either an inline program (`-c`) or a script file. The current
-/// working directory is mounted as the sandbox root (`/`), so scripts can read
-/// and write files there and nowhere else.
-pub async fn run(command: Option<String>, file: Option<PathBuf>) -> Result<()> {
-    let code = resolve_code(command, file)?;
+/// command line: either an inline program (`-c`) or a script file, each
+/// optionally followed by arguments exposed to the program as `sys.argv`. The
+/// current working directory is mounted as the sandbox root (`/`), so scripts
+/// can read and write files there and nowhere else.
+pub async fn run(command: Option<String>, script: Vec<String>) -> Result<()> {
+    let (code, argv) = resolve_program(command, script)?;
     let workspace = std::env::current_dir().context("failed to read current directory")?;
 
     // The sandbox is CPU-bound and can run up to the timeout, so keep it off
     // the async runtime's worker threads.
     let result = tokio::task::spawn_blocking(move || {
         let sandbox = shared_sandbox()?;
-        sandbox.exec(&code, &workspace, b"")
+        sandbox.exec(&code, &workspace, b"", &argv)
     })
     .await?;
 
@@ -41,15 +41,28 @@ pub async fn run(command: Option<String>, file: Option<PathBuf>) -> Result<()> {
     }
 }
 
-/// Resolve the code to run from the mutually exclusive `-c`/file inputs.
-fn resolve_code(command: Option<String>, file: Option<PathBuf>) -> Result<String> {
-    match (command, file) {
-        (Some(code), None) => Ok(code),
-        (None, Some(path)) => std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display())),
-        (Some(_), Some(_)) => bail!("cannot use -c together with a file argument"),
-        (None, None) => bail!("no code provided: pass -c <code> or a script file"),
+/// Resolve the code to run and its `sys.argv` from the `-c`/script inputs.
+///
+/// With `-c`, every positional is a program argument. Otherwise the first
+/// positional names the script and the rest are its arguments, matching
+/// CPython's `sys.argv[0]` conventions.
+fn resolve_program(command: Option<String>, script: Vec<String>) -> Result<(String, Vec<String>)> {
+    match command {
+        Some(code) => Ok((code, argv_with("-c", script))),
+        None => {
+            let Some((file, args)) = script.split_first() else {
+                bail!("no code provided: pass -c <code> or a script file");
+            };
+            let code =
+                std::fs::read_to_string(file).with_context(|| format!("failed to read {file}"))?;
+            Ok((code, argv_with(file, args.to_vec())))
+        }
     }
+}
+
+/// Build a CPython-shaped `sys.argv`: the program name followed by its args.
+fn argv_with(program: &str, args: Vec<String>) -> Vec<String> {
+    std::iter::once(program.to_string()).chain(args).collect()
 }
 
 #[cfg(test)]
@@ -59,8 +72,19 @@ mod tests {
 
     #[test]
     fn inline_command_is_used_verbatim() {
-        let code = resolve_code(Some("1 + 1".to_string()), None).unwrap();
+        let (code, argv) = resolve_program(Some("1 + 1".to_string()), vec![]).unwrap();
         assert_eq!(code, "1 + 1");
+        assert_eq!(argv, vec!["-c"]);
+    }
+
+    #[test]
+    fn inline_command_takes_arguments() {
+        let (_, argv) = resolve_program(
+            Some("pass".to_string()),
+            vec!["first".to_string(), "second".to_string()],
+        )
+        .unwrap();
+        assert_eq!(argv, vec!["-c", "first", "second"]);
     }
 
     #[test]
@@ -68,20 +92,27 @@ mod tests {
         let path = std::env::temp_dir().join(format!("hq-python-{}.py", Uuid::new_v4()));
         std::fs::write(&path, "print('hi')").unwrap();
 
-        let code = resolve_code(None, Some(path.clone())).unwrap();
+        let (code, argv) = resolve_program(None, vec![path.display().to_string()]).unwrap();
         std::fs::remove_file(&path).ok();
 
         assert_eq!(code, "print('hi')");
+        assert_eq!(argv, vec![path.display().to_string()]);
     }
 
     #[test]
-    fn rejects_both_command_and_file() {
-        let err = resolve_code(Some("1".to_string()), Some(PathBuf::from("x.py"))).unwrap_err();
-        assert!(err.to_string().contains("-c"));
+    fn file_takes_arguments() {
+        let path = std::env::temp_dir().join(format!("hq-python-{}.py", Uuid::new_v4()));
+        std::fs::write(&path, "print('hi')").unwrap();
+
+        let (_, argv) =
+            resolve_program(None, vec![path.display().to_string(), "first".to_string()]).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(argv, vec![path.display().to_string(), "first".to_string()]);
     }
 
     #[test]
     fn rejects_no_input() {
-        assert!(resolve_code(None, None).is_err());
+        assert!(resolve_program(None, vec![]).is_err());
     }
 }

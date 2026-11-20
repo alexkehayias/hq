@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::env;
-use std::path::PathBuf;
 use std::time::Duration;
 
 pub mod auth;
@@ -155,8 +154,10 @@ enum Command {
         /// Program passed in as a string (like `python -c`)
         #[arg(short = 'c', long)]
         command: Option<String>,
-        /// Script file to run (like `python script.py`)
-        file: Option<PathBuf>,
+        /// Script file to run (like `python script.py`), followed by its
+        /// arguments, which are exposed as `sys.argv`
+        #[arg(value_name = "SCRIPT", allow_hyphen_values = true)]
+        script: Vec<String>,
     },
     /// Web-related commands (fetch, etc.)
     Web {
@@ -437,8 +438,8 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
 
             eval::run(vec_db_path, api_hostname, api_key, model, file, dry_run).await?;
         }
-        Some(Command::Python { command, file }) => {
-            python::run(command, file).await?;
+        Some(Command::Python { command, script }) => {
+            python::run(command, script).await?;
         }
         Some(Command::Web { command }) => {
             web::run(command).await?;
