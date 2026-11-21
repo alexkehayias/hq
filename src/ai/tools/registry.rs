@@ -8,11 +8,11 @@ use crate::ai::skills::SkillRegistry;
 use crate::openai::{BoxedToolCall, ToolCall};
 
 use super::{
-    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
-    EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool, ListSkillsTool,
-    LoadSkillTool, MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, ReadSkillFileTool,
-    SaveSkillTool, SearchSkillsTool, SubagentTool, TasksDueTodayTool, TasksScheduledTodayTool,
-    WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
+    BashTool, CalendarTool, CodeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
+    DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
+    ListSkillsTool, LoadSkillTool, MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool,
+    ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, SubagentTool, TasksDueTodayTool,
+    TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
 };
 
 /// Shared dependencies needed to construct tools by name.
@@ -84,6 +84,7 @@ impl ToolRegistry {
         };
         registry.register::<BashTool>();
         registry.register::<PythonTool>();
+        registry.register::<CodeTool>();
         registry.register::<WebsiteViewTool>();
         registry.register::<DateTimeTool>();
         registry.register::<NotifyTool>();

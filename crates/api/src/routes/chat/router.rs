@@ -1,5 +1,6 @@
 //! Router for the chat API
 
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -35,9 +36,9 @@ use hq::ai::chat::{
     set_session_mode, user_message_with_attachments,
 };
 use hq::ai::tools::{
-    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
-    EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool, MeetingSearchTool,
-    NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
+    BashTool, CalendarTool, CodeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
+    DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
+    MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use hq::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
@@ -309,6 +310,7 @@ async fn chat_handler(
         vapid_key_path,
         index_dir_path,
         storage_path_owned,
+        code_mode,
     ) = {
         let shared_state = state.read().expect("Unable to read share state");
         let AppConfig {
@@ -319,6 +321,7 @@ async fn chat_handler(
             openai_api_key,
             openai_model,
             vapid_key_path,
+            code_mode,
             ..
         } = &shared_state.config;
 
@@ -363,6 +366,7 @@ async fn chat_handler(
             vapid_key_path.clone(),
             index_path.clone(),
             storage_path.clone(),
+            *code_mode,
         )
     };
 
@@ -387,8 +391,6 @@ async fn chat_handler(
         Box::new(create_channel_tool),
         Box::new(emit_channel_tool),
     ];
-
-    let tools = all_tools;
 
     // Only images are sent to the model; the upload API already restricts
     // uploads to image types.
@@ -765,6 +767,41 @@ async fn chat_handler(
         insert_chat_message(&db, &session_id, &system_msg).await?;
         transcript.push(system_msg);
     }
+
+    // Code mode exposes a single `code` tool whose guest namespace bridges the
+    // allowlisted tools. Everything else stays out of the model's tool list,
+    // which is where most of the token savings come from.
+    //
+    // Nested tool calls are invisible to the chat's middleware, so seed the
+    // bridge with the tools already used in this session and let it enforce the
+    // same prompt-injection rules itself.
+    let tools: Vec<BoxedToolCall> = if code_mode {
+        // `subagent` stays a top-level tool even in code mode: keeping it out
+        // of the guest means its calls are visible in the transcript and can
+        // run concurrently with other tool calls.
+        let (subagent_tools, bridged): (Vec<_>, Vec<_>) = all_tools
+            .into_iter()
+            .partition(|tool| tool.function_name() == "subagent");
+
+        let used_tools: HashSet<String> = transcript
+            .iter()
+            .filter(|message| *message.role() == Role::Assistant)
+            .filter_map(|message| message.tool_calls.as_ref())
+            .flatten()
+            .map(|call| call.function.name.clone())
+            .collect();
+
+        let mut tools = vec![Box::new(CodeTool::new(
+            &storage_path_owned,
+            &workspace_id,
+            bridged,
+            used_tools,
+        )?) as BoxedToolCall];
+        tools.extend(subagent_tools);
+        tools
+    } else {
+        all_tools
+    };
 
     let workspace_path = workspace_root(&storage_path_owned, &workspace_id);
 

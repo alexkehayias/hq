@@ -10,14 +10,18 @@
 
 use anyhow::{Context, Result, anyhow};
 use once_cell::sync::OnceCell;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Cache, Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Strategy};
+
+use crate::ai::chat::middleware::{ToolCallRule, default_tool_security_rules};
+use crate::openai::BoxedToolCall;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{FsPerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView};
 
@@ -34,17 +38,73 @@ const TICKS_PER_SECOND: u64 = 1000 / TICK_MS;
 const MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+// Caps on host tool access. A guest can loop over tool calls, so bound how many
+// it may make per execution and how long a single call may take. Results are
+// copied into the guest's linear memory, so reject oversized ones rather than
+// letting a single call exhaust the memory limit.
+const MAX_TOOL_CALLS: usize = 64;
+const TOOL_CALL_TIMEOUT_SECONDS: u64 = 120;
+const MAX_TOOL_HOST_TIME_SECONDS: u64 = 300;
+const MAX_TOOL_RESULT_BYTES: usize = 4 * 1024 * 1024;
+
 // The sandbox component is embedded so the binary is self-contained and never
 // loads executable code from the (potentially untrusted) working directory.
 // `build.rs` compiles it from `guest.py` into OUT_DIR; the artifact is not
 // committed.
 const SANDBOX_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sandbox.wasm"));
 
+/// Host tools exposed to guest code, plus the async runtime used to call them.
+///
+/// One bridge is built per execution, so the call budget is scoped to a single
+/// `exec`. The runtime handle must belong to a multi-threaded runtime and the
+/// execution must run on a blocking thread (the tool call blocks the guest).
+pub struct ToolBridge {
+    tools: Arc<HashMap<String, BoxedToolCall>>,
+    definitions: String,
+    runtime: tokio::runtime::Handle,
+    max_calls: usize,
+    calls: AtomicUsize,
+    call_timeout: Duration,
+    max_host_time: Duration,
+    host_time: Duration,
+    /// Prompt-injection rules, shared with the chat middleware.
+    security_rules: Vec<ToolCallRule>,
+    /// Tools already used in this session, including nested calls from earlier
+    /// executions. Shared across `code` calls in the same turn.
+    used_tools: Arc<Mutex<HashSet<String>>>,
+}
+
+impl ToolBridge {
+    pub fn new(
+        tools: Arc<HashMap<String, BoxedToolCall>>,
+        definitions: String,
+        runtime: tokio::runtime::Handle,
+        used_tools: Arc<Mutex<HashSet<String>>>,
+    ) -> Self {
+        Self {
+            tools,
+            definitions,
+            runtime,
+            max_calls: MAX_TOOL_CALLS,
+            calls: AtomicUsize::new(0),
+            call_timeout: Duration::from_secs(TOOL_CALL_TIMEOUT_SECONDS),
+            max_host_time: Duration::from_secs(MAX_TOOL_HOST_TIME_SECONDS),
+            host_time: Duration::ZERO,
+            security_rules: default_tool_security_rules(),
+            used_tools,
+        }
+    }
+}
+
 struct SandboxState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
     timed_out: bool,
+    tools: Option<ToolBridge>,
+    /// Wall-clock deadline for guest code only. Time spent blocked in a host
+    /// tool call is added back so a slow tool does not consume the budget.
+    guest_deadline: Instant,
 }
 
 impl wasmtime_wasi::WasiView for SandboxState {
@@ -62,6 +122,84 @@ wasmtime::component::bindgen!({
     path: "src/ai/tools/python/sandbox.wit",
     world: "sandbox",
 });
+
+impl local::sandbox::tools::Host for SandboxState {
+    fn definitions(&mut self) -> String {
+        self.tools
+            .as_ref()
+            .map(|bridge| bridge.definitions.clone())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    fn call(&mut self, name: String, args: String) -> std::result::Result<String, String> {
+        let (result, elapsed) = {
+            let Some(bridge) = self.tools.as_mut() else {
+                return Err("no tools are available in this sandbox".to_string());
+            };
+
+            if bridge.calls.fetch_add(1, Ordering::SeqCst) >= bridge.max_calls {
+                return Err(format!(
+                    "tool call budget exceeded (max {})",
+                    bridge.max_calls
+                ));
+            }
+            if bridge.host_time >= bridge.max_host_time {
+                return Err(format!(
+                    "tool time budget exceeded (max {}s)",
+                    bridge.max_host_time.as_secs()
+                ));
+            }
+
+            let Some(tool) = bridge.tools.get(&name) else {
+                return Err(format!("unknown tool '{name}'"));
+            };
+
+            // Nested calls bypass the chat's tool-call middleware, so enforce
+            // the same prompt-injection rules here. The set is shared across
+            // executions in a turn, and seeded from the transcript.
+            {
+                let mut used = bridge
+                    .used_tools
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                for rule in &bridge.security_rules {
+                    if let Some(reason) = rule.rejection(&used, &name) {
+                        return Err(reason);
+                    }
+                }
+                used.insert(name.clone());
+            }
+
+            let started = Instant::now();
+            // `exec` always runs on a blocking thread, so blocking on the
+            // runtime here is safe. The timeout keeps a hung tool from pinning
+            // that thread forever.
+            let result = bridge.runtime.block_on(async {
+                match tokio::time::timeout(bridge.call_timeout, tool.call(&args)).await {
+                    Ok(Ok(value)) => Ok(value),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(_) => Err(format!("tool '{name}' timed out")),
+                }
+            });
+            let elapsed = started.elapsed();
+            bridge.host_time += elapsed;
+            (result, elapsed)
+        };
+
+        // Host time must not consume the guest's execution budget: the epoch
+        // deadline is wall-clock based, and the guest is not executing while
+        // we block here.
+        self.guest_deadline += elapsed;
+
+        match result {
+            Ok(value) if value.len() > MAX_TOOL_RESULT_BYTES => Err(format!(
+                "tool '{name}' returned {} bytes (max {MAX_TOOL_RESULT_BYTES})",
+                value.len()
+            )),
+            other => other,
+        }
+    }
+}
 
 /// The captured result of running guest code.
 #[derive(Debug, Clone, Default)]
@@ -179,6 +317,19 @@ impl PySandbox {
         })
     }
 
+    /// Execute Python code in the sandbox without host tools.
+    ///
+    /// See [`PySandbox::exec_with_tools`] for the full contract.
+    pub fn exec(
+        &self,
+        code: &str,
+        workspace: &Path,
+        stdin: &[u8],
+        argv: &[String],
+    ) -> Result<ExecResult> {
+        self.exec_with_tools(code, workspace, stdin, argv, None)
+    }
+
     /// Execute Python code in the sandbox.
     ///
     /// Returns the last expression's value plus any captured stdout/stderr.
@@ -188,14 +339,17 @@ impl PySandbox {
     /// make reads see EOF immediately. `argv` becomes `sys.argv` in the guest;
     /// include `argv[0]` (the script name, `-c`, or `-`) to match CPython. Guest
     /// code cannot reach anything outside the workspace, nor the host's
-    /// stdout/stderr, environment, or network. The caller must ensure
-    /// `workspace` already exists on the host; the preopen fails otherwise.
-    pub fn exec(
+    /// stdout/stderr, environment, or network. `tools` is the optional bridge to
+    /// host tools; `None` leaves the guest with no host access beyond the
+    /// workspace. The caller must ensure `workspace` already exists on the host;
+    /// the preopen fails otherwise.
+    pub fn exec_with_tools(
         &self,
         code: &str,
         workspace: &Path,
         stdin: &[u8],
         argv: &[String],
+        tools: Option<ToolBridge>,
     ) -> Result<ExecResult> {
         let stdout_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
         let stderr_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
@@ -210,6 +364,7 @@ impl PySandbox {
         builder.stderr(stderr_pipe.clone());
         builder.preopened_dir(workspace, "/", FsPerms::ReadWrite)?;
 
+        let timeout = Duration::from_secs(self.timeout_seconds);
         let state = SandboxState {
             wasi_ctx: builder.build(),
             table: ResourceTable::new(),
@@ -217,6 +372,8 @@ impl PySandbox {
                 .memory_size(MAX_MEMORY_BYTES)
                 .build(),
             timed_out: false,
+            tools,
+            guest_deadline: Instant::now() + timeout,
         };
 
         let mut store = Store::new(&self.engine, state);
@@ -226,19 +383,35 @@ impl PySandbox {
         let deadline = self.timeout_seconds.saturating_mul(TICKS_PER_SECOND).max(1);
         store.set_epoch_deadline(deadline);
         store.epoch_deadline_callback(|mut ctx| {
-            ctx.data_mut().timed_out = true;
-            Err(wasmtime::Error::msg("execution timed out"))
+            let now = Instant::now();
+            let remaining_ticks = {
+                let state = ctx.data_mut();
+                if now < state.guest_deadline {
+                    // Host tool calls extend the deadline, so re-arm instead of
+                    // trapping when the guest still has budget.
+                    Some(((state.guest_deadline - now).as_millis() as u64 / TICK_MS).max(1))
+                } else {
+                    state.timed_out = true;
+                    None
+                }
+            };
+            Ok(match remaining_ticks {
+                Some(ticks) => wasmtime::UpdateDeadline::Continue(ticks),
+                None => wasmtime::UpdateDeadline::Interrupt,
+            })
         });
 
-        // Set up linker with WASI
+        // Set up linker with WASI and the host tool interface.
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        Sandbox::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         // Instantiate the component
         let wasm_sandbox = Sandbox::instantiate(&mut store, &self.component, &linker)?;
 
         // Give the guest a fresh budget: instantiation above may have consumed
         // part of the deadline, which should only bound user code.
+        store.data_mut().guest_deadline = Instant::now() + timeout;
         store.set_epoch_deadline(deadline);
 
         // Execute the code
@@ -295,6 +468,67 @@ mod tests {
     fn test_sandbox_creates_successfully_with_wasm() {
         let result = PySandbox::new_for_test(None);
         assert!(result.is_ok());
+    }
+
+    #[derive(serde::Serialize)]
+    struct SlowTool;
+
+    #[async_trait::async_trait]
+    impl crate::openai::ToolCall for SlowTool {
+        async fn call(&self, _args: &str) -> Result<String, anyhow::Error> {
+            // Longer than the sandbox's guest budget below.
+            std::thread::sleep(Duration::from_secs(3));
+            Ok("null".to_string())
+        }
+
+        fn function_name(&self) -> String {
+            "slow".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn host_tool_time_does_not_consume_guest_budget() {
+        // Two seconds of guest budget, three seconds of host tool time. If the
+        // host call were counted, the guest would trap on the next instruction.
+        let sandbox = PySandbox::new_for_test(Some(2)).expect("Failed to create sandbox");
+        let workspace = std::env::temp_dir().join(format!("hq-sandbox-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let mut tools = HashMap::new();
+        tools.insert("slow".to_string(), Box::new(SlowTool) as BoxedToolCall);
+        let definitions = serde_json::json!([{
+            "name": "slow",
+            "description": "Sleeps.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }
+        }])
+        .to_string();
+        let bridge = ToolBridge::new(
+            Arc::new(tools),
+            definitions,
+            tokio::runtime::Handle::current(),
+            Arc::new(Mutex::new(HashSet::new())),
+        );
+
+        let workspace_clone = workspace.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            sandbox.exec_with_tools(
+                "hq.slow()\nsum(range(1000))",
+                &workspace_clone,
+                b"",
+                &["-c".to_string()],
+                Some(bridge),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(result.value, "499500");
     }
 
     #[test]

@@ -142,6 +142,27 @@ pub struct ToolCallRule {
     pub blocked_after: Vec<String>,
 }
 
+impl ToolCallRule {
+    /// The rejection message if this rule blocks `target`, given the tools
+    /// already used in the session.
+    ///
+    /// Shared by [`ToolSecurityMiddleware`] and the code sandbox's host-tool
+    /// bridge so nested tool calls enforce the same prompt-injection rules as
+    /// top-level ones.
+    pub fn rejection(&self, used: &HashSet<String>, target: &str) -> Option<String> {
+        if self.target != target {
+            return None;
+        }
+        if !self.blocked_after.iter().any(|name| used.contains(name)) {
+            return None;
+        }
+        Some(format!(
+            "Tool call rejected: '{target}' cannot be called after '{}'.",
+            self.blocked_after.join(", "),
+        ))
+    }
+}
+
 /// Middleware that applies security rules to pending tool calls based
 /// on the chat transcript.
 ///
@@ -201,62 +222,69 @@ impl Default for ToolSecurityMiddleware {
     /// producer would make channels useless for the case they exist for —
     /// reading external content and publishing it.
     fn default() -> Self {
-        Self::new(vec![
-            // Don't let a malicious skill (authored via bash in the
-            // workspace) be installed into the global skills directory,
-            // where it becomes trusted instructions in future sessions.
-            ToolCallRule {
-                target: "save_skill".to_string(),
-                blocked_after: vec![
-                    "view_website".to_string(),
-                    "web_search".to_string(),
-                    "get_unread_emails".to_string(),
-                    "search_emails".to_string(),
-                ],
-            },
-            // Don't let a webpage or email steer the agent into pushing
-            // a notification to the user's devices (phishing).
-            ToolCallRule {
-                target: "notify".to_string(),
-                blocked_after: vec![
-                    "view_website".to_string(),
-                    "web_search".to_string(),
-                    "get_unread_emails".to_string(),
-                    "search_emails".to_string(),
-                ],
-            },
-            // Don't let email/calendar content steer the agent into
-            // fetching an arbitrary URL. Notes and meeting search are
-            // intentionally excluded: they return the user's own
-            // content and commonly contain links the user wants the
-            // agent to follow.
-            ToolCallRule {
-                target: "view_website".to_string(),
-                blocked_after: vec![
-                    "get_unread_emails".to_string(),
-                    "search_emails".to_string(),
-                    "get_calendar_events".to_string(),
-                ],
-            },
-            // Don't let untrusted content spawn, inspect, or tear down
-            // persistent loops. A loop runs autonomously across restarts,
-            // so creating one is a persistent action the user did not ask
-            // for, and deleting one can silently disable automation the
-            // user relies on.
-            ToolCallRule {
-                target: "create_loop".to_string(),
-                blocked_after: untrusted_data_tools(),
-            },
-            ToolCallRule {
-                target: "list_loops".to_string(),
-                blocked_after: untrusted_data_tools(),
-            },
-            ToolCallRule {
-                target: "delete_loop".to_string(),
-                blocked_after: untrusted_data_tools(),
-            },
-        ])
+        Self::new(default_tool_security_rules())
     }
+}
+
+/// The default prompt-injection rules.
+///
+/// Shared by [`ToolSecurityMiddleware`] and the code sandbox's host-tool bridge.
+pub fn default_tool_security_rules() -> Vec<ToolCallRule> {
+    vec![
+        // Don't let a malicious skill (authored via bash in the
+        // workspace) be installed into the global skills directory,
+        // where it becomes trusted instructions in future sessions.
+        ToolCallRule {
+            target: "save_skill".to_string(),
+            blocked_after: vec![
+                "view_website".to_string(),
+                "web_search".to_string(),
+                "get_unread_emails".to_string(),
+                "search_emails".to_string(),
+            ],
+        },
+        // Don't let a webpage or email steer the agent into pushing
+        // a notification to the user's devices (phishing).
+        ToolCallRule {
+            target: "notify".to_string(),
+            blocked_after: vec![
+                "view_website".to_string(),
+                "web_search".to_string(),
+                "get_unread_emails".to_string(),
+                "search_emails".to_string(),
+            ],
+        },
+        // Don't let email/calendar content steer the agent into
+        // fetching an arbitrary URL. Notes and meeting search are
+        // intentionally excluded: they return the user's own
+        // content and commonly contain links the user wants the
+        // agent to follow.
+        ToolCallRule {
+            target: "view_website".to_string(),
+            blocked_after: vec![
+                "get_unread_emails".to_string(),
+                "search_emails".to_string(),
+                "get_calendar_events".to_string(),
+            ],
+        },
+        // Don't let untrusted content spawn, inspect, or tear down
+        // persistent loops. A loop runs autonomously across restarts,
+        // so creating one is a persistent action the user did not ask
+        // for, and deleting one can silently disable automation the
+        // user relies on.
+        ToolCallRule {
+            target: "create_loop".to_string(),
+            blocked_after: untrusted_data_tools(),
+        },
+        ToolCallRule {
+            target: "list_loops".to_string(),
+            blocked_after: untrusted_data_tools(),
+        },
+        ToolCallRule {
+            target: "delete_loop".to_string(),
+            blocked_after: untrusted_data_tools(),
+        },
+    ]
 }
 
 impl ToolSecurityMiddleware {
@@ -309,18 +337,9 @@ impl ToolCallMiddleware for ToolSecurityMiddleware {
                 continue;
             }
             // Did any of the blocked-after tools appear previously?
-            let triggered = rule
-                .blocked_after
-                .iter()
-                .any(|name| prior_tool_names.contains(name));
-            if !triggered {
+            let Some(msg) = rule.rejection(&prior_tool_names, &rule.target) else {
                 continue;
-            }
-            let msg = format!(
-                "Tool call rejected: '{}' cannot be called after '{}'.",
-                rule.target,
-                rule.blocked_after.join(", "),
-            );
+            };
             let rejections: Vec<Message> = blocked_pending
                 .iter()
                 .map(|c| Message::new_tool_call_response(&msg, &c.id))

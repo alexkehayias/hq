@@ -1,6 +1,19 @@
 package local:sandbox;
 
+/// Host tools callable from guest code. The host decides which tools exist;
+/// the guest builds typed Python wrappers from the returned JSON schemas.
+interface tools {
+  /// JSON array of `{name, description, parameters}` for every callable tool.
+  definitions: func() -> string;
+  /// Invoke a tool by name with JSON-encoded arguments. Returns the tool's raw
+  /// result (usually JSON, but not required to be). Errors become Python
+  /// exceptions in the guest.
+  call: func(name: string, args: string) -> result<string, string>;
+}
+
 world sandbox {
+  import tools;
+
   export eval: func(expression: string, argv: list<string>) -> result<string, string>;
   export exec: func(statements: string, argv: list<string>) -> result<string, string>;
 }

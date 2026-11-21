@@ -100,6 +100,13 @@ caches it in `OUT_DIR` (keyed by a content hash, so it is not rebuilt on every
 - Set `HQ_SANDBOX_WASM` to a prebuilt component to bypass the build.
 - The version is pinned in `build.rs` and mirrored in the Dockerfile and CI
   workflows; keep them in sync. Override with `HQ_COMPONENTIZE_PY_VERSION`.
+- `sandbox.wit` also imports a `tools` interface (`definitions` + `call`). The
+  plain `python` tool runs with no bridge; the `code` tool
+  (`src/ai/tools/python/code.rs`) installs one and exposes the allowlisted tools
+  to guest code as typed `hq.<name>(...)` wrappers generated in `guest.py`.
+  `bash`, `python`, and `subagent` are deliberately not bridged; `subagent`
+  remains a separate top-level tool so its calls stay in the transcript and can
+  run concurrently. Enable code mode with `HQ_CODE_MODE=1`.
 
 ### Web UI
 ```bash
@@ -265,6 +272,7 @@ Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `
 | `HQ_NOTES_REPO_URL` | Git repo URL for notes |
 | `HQ_GMAIL_CLIENT_ID/SECRET` | Gmail OAuth credentials |
 | `HQ_VAPID_KEY_PATH` | Web push notification keys |
+| `HQ_CODE_MODE` | Set to `1`/`true` to expose the `code` tool instead of the individual tools |
 
 ## Worktree Development
 
