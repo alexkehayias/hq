@@ -1,9 +1,6 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
-use super::bash::SANDBOX_ROOT;
 use super::registry::{Tool, ToolConfig};
-use crate::ai::chat::workspace::workspace_root;
 use crate::core::http::html_to_markdown;
 use crate::openai::{
     Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
@@ -11,60 +8,6 @@ use crate::openai::{
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
-
-/// Maximum estimated token count before we truncate the output.
-/// Using a rough estimate of ~4 characters per token.
-const MAX_OUTPUT_TOKENS: usize = 10_000;
-const CHARS_PER_TOKEN: usize = 4;
-const MAX_OUTPUT_CHARS: usize = MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN;
-
-/// How many characters to keep in the truncated response returned to the AI.
-const TRUNCATED_PREFIX_CHARS: usize = 7_500 * CHARS_PER_TOKEN;
-
-/// Build the file name for a saved result, using the provider's tool
-/// call ID when it is usable and a timestamp otherwise.
-fn result_filename(tool_call_id: &str, timestamp: u64) -> String {
-    let id: String = tool_call_id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-        .take(64)
-        .collect();
-
-    if id.is_empty() {
-        format!("call_{}.md", timestamp)
-    } else {
-        format!("{}.md", id)
-    }
-}
-
-/// Cut `content` to at most `max_chars` characters, preferring a line
-/// boundary so the agent can resume from a known line number.
-///
-/// Returns the prefix and the 1-indexed line the remainder starts on.
-/// A line number of `0` means no line boundary fits within the limit
-/// (a single line longer than `max_chars`), so the remainder has to be
-/// addressed by character offset instead.
-fn prefix_at_line_boundary(content: &str, max_chars: usize) -> (String, usize) {
-    let mut prefix = String::new();
-    let mut consumed = 0;
-
-    for line in content.split_inclusive('\n') {
-        let line_chars = line.chars().count();
-        if consumed + line_chars > max_chars {
-            break;
-        }
-        prefix.push_str(line);
-        consumed += line_chars;
-    }
-
-    if prefix.is_empty() {
-        return (content.chars().take(max_chars).collect(), 0);
-    }
-
-    let next_line = prefix.lines().count() + 1;
-    (prefix, next_line)
-}
 
 #[derive(Serialize)]
 pub struct WebsiteViewProps {
@@ -80,17 +23,11 @@ pub struct WebsiteViewArgs {
 pub struct WebsiteViewTool {
     pub r#type: ToolType,
     pub function: Function<WebsiteViewProps>,
-    #[serde(skip_serializing)]
-    workspace_path: PathBuf,
 }
 
 #[async_trait]
 impl ToolCall for WebsiteViewTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
-        self.call_with_id("", args).await
-    }
-
-    async fn call_with_id(&self, tool_call_id: &str, args: &str) -> Result<String, Error> {
         let fn_args: WebsiteViewArgs = parse_tool_args(args)?;
         // let url = fn_args.url;
 
@@ -183,87 +120,7 @@ impl ToolCall for WebsiteViewTool {
             }
         };
 
-        // Truncate the content if it exceeds the maximum token count
-        // to avoid filling the context window with noise. The full
-        // content is written to a file in the session workspace so the
-        // agent can read specific sections via the bash tool.
-        let total_chars = content.chars().count();
-        if total_chars > MAX_OUTPUT_CHARS {
-            let (prefix, next_line) = prefix_at_line_boundary(&content, TRUNCATED_PREFIX_CHARS);
-
-            // The threshold is byte-based while the prefix is
-            // character-based, so multi-byte content can trip it even
-            // when everything fits in the character budget. In that
-            // case there is nothing to truncate.
-            if prefix.chars().count() >= total_chars {
-                return Ok(content);
-            }
-
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let filename = result_filename(tool_call_id, timestamp);
-
-            // Results live in a dedicated directory so they stay out of
-            // the workspace root, which holds stable artifacts like
-            // MEMORY.md and skill directories.
-            let results_dir = self.workspace_path.join("tool-results");
-            fs::create_dir_all(&results_dir).await?;
-            fs::write(results_dir.join(&filename), &content).await?;
-
-            // The bash tool mounts the session workspace at the sandbox
-            // root, so report the path the agent can actually open.
-            let sandbox_path = format!("{}tool-results/{}", SANDBOX_ROOT, filename);
-
-            let total_lines = content.lines().count();
-            let shown_lines = prefix.lines().count();
-            let line_count = if total_lines == 1 {
-                String::from("1 line")
-            } else {
-                format!("{} lines", total_lines)
-            };
-
-            let (banner, continuation) = if next_line == 0 {
-                let shown_chars = prefix.chars().count();
-                (
-                    format!(
-                        "[Content truncated — showing the first {} of {} characters. \
-                         Full markdown: `{}`.]",
-                        shown_chars, total_chars, sandbox_path,
-                    ),
-                    format!(
-                        "bash {{\"command\": \"cut -c {}-{} {}\"}}",
-                        shown_chars + 1,
-                        shown_chars + TRUNCATED_PREFIX_CHARS,
-                        sandbox_path,
-                    ),
-                )
-            } else {
-                (
-                    format!(
-                        "[Content truncated — showing lines 1-{} of {}. Full markdown: `{}`.]",
-                        shown_lines, total_lines, sandbox_path,
-                    ),
-                    format!(
-                        "bash {{\"command\": \"sed -n '{},{}p' {}\"}}",
-                        next_line,
-                        next_line + shown_lines,
-                        sandbox_path,
-                    ),
-                )
-            };
-
-            Ok(format!(
-                "{}\n\n{}\n\n---\n**Truncated:** full content is {} characters across {}, \
-                 saved to `{}`.\n\
-                 Continue with: {}\n\
-                 Search it with: bash {{\"command\": \"grep -n -i 'your search term' {}\"}}",
-                banner, prefix, total_chars, line_count, sandbox_path, continuation, sandbox_path,
-            ))
-        } else {
-            Ok(content)
-        }
+        Ok(content)
     }
 
     fn function_name(&self) -> String {
@@ -274,21 +131,17 @@ impl ToolCall for WebsiteViewTool {
 impl Tool for WebsiteViewTool {
     const NAME: &'static str = "view_website";
 
-    fn from_config(conf: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&conf.storage_path, &conf.session_id))
+    fn from_config(_conf: &ToolConfig) -> Result<Self> {
+        Ok(Self::new())
     }
 }
 
 impl WebsiteViewTool {
-    pub fn new(storage_path: &str, session_id: &str) -> Self {
-        let workspace_path = workspace_root(storage_path, session_id);
-
+    pub fn new() -> Self {
         let function = Function {
             name: Self::NAME.to_string(),
             description: String::from(
-                "Fetch a website and convert its content to markdown for viewing. Long pages \
-                 are truncated; the full markdown is saved to the session workspace and can \
-                 be read with the bash tool.",
+                "Fetch a website and convert its content to markdown for viewing.",
             ),
             parameters: Parameters {
                 r#type: String::from("object"),
@@ -309,14 +162,13 @@ impl WebsiteViewTool {
         Self {
             r#type: ToolType::Function,
             function,
-            workspace_path,
         }
     }
 }
 
 impl Default for WebsiteViewTool {
     fn default() -> Self {
-        Self::new("/tmp", "default")
+        Self::new()
     }
 }
 
@@ -324,10 +176,9 @@ impl Default for WebsiteViewTool {
 mod tests {
     use super::*;
     use mockito::Server;
-    use uuid::Uuid;
 
     fn test_tool() -> WebsiteViewTool {
-        WebsiteViewTool::new("/tmp", &Uuid::new_v4().to_string())
+        WebsiteViewTool::new()
     }
 
     #[tokio::test]
@@ -347,61 +198,6 @@ mod tests {
         assert!(result.is_ok());
         let content = result.unwrap();
         assert!(content.contains("Hello World"));
-    }
-
-    #[tokio::test]
-    async fn it_truncates_large_responses_and_points_at_the_full_file() {
-        let mut server = Server::new_async().await;
-        let paragraphs: String = (0..2_000)
-            .map(|i| format!("<p>Line {} of filler text for the truncation test.</p>", i))
-            .collect();
-        let body = format!("<html><body>{}</body></html>", paragraphs);
-        let _mock = server
-            .mock("GET", "/")
-            .with_status(200)
-            .with_header("content-type", "text/html")
-            .with_body(body)
-            .create();
-
-        let tool = test_tool();
-        let url = format!(r#"{{"url": "{}/"}}"#, server.url());
-        let content = tool.call_with_id("call_test123", &url).await.unwrap();
-
-        assert!(content.contains("Content truncated"));
-        assert!(content.contains("sed -n '"));
-        // The file is named after the tool call ID and the path must be
-        // the one the bash sandbox exposes, not a host path.
-        assert!(content.contains("/tool-results/call_test123.md"));
-        assert!(!content.contains("/workspace/"));
-        // The end of the page is not part of the truncated prefix.
-        assert!(!content.contains("Line 1999 of filler"));
-    }
-
-    #[test]
-    fn result_filename_uses_the_tool_call_id() {
-        assert_eq!(result_filename("call_abc123", 1), "call_abc123.md");
-    }
-
-    #[test]
-    fn result_filename_sanitizes_unusable_ids() {
-        assert_eq!(result_filename("../../etc/passwd", 7), "etcpasswd.md");
-        assert_eq!(result_filename("", 7), "call_7.md");
-    }
-
-    #[test]
-    fn prefix_at_line_boundary_stops_at_a_line_boundary() {
-        let (prefix, next_line) = prefix_at_line_boundary("aaaa\nbbbb\ncccc\n", 11);
-
-        assert_eq!(prefix, "aaaa\nbbbb\n");
-        assert_eq!(next_line, 3);
-    }
-
-    #[test]
-    fn prefix_at_line_boundary_falls_back_to_characters_for_one_long_line() {
-        let (prefix, next_line) = prefix_at_line_boundary("abcdefghij", 4);
-
-        assert_eq!(prefix, "abcd");
-        assert_eq!(next_line, 0);
     }
 
     #[tokio::test]

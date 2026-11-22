@@ -343,7 +343,7 @@ async fn chat_handler(
             EmailUnreadTool::new(note_search_api_url),
             EmailSearchTool::new(note_search_api_url),
             CalendarTool::new(db.clone(), note_search_api_url),
-            WebsiteViewTool::new(storage_path, &workspace_id),
+            WebsiteViewTool::new(),
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
