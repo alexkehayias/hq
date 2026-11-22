@@ -314,10 +314,26 @@ pub async fn decision(
     .await
 }
 
-/// Like [`decision`], with prompt-caching and safety-identifier options.
-pub async fn decision_with_options(
+/// The default timeout for a Decisions request.
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60 * 10);
+
+/// Build an HTTP client for Decisions requests with the given timeout.
+pub(crate) fn http_client(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .expect("failed to build the Decisions HTTP client")
+}
+
+/// Send one Decisions request over `http`.
+///
+/// `api_key` is optional because a local inference server commonly runs
+/// without authentication; when it is `None`, no `Authorization` header is
+/// sent.
+pub(crate) async fn send_decision(
+    http: &reqwest::Client,
     api_hostname: &str,
-    api_key: &str,
+    api_key: Option<&str>,
     model: &str,
     options: &DecisionOptions,
     input: &DecisionInput,
@@ -332,14 +348,14 @@ pub async fn decision_with_options(
         safety_identifier: options.safety_identifier.as_deref(),
     };
     let url = format!("{}/v1/decisions", api_hostname.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let mut request = http
         .post(url)
-        .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(60 * 10))
-        .json(&payload)
-        .send()
-        .await?;
+        .json(&payload);
+    if let Some(api_key) = api_key {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request.send().await?;
 
     let status = response.status();
     if !status.is_success() {
@@ -348,6 +364,27 @@ pub async fn decision_with_options(
     }
 
     Ok(response.json().await?)
+}
+
+/// Like [`decision`], with prompt-caching and safety-identifier options.
+pub async fn decision_with_options(
+    api_hostname: &str,
+    api_key: &str,
+    model: &str,
+    options: &DecisionOptions,
+    input: &DecisionInput,
+    questions: &[Question],
+) -> Result<Decision, Error> {
+    send_decision(
+        &http_client(DEFAULT_TIMEOUT),
+        api_hostname,
+        Some(api_key),
+        model,
+        options,
+        input,
+        questions,
+    )
+    .await
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
