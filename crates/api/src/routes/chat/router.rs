@@ -39,7 +39,7 @@ use hq::ai::tools::{
     BashTool, CalendarTool, CodeModeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
     DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
     MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
+    TasksScheduledTodayTool, Tool, ToolConfig, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use hq::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use hq::channels::prompt::system_prompt_section;
@@ -310,7 +310,7 @@ async fn chat_handler(
         vapid_key_path,
         index_dir_path,
         storage_path_owned,
-        code_mode,
+        code_mode_tool,
     ) = {
         let shared_state = state.read().expect("Unable to read share state");
         let AppConfig {
@@ -321,7 +321,6 @@ async fn chat_handler(
             openai_api_key,
             openai_model,
             vapid_key_path,
-            code_mode,
             ..
         } = &shared_state.config;
 
@@ -338,6 +337,22 @@ async fn chat_handler(
         // Push notifications are opened outside the app, so the link needs a
         // hostname rather than a relative path.
         let notification_url = format!("{note_search_api_url}/chat/?session_id={session_id}");
+
+        // `codemode` resolves its own bridged tool set from the same config,
+        // so it can sit alongside the normal tools without sharing instances.
+        let tool_config = ToolConfig {
+            db: db.clone(),
+            api_base_url: note_search_api_url.clone(),
+            storage_path: storage_path.clone(),
+            vapid_key_path: vapid_key_path.clone(),
+            session_id: workspace_id.clone(),
+            notification_url: Some(notification_url.clone()),
+            skill_registry: Some(shared_state.skill_registry.clone()),
+            api_hostname: openai_api_hostname.clone(),
+            api_key: openai_api_key.clone(),
+            model: openai_model.clone(),
+        };
+        let code_mode_tool = CodeModeTool::from_config(&tool_config)?;
 
         (
             NoteSearchTool::new(note_search_api_url),
@@ -366,11 +381,11 @@ async fn chat_handler(
             vapid_key_path.clone(),
             index_path.clone(),
             storage_path.clone(),
-            *code_mode,
+            code_mode_tool,
         )
     };
 
-    let all_tools: Vec<BoxedToolCall> = vec![
+    let mut all_tools: Vec<BoxedToolCall> = vec![
         Box::new(note_search_tool),
         Box::new(meeting_search_tool),
         Box::new(web_search_tool),
@@ -768,40 +783,20 @@ async fn chat_handler(
         transcript.push(system_msg);
     }
 
-    // Code mode exposes a single `code` tool whose guest namespace bridges the
-    // allowlisted tools. Everything else stays out of the model's tool list,
-    // which is where most of the token savings come from.
-    //
-    // Nested tool calls are invisible to the chat's middleware, so seed the
-    // bridge with the tools already used in this session and let it enforce the
-    // same prompt-injection rules itself.
-    let tools: Vec<BoxedToolCall> = if code_mode {
-        // `subagent` stays a top-level tool even in code mode: keeping it out
-        // of the guest means its calls are visible in the transcript and can
-        // run concurrently with other tool calls.
-        let (subagent_tools, bridged): (Vec<_>, Vec<_>) = all_tools
-            .into_iter()
-            .partition(|tool| tool.function_name() == "subagent");
-
-        let used_tools: HashSet<String> = transcript
-            .iter()
-            .filter(|message| *message.role() == Role::Assistant)
-            .filter_map(|message| message.tool_calls.as_ref())
-            .flatten()
-            .map(|call| call.function.name.clone())
-            .collect();
-
-        let mut tools = vec![Box::new(CodeModeTool::new(
-            &storage_path_owned,
-            &workspace_id,
-            bridged,
-            used_tools,
-        )?) as BoxedToolCall];
-        tools.extend(subagent_tools);
-        tools
-    } else {
-        all_tools
-    };
+    // `codemode` is offered alongside the normal tools, so the model can call a
+    // tool directly or compose several calls in Python. Nested tool calls are
+    // invisible to the chat's middleware, so seed the bridge with the tools
+    // already used in this session and let it enforce the same prompt-injection
+    // rules itself.
+    let used_tools: HashSet<String> = transcript
+        .iter()
+        .filter(|message| *message.role() == Role::Assistant)
+        .filter_map(|message| message.tool_calls.as_ref())
+        .flatten()
+        .map(|call| call.function.name.clone())
+        .collect();
+    code_mode_tool.seed_used_tools(used_tools);
+    all_tools.push(Box::new(code_mode_tool));
 
     let workspace_path = workspace_root(&storage_path_owned, &workspace_id);
 
@@ -809,7 +804,7 @@ async fn chat_handler(
         .database(&db, Some(&session_id), None)
         .transcript(transcript)
         .workspace_path(&workspace_path)
-        .tools(tools)
+        .tools(all_tools)
         .streaming(tx.clone())
         .middleware(vec![
             Box::new(InfiniteLoopDetector::new(3)),

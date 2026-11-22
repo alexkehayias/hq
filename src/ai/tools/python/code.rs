@@ -1,4 +1,7 @@
-//! The `code` tool: Python in the WASM sandbox with typed host tools.
+//! The `codemode` tool: Python in the WASM sandbox with typed host tools.
+//!
+//! It is offered alongside the normal tools, so the model can call a tool
+//! directly or compose several calls in Python, whichever fits the task.
 //!
 //! Guest code reaches tools through the `hq` namespace, e.g.
 //! `hq.search_notes(query="...")`. The Python side builds a typed wrapper per
@@ -131,7 +134,7 @@ impl ToolCall for CodeModeTool {
 }
 
 impl Tool for CodeModeTool {
-    const NAME: &'static str = "code";
+    const NAME: &'static str = "codemode";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
         // Resolve the bridged tools from a fresh registry rather than holding
@@ -150,6 +153,17 @@ impl Tool for CodeModeTool {
 }
 
 impl CodeModeTool {
+    /// Seed the prompt-injection state with the tools already used in this
+    /// session. Nested calls are invisible to the chat middleware, so the
+    /// bridge checks the same rules itself.
+    pub fn seed_used_tools(&self, used: HashSet<String>) {
+        let mut set = self
+            .used_tools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        set.extend(used);
+    }
+
     /// Build a code tool over `tools`, keeping only those in the allowlist.
     ///
     /// `used_tools` seeds the prompt-injection rules from the session
@@ -230,12 +244,14 @@ impl CodeModeTool {
         };
 
         let description = format!(
-            "Execute Python code in an isolated sandbox with typed access to host tools. Call \
-             tools as `hq.<name>(...)`; use `hq.help()` to list them or `hq.help(\"name\")` for \
-             argument docs. The value of the last expression is returned. Files are read and \
-             written relative to `/`, the session workspace shared with the bash tool. There is \
-             no network or environment access and only a subset of the standard library is \
-             available.\n\nAvailable tools:\n{index}"
+            "Execute Python code in an isolated sandbox with typed access to host tools. Use \
+             this when a task needs several tool calls, loops, filtering, or joins that would \
+             otherwise take many round-trips; the same tools are also available as regular \
+             tool calls. Call tools as `hq.<name>(...)`; use `hq.help()` to list them or \
+             `hq.help(\"name\")` for argument docs. The value of the last expression is \
+             returned. Files are read and written relative to `/`, the session workspace \
+             shared with the bash tool. There is no network or environment access and only a \
+             subset of the standard library is available.\n\nAvailable tools:\n{index}"
         );
 
         let function = Function {
@@ -491,9 +507,14 @@ mod tests {
     fn shell_sandbox_and_subagent_are_not_bridged() {
         assert!(!BRIDGED_TOOLS.contains(&"bash"));
         assert!(!BRIDGED_TOOLS.contains(&"python"));
-        assert!(!BRIDGED_TOOLS.contains(&"code"));
+        assert!(!BRIDGED_TOOLS.contains(&"codemode"));
         // Exposed as a separate top-level tool so its calls stay visible.
         assert!(!BRIDGED_TOOLS.contains(&"subagent"));
+    }
+
+    #[test]
+    fn tool_name_is_codemode() {
+        assert_eq!(CodeModeTool::NAME, "codemode");
     }
 
     async fn test_registry() -> ToolRegistry {

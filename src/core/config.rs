@@ -43,9 +43,6 @@ pub struct AppConfig {
     pub openai_api_hostname: String,
     pub openai_api_key: String,
     pub system_message: String,
-    /// Expose the `code` tool (Python with typed host tools) instead of the
-    /// individual tools. Opt in with `HQ_CODE_MODE=1`.
-    pub code_mode: bool,
 }
 
 impl Default for AppConfig {
@@ -75,9 +72,6 @@ impl Default for AppConfig {
             env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
         let system_message = env::var("HQ_SYSTEM_MESSAGE")
             .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
-        let code_mode = env::var("HQ_CODE_MODE")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-            .unwrap_or(false);
         let google_search_api_key = std::env::var("HQ_GOOGLE_SEARCH_API_KEY")
             .expect("Missing env var HQ_GOOGLE_SEARCH_API_KEY");
         let google_search_cx_id = std::env::var("HQ_GOOGLE_SEARCH_CX_ID")
@@ -100,7 +94,6 @@ impl Default for AppConfig {
             openai_api_key,
             openai_model,
             system_message,
-            code_mode,
         }
     }
 }
