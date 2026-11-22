@@ -69,7 +69,7 @@ struct ToolDefinition {
 
 /// Runs Python code with typed access to the host tools in [`BRIDGED_TOOLS`].
 #[derive(Serialize)]
-pub struct CodeTool {
+pub struct CodeModeTool {
     pub r#type: ToolType,
     pub function: Function<PythonProps>,
     #[serde(skip_serializing)]
@@ -85,7 +85,7 @@ pub struct CodeTool {
 }
 
 #[async_trait]
-impl ToolCall for CodeTool {
+impl ToolCall for CodeModeTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: PythonArgs = parse_tool_args(args)?;
 
@@ -130,7 +130,7 @@ impl ToolCall for CodeTool {
     }
 }
 
-impl Tool for CodeTool {
+impl Tool for CodeModeTool {
     const NAME: &'static str = "code";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
@@ -149,7 +149,7 @@ impl Tool for CodeTool {
     }
 }
 
-impl CodeTool {
+impl CodeModeTool {
     /// Build a code tool over `tools`, keeping only those in the allowlist.
     ///
     /// `used_tools` seeds the prompt-injection rules from the session
@@ -359,10 +359,10 @@ mod tests {
         named_echo_tool("echo")
     }
 
-    fn code_tool(tools: Vec<BoxedToolCall>) -> CodeTool {
+    fn code_tool(tools: Vec<BoxedToolCall>) -> CodeModeTool {
         let temp_dir = std::env::temp_dir();
         let workspace = temp_dir.join("workspace").join(Uuid::new_v4().to_string());
-        CodeTool::build(workspace, tools, HashSet::new()).unwrap()
+        CodeModeTool::build(workspace, tools, HashSet::new()).unwrap()
     }
 
     #[tokio::test]
@@ -474,7 +474,7 @@ mod tests {
         let workspace = std::env::temp_dir()
             .join("workspace")
             .join(Uuid::new_v4().to_string());
-        let tool = CodeTool::build(workspace, vec![named_echo_tool("notify")], used).unwrap();
+        let tool = CodeModeTool::build(workspace, vec![named_echo_tool("notify")], used).unwrap();
 
         let err = tool
             .call(r#"{"code": "hq.notify(value=\"x\")"}"#)

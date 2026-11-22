@@ -4,5 +4,5 @@ pub mod sandbox;
 mod tool;
 
 pub use builtin::PythonBuiltin;
-pub use code::CodeTool;
+pub use code::CodeModeTool;
 pub use tool::PythonTool;

@@ -8,7 +8,7 @@ use crate::ai::skills::SkillRegistry;
 use crate::openai::{BoxedToolCall, ToolCall};
 
 use super::{
-    BashTool, CalendarTool, CodeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
+    BashTool, CalendarTool, CodeModeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
     DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
     ListSkillsTool, LoadSkillTool, MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool,
     ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, SubagentTool, TasksDueTodayTool,
@@ -84,7 +84,7 @@ impl ToolRegistry {
         };
         registry.register::<BashTool>();
         registry.register::<PythonTool>();
-        registry.register::<CodeTool>();
+        registry.register::<CodeModeTool>();
         registry.register::<WebsiteViewTool>();
         registry.register::<DateTimeTool>();
         registry.register::<NotifyTool>();

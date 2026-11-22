@@ -36,7 +36,7 @@ use hq::ai::chat::{
     set_session_mode, user_message_with_attachments,
 };
 use hq::ai::tools::{
-    BashTool, CalendarTool, CodeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
+    BashTool, CalendarTool, CodeModeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
     DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
     MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
@@ -791,7 +791,7 @@ async fn chat_handler(
             .map(|call| call.function.name.clone())
             .collect();
 
-        let mut tools = vec![Box::new(CodeTool::new(
+        let mut tools = vec![Box::new(CodeModeTool::new(
             &storage_path_owned,
             &workspace_id,
             bridged,

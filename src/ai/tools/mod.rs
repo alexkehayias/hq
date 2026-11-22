@@ -34,7 +34,7 @@ pub mod notify;
 pub use notify::NotifyTool;
 
 pub mod python;
-pub use python::{CodeTool, PythonTool};
+pub use python::{CodeModeTool, PythonTool};
 
 pub mod loops;
 pub use loops::{CreateLoopTool, DeleteLoopTool, ListLoopsTool};
