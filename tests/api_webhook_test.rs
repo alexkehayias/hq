@@ -509,4 +509,135 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
+
+    /// Tests lm-proxy webhook records a token usage event
+    #[tokio::test]
+    #[serial]
+    async fn it_records_lm_proxy_metric() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/lm-proxy")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests lm-proxy webhook accepts the optional `reasoning` bucket
+    #[tokio::test]
+    #[serial]
+    async fn it_records_lm_proxy_metric_with_reasoning() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/lm-proxy")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "input": 100,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80,
+                            "reasoning": 40
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Tests lm-proxy webhook returns 422 when a required bucket is missing
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_422_for_missing_lm_proxy_bucket() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/lm-proxy")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Missing all required bucket fields should return 422 (serde deserialization error)
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Tests lm-proxy webhook returns 422 for a negative bucket value
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_422_for_negative_lm_proxy_bucket() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/lm-proxy")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "input": -1,
+                            "output": 50,
+                            "cache_read": 200,
+                            "cache_write": 80
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // u32 rejects negative integers — serde deserialization fails with 422
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Tests lm-proxy webhook returns 405 for GET request
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_405_for_lm_proxy_get_request() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/webhook/lm-proxy")
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
 }
