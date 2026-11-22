@@ -6,8 +6,8 @@ use hq::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use hq::ai::tools::{
-    CalendarTool, DateTimeTool, EmailUnreadTool, MeetingSearchTool, NoteSearchTool, SubagentTool,
-    WebSearchTool,
+    CalendarTool, DateTimeTool, DecisionsTool, EmailUnreadTool, MeetingSearchTool, NoteSearchTool,
+    SubagentTool, WebSearchTool,
 };
 use hq::core::db::async_db;
 use hq::core::markdown_render;
@@ -58,6 +58,7 @@ pub async fn run(
     };
 
     let datetime_tool = DateTimeTool::default();
+    let decisions_tool = DecisionsTool::new(api_hostname, api_key);
     let subagent_tool = SubagentTool::new(api_hostname, api_key, model);
 
     let tools: Vec<BoxedToolCall> = vec![
@@ -67,6 +68,7 @@ pub async fn run(
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
         Box::new(datetime_tool),
+        Box::new(decisions_tool),
         Box::new(subagent_tool),
     ];
 

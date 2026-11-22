@@ -6,6 +6,9 @@ pub use bash::{
 pub mod datetime;
 pub use datetime::DateTimeTool;
 
+pub mod decisions;
+pub use decisions::DecisionsTool;
+
 pub mod meeting_search;
 pub use meeting_search::MeetingSearchTool;
 

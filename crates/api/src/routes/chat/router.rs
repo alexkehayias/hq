@@ -35,9 +35,9 @@ use hq::ai::chat::{
     set_session_mode, user_message_with_attachments,
 };
 use hq::ai::tools::{
-    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
-    EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool, MeetingSearchTool,
-    NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
+    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DecisionsTool,
+    DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
+    MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use hq::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
@@ -293,6 +293,7 @@ async fn chat_handler(
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
         datetime_tool,
+        decisions_tool,
         bash_tool,
         python_tool,
         notify_tool,
@@ -347,6 +348,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
+            DecisionsTool::new(openai_api_hostname, openai_api_key),
             BashTool::new(storage_path, &workspace_id),
             PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
@@ -377,6 +379,7 @@ async fn chat_handler(
         Box::new(tasks_due_today_tool),
         Box::new(tasks_scheduled_today_tool),
         Box::new(datetime_tool),
+        Box::new(decisions_tool),
         Box::new(bash_tool),
         Box::new(python_tool),
         Box::new(notify_tool),
