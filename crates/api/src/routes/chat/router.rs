@@ -319,6 +319,7 @@ async fn chat_handler(
             openai_api_hostname,
             openai_api_key,
             openai_model,
+            openai_decision_model,
             vapid_key_path,
             ..
         } = &shared_state.config;
@@ -329,6 +330,7 @@ async fn chat_handler(
             api_hostname: openai_api_hostname.clone(),
             api_key: openai_api_key.clone(),
             model: openai_model.clone(),
+            decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };
@@ -348,7 +350,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
-            DecisionTool::new(openai_api_hostname, openai_api_key),
+            DecisionTool::new(openai_api_hostname, openai_api_key, openai_decision_model),
             BashTool::new(storage_path, &workspace_id),
             PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),

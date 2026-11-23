@@ -49,6 +49,9 @@ pub struct DecisionTool {
     api_hostname: String,
     #[serde(skip)]
     api_key: String,
+    /// Model used when the agent does not supply one.
+    #[serde(skip)]
+    decision_model: String,
 }
 
 #[async_trait]
@@ -67,7 +70,7 @@ impl ToolCall for DecisionTool {
             prompt_cache_options: fn_args.prompt_cache_options,
             safety_identifier: fn_args.safety_identifier,
         };
-        let model = fn_args.model.as_deref().unwrap_or(DEFAULT_MODEL);
+        let model = fn_args.model.as_deref().unwrap_or(&self.decision_model);
 
         let decision = decision_with_options(
             &self.api_hostname,
@@ -91,12 +94,16 @@ impl Tool for DecisionTool {
     const NAME: &'static str = "decisions";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&conf.api_hostname, &conf.api_key))
+        Ok(Self::new(
+            &conf.api_hostname,
+            &conf.api_key,
+            &conf.decision_model,
+        ))
     }
 }
 
 impl DecisionTool {
-    pub fn new(api_hostname: &str, api_key: &str) -> Self {
+    pub fn new(api_hostname: &str, api_key: &str, decision_model: &str) -> Self {
         let function = Function {
             name: Self::NAME.to_string(),
             description: String::from(
@@ -109,7 +116,7 @@ impl DecisionTool {
             ),
             parameters: Parameters {
                 r#type: String::from("object"),
-                properties: properties(),
+                properties: properties(decision_model),
                 required: vec![String::from("input"), String::from("questions")],
                 additional_properties: false,
             },
@@ -120,21 +127,22 @@ impl DecisionTool {
             function,
             api_hostname: api_hostname.to_string(),
             api_key: api_key.to_string(),
+            decision_model: decision_model.to_string(),
         }
     }
 }
 
 impl Default for DecisionTool {
     fn default() -> Self {
-        Self::new("https://api.openai.com", "")
+        Self::new("https://api.openai.com", "", DEFAULT_MODEL)
     }
 }
 
 /// The JSON schema for the tool's arguments.
-fn properties() -> DecisionProps {
+fn properties(decision_model: &str) -> DecisionProps {
     DecisionProps {
         model: Schema::string().describe(format!(
-            "The Decisions model to use. Defaults to `{DEFAULT_MODEL}`."
+            "The Decisions model to use. Defaults to `{decision_model}`."
         )),
         input: input_schema(),
         questions: Schema::array(question_schema())
@@ -418,7 +426,7 @@ mod tests {
             )
             .create();
 
-        let tool = DecisionTool::new(server.url().as_str(), "test-key");
+        let tool = DecisionTool::new(server.url().as_str(), "test-key", DEFAULT_MODEL);
         let result = tool
             .call(
                 r#"{
@@ -454,10 +462,36 @@ mod tests {
             .with_body(r#"{"model":"local-model","answers":[]}"#)
             .create();
 
-        let tool = DecisionTool::new(server.url().as_str(), "test-key");
+        let tool = DecisionTool::new(server.url().as_str(), "test-key", DEFAULT_MODEL);
         tool.call(
             r#"{
                 "model": "local-model",
+                "input": "evidence",
+                "questions": [{"type": "predicate", "instructions": "Is it true?"}]
+            }"#,
+        )
+        .await
+        .unwrap();
+
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn uses_the_configured_model_by_default() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/decisions")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "model": "configured-model"
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"model":"configured-model","answers":[]}"#)
+            .create();
+
+        let tool = DecisionTool::new(server.url().as_str(), "test-key", "configured-model");
+        tool.call(
+            r#"{
                 "input": "evidence",
                 "questions": [{"type": "predicate", "instructions": "Is it true?"}]
             }"#,
@@ -504,7 +538,7 @@ mod tests {
             .with_body(r#"{"model":"gpt-6-luna","answers":[]}"#)
             .create();
 
-        let tool = DecisionTool::new(server.url().as_str(), "test-key");
+        let tool = DecisionTool::new(server.url().as_str(), "test-key", DEFAULT_MODEL);
         tool.call(
             r#"{
                 "input": [

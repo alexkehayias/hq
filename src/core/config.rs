@@ -40,6 +40,7 @@ pub struct AppConfig {
     pub google_search_api_key: String,
     pub google_search_cx_id: String,
     pub openai_model: String,
+    pub openai_decision_model: String,
     pub openai_api_hostname: String,
     pub openai_api_key: String,
     pub system_message: String,
@@ -70,6 +71,8 @@ impl Default for AppConfig {
             env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
         let openai_model =
             env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+        let openai_decision_model =
+            env::var("HQ_LOCAL_DECISION_MODEL").unwrap_or_else(|_| openai_model.clone());
         let system_message = env::var("HQ_SYSTEM_MESSAGE")
             .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
         let google_search_api_key = std::env::var("HQ_GOOGLE_SEARCH_API_KEY")
@@ -93,6 +96,7 @@ impl Default for AppConfig {
             openai_api_hostname,
             openai_api_key,
             openai_model,
+            openai_decision_model,
             system_message,
         }
     }

@@ -53,6 +53,7 @@ pub struct LoopConfig<'a> {
     pub api_hostname: &'a str,
     pub api_key: &'a str,
     pub model: &'a str,
+    pub decision_model: &'a str,
     pub storage_path: &'a str,
     pub vapid_key_path: &'a str,
     pub title: &'a str,
@@ -81,6 +82,7 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
         api_hostname,
         api_key,
         model,
+        decision_model,
         storage_path,
         vapid_key_path,
         title,
@@ -156,6 +158,7 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
         api_hostname: api_hostname.to_string(),
         api_key: api_key.to_string(),
         model: model.to_string(),
+        decision_model: decision_model.to_string(),
     };
     let registry = ToolRegistry::builtin(context);
 
