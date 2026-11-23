@@ -33,7 +33,7 @@ struct DecisionsArgs {
 }
 
 #[derive(Serialize)]
-pub struct DecisionsTool {
+pub struct DecisionTool {
     pub r#type: ToolType,
     pub function: Function<Value>,
     #[serde(skip)]
@@ -43,7 +43,7 @@ pub struct DecisionsTool {
 }
 
 #[async_trait]
-impl ToolCall for DecisionsTool {
+impl ToolCall for DecisionTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: DecisionsArgs = parse_tool_args(args)?;
 
@@ -78,7 +78,7 @@ impl ToolCall for DecisionsTool {
     }
 }
 
-impl Tool for DecisionsTool {
+impl Tool for DecisionTool {
     const NAME: &'static str = "decisions";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
@@ -86,7 +86,7 @@ impl Tool for DecisionsTool {
     }
 }
 
-impl DecisionsTool {
+impl DecisionTool {
     pub fn new(api_hostname: &str, api_key: &str) -> Self {
         let function = Function {
             name: Self::NAME.to_string(),
@@ -115,7 +115,7 @@ impl DecisionsTool {
     }
 }
 
-impl Default for DecisionsTool {
+impl Default for DecisionTool {
     fn default() -> Self {
         Self::new("https://api.openai.com", "")
     }
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn function_json_exposes_every_api_field() {
-        let tool = DecisionsTool::default();
+        let tool = DecisionTool::default();
         let value = serde_json::to_value(&tool.function).unwrap();
 
         assert_eq!(value["name"], "decisions");
@@ -466,7 +466,7 @@ mod tests {
             )
             .create();
 
-        let tool = DecisionsTool::new(server.url().as_str(), "test-key");
+        let tool = DecisionTool::new(server.url().as_str(), "test-key");
         let result = tool
             .call(
                 r#"{
@@ -502,7 +502,7 @@ mod tests {
             .with_body(r#"{"model":"local-model","answers":[]}"#)
             .create();
 
-        let tool = DecisionsTool::new(server.url().as_str(), "test-key");
+        let tool = DecisionTool::new(server.url().as_str(), "test-key");
         tool.call(
             r#"{
                 "model": "local-model",
@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_empty_questions() {
-        let tool = DecisionsTool::default();
+        let tool = DecisionTool::default();
         let err = tool
             .call(r#"{"input": "evidence", "questions": []}"#)
             .await
@@ -552,7 +552,7 @@ mod tests {
             .with_body(r#"{"model":"gpt-6-luna","answers":[]}"#)
             .create();
 
-        let tool = DecisionsTool::new(server.url().as_str(), "test-key");
+        let tool = DecisionTool::new(server.url().as_str(), "test-key");
         tool.call(
             r#"{
                 "input": [

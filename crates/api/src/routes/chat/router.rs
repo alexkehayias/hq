@@ -35,7 +35,7 @@ use hq::ai::chat::{
     set_session_mode, user_message_with_attachments,
 };
 use hq::ai::tools::{
-    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DecisionsTool,
+    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DecisionTool,
     DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
     MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
@@ -348,7 +348,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
-            DecisionsTool::new(openai_api_hostname, openai_api_key),
+            DecisionTool::new(openai_api_hostname, openai_api_key),
             BashTool::new(storage_path, &workspace_id),
             PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
