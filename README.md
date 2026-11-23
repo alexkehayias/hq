@@ -50,7 +50,7 @@ cargo install --locked watchexec-cli
 ## Python sandbox
 
 The `python` tool and the `python`/`python3` shell builtin run guest code in a
-WASM component compiled from `src/ai/tools/python/guest.py`. The ~40 MB
+WASM component compiled from `src/ai/tools/python/guest.py`. The ~20 MB
 `sandbox.wasm` is not committed: `build.rs` compiles it with
 [componentize-py](https://github.com/bytecodealliance/componentize-py) the first
 time you build, and again whenever `guest.py` or `sandbox.wit` changes.

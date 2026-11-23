@@ -8,12 +8,15 @@ interface tools {
   /// Invoke a tool by name with JSON-encoded arguments. Returns the tool's raw
   /// result (usually JSON, but not required to be). Errors become Python
   /// exceptions in the guest.
-  call: func(name: string, args: string) -> result<string, string>;
+  ///
+  /// Async so guest code can `await` it (and `asyncio.gather` several calls)
+  /// without blocking the host.
+  call: async func(name: string, args: string) -> result<string, string>;
 }
 
 world sandbox {
   import tools;
 
-  export eval: func(expression: string, argv: list<string>) -> result<string, string>;
-  export exec: func(statements: string, argv: list<string>) -> result<string, string>;
+  export eval: async func(expression: string, argv: list<string>) -> result<string, string>;
+  export exec: async func(statements: string, argv: list<string>) -> result<string, string>;
 }

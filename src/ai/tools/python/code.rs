@@ -4,7 +4,7 @@
 //! directly or compose several calls in Python, whichever fits the task.
 //!
 //! Guest code reaches tools through the `hq` namespace, e.g.
-//! `hq.search_notes(query="...")`. The Python side builds a typed wrapper per
+//! `await hq.search_notes(query="...")`. The Python side builds a typed wrapper per
 //! tool from the JSON schema the host exposes (see `guest.py`), so the model
 //! writes ordinary Python instead of one tool call per step.
 //!
@@ -110,9 +110,9 @@ impl ToolCall for CodeModeTool {
             tokio::task::spawn_blocking(move || -> Result<ExecResult, RecoverableToolError> {
                 let sandbox =
                     shared_sandbox().map_err(|e| RecoverableToolError::new(&e.to_string()))?;
-                let bridge = ToolBridge::new(tools, definitions, runtime, used_tools);
-                sandbox
-                    .exec_with_tools(&code, &workspace, b"", &argv, Some(bridge))
+                let bridge = Arc::new(ToolBridge::new(tools, definitions, used_tools));
+                runtime
+                    .block_on(sandbox.exec_with_tools(&code, &workspace, b"", &argv, Some(bridge)))
                     .map_err(|e| RecoverableToolError::new(&e.to_string()))
             })
             .await??;
@@ -225,11 +225,12 @@ impl CodeModeTool {
                 code: Property {
                     r#type: String::from("string"),
                     description: String::from(
-                        "The Python code to execute. Host tools are available on the `hq` \
-                         namespace, e.g. `hq.search_notes(query=\"...\")`. Call `hq.help()` for \
-                         every tool and signature, or `hq.help(\"name\")` for one tool's \
-                         arguments. The value of the last expression is returned. Use print() \
-                         to produce stdout output.",
+                        "The Python code to execute. Host tools are async and live on the `hq` \
+                         namespace, e.g. `await hq.search_notes(query=\"...\")`; use \
+                         `asyncio.gather(...)` to run several concurrently. Call `hq.help()` \
+                         for every tool and signature, or `hq.help(\"name\")` for one tool's \
+                         arguments. Top-level `await` is supported. The value of the last \
+                         expression is returned. Use print() to produce stdout output.",
                     ),
                     r#enum: None,
                 },
@@ -247,8 +248,10 @@ impl CodeModeTool {
             "Execute Python code in an isolated sandbox with typed access to host tools. Use \
              this when a task needs several tool calls, loops, filtering, or joins that would \
              otherwise take many round-trips; the same tools are also available as regular \
-             tool calls. Call tools as `hq.<name>(...)`; use `hq.help()` to list them or \
-             `hq.help(\"name\")` for argument docs. The value of the last expression is \
+             tool calls. Call tools as `await hq.<name>(...)`; use `asyncio.gather(...)` to \
+             run several concurrently, and `hq.help()` to list them or `hq.help(\"name\")` \
+             for argument docs. Top-level `await` is supported. The value of the last \
+             expression is \
              returned. Files are read and written relative to `/`, the session workspace \
              shared with the bash tool. There is no network or environment access and only a \
              subset of the standard library is available.\n\nAvailable tools:\n{index}"
@@ -375,6 +378,57 @@ mod tests {
         named_echo_tool("echo")
     }
 
+    type Intervals = Arc<Mutex<Vec<(std::time::Instant, std::time::Instant)>>>;
+
+    #[derive(Serialize)]
+    struct SleepTool {
+        r#type: ToolType,
+        function: Function<EchoProps>,
+        #[serde(skip_serializing)]
+        name: String,
+        #[serde(skip_serializing)]
+        intervals: Intervals,
+    }
+
+    #[async_trait]
+    impl ToolCall for SleepTool {
+        async fn call(&self, args: &str) -> Result<String, Error> {
+            let value: serde_json::Value = serde_json::from_str(args)?;
+            let started = std::time::Instant::now();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            self.intervals
+                .lock()
+                .unwrap()
+                .push((started, std::time::Instant::now()));
+            Ok(serde_json::to_string(&value["value"])?)
+        }
+
+        fn function_name(&self) -> String {
+            self.name.clone()
+        }
+    }
+
+    fn sleep_tool(intervals: Intervals) -> BoxedToolCall {
+        Box::new(SleepTool {
+            r#type: ToolType::Function,
+            function: Function {
+                name: "sleep".to_string(),
+                description: "Sleeps for a second, then echoes a value.".to_string(),
+                parameters: Parameters {
+                    r#type: String::from("object"),
+                    properties: EchoProps {
+                        value: Property::new("string", "Value to echo back."),
+                    },
+                    required: vec![String::from("value")],
+                    additional_properties: false,
+                },
+                strict: true,
+            },
+            name: "sleep".to_string(),
+            intervals,
+        })
+    }
+
     fn code_tool(tools: Vec<BoxedToolCall>) -> CodeModeTool {
         let temp_dir = std::env::temp_dir();
         let workspace = temp_dir.join("workspace").join(Uuid::new_v4().to_string());
@@ -385,7 +439,7 @@ mod tests {
     async fn calls_bridged_tool_from_guest() {
         let tool = code_tool(vec![echo_tool()]);
         let result = tool
-            .call(r#"{"code": "hq.echo(value=\"hi\")"}"#)
+            .call(r#"{"code": "await hq.echo(value=\"hi\")"}"#)
             .await
             .unwrap();
         let output: PythonOutput = serde_json::from_str(&result).unwrap();
@@ -396,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn guest_can_compose_tool_calls() {
         let tool = code_tool(vec![echo_tool()]);
-        let code = "values = [hq.echo(value=str(i)) for i in range(3)]\nvalues";
+        let code = "values = [await hq.echo(value=str(i)) for i in range(3)]\nvalues";
         let result = tool
             .call(&serde_json::json!({ "code": code }).to_string())
             .await
@@ -407,10 +461,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gather_interleaves_guest_coroutines() {
+        let tool = code_tool(vec![]);
+        let code = r#"
+import asyncio
+order = []
+async def step(name):
+    order.append(name + ":start")
+    await asyncio.sleep(0)
+    order.append(name + ":end")
+    return name
+results = await asyncio.gather(step("a"), step("b"))
+(results, order)
+"#;
+        let result = tool
+            .call(&serde_json::json!({ "code": code }).to_string())
+            .await
+            .unwrap();
+        let output: PythonOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(
+            output.value,
+            serde_json::json!([["a", "b"], ["a:start", "b:start", "a:end", "b:end"]])
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gather_runs_tool_calls_concurrently() {
+        let intervals: Intervals = Arc::new(Mutex::new(Vec::new()));
+        let tool = code_tool(vec![sleep_tool(intervals.clone())]);
+        let code = r#"
+import asyncio
+results = await asyncio.gather(hq.sleep(value="a"), hq.sleep(value="b"))
+results
+"#;
+        let result = tool
+            .call(&serde_json::json!({ "code": code }).to_string())
+            .await
+            .unwrap();
+        let output: PythonOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(output.value, serde_json::json!(["a", "b"]));
+
+        let intervals = intervals.lock().unwrap();
+        assert_eq!(intervals.len(), 2, "expected two tool calls");
+        let (first, second) = (&intervals[0], &intervals[1]);
+        assert!(
+            first.0 < second.1 && second.0 < first.1,
+            "tool calls did not overlap: {intervals:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unawaited_tool_call_is_an_error() {
+        let tool = code_tool(vec![echo_tool()]);
+        let err = tool
+            .call(r#"{"code": "hq.echo(value=\"hi\")"}"#)
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("not awaited"),
+            "expected a missing-await error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn missing_arguments_raise_python_type_error() {
         let tool = code_tool(vec![echo_tool()]);
         let err = tool
-            .call(r#"{"code": "hq.echo(bogus=\"x\")"}"#)
+            .call(r#"{"code": "await hq.echo(bogus=\"x\")"}"#)
             .await
             .unwrap_err();
 
@@ -429,7 +549,7 @@ mod tests {
     async fn unknown_arguments_raise_python_type_error() {
         let tool = code_tool(vec![echo_tool()]);
         let err = tool
-            .call(r#"{"code": "hq.echo(value=\"x\", bogus=\"y\")"}"#)
+            .call(r#"{"code": "await hq.echo(value=\"x\", bogus=\"y\")"}"#)
             .await
             .unwrap_err();
 
@@ -442,7 +562,10 @@ mod tests {
     #[tokio::test]
     async fn tool_failures_raise_tool_error() {
         let tool = code_tool(vec![fail_tool()]);
-        let err = tool.call(r#"{"code": "hq.fail()"}"#).await.unwrap_err();
+        let err = tool
+            .call(r#"{"code": "await hq.fail()"}"#)
+            .await
+            .unwrap_err();
 
         assert!(
             err.to_string().contains("boom"),
@@ -453,7 +576,8 @@ mod tests {
     #[tokio::test]
     async fn guest_can_catch_tool_errors() {
         let tool = code_tool(vec![fail_tool()]);
-        let code = "try:\n    hq.fail()\nexcept hq.ToolError as e:\n    caught = str(e)\ncaught";
+        let code =
+            "try:\n    await hq.fail()\nexcept hq.ToolError as e:\n    caught = str(e)\ncaught";
         let result = tool
             .call(&serde_json::json!({ "code": code }).to_string())
             .await
@@ -493,7 +617,7 @@ mod tests {
         let tool = CodeModeTool::build(workspace, vec![named_echo_tool("notify")], used).unwrap();
 
         let err = tool
-            .call(r#"{"code": "hq.notify(value=\"x\")"}"#)
+            .call(r#"{"code": "await hq.notify(value=\"x\")"}"#)
             .await
             .unwrap_err();
 
