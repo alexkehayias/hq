@@ -1,8 +1,8 @@
 //! Tool wrapper around the OpenAI [Decisions API](crate::openai::decisions).
 //!
-//! The agent supplies the whole request — the shared `input`, one or more
-//! `questions`, and optionally the `model` and prompt-caching/safety options.
-//! The API hostname and key come from [`ToolConfig`] so the tool works against
+//! The agent supplies the request — the shared `input`, one or more
+//! `questions`, and optionally the prompt-caching/safety options. The API
+//! hostname, key, and model come from [`ToolConfig`] so the tool works against
 //! both `api.openai.com` and a local OpenAI-compatible server.
 
 use super::registry::{Tool, ToolConfig};
@@ -19,8 +19,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 struct DecisionsArgs {
-    #[serde(default)]
-    model: Option<String>,
     input: DecisionInput,
     questions: Vec<Question>,
     #[serde(default)]
@@ -33,7 +31,6 @@ struct DecisionsArgs {
 
 #[derive(Serialize)]
 pub struct DecisionProps {
-    model: Schema,
     input: Schema,
     questions: Schema,
     prompt_cache_key: Schema,
@@ -49,7 +46,7 @@ pub struct DecisionTool {
     api_hostname: String,
     #[serde(skip)]
     api_key: String,
-    /// Model used when the agent does not supply one.
+    /// Model used for every request.
     #[serde(skip)]
     decision_model: String,
 }
@@ -70,12 +67,10 @@ impl ToolCall for DecisionTool {
             prompt_cache_options: fn_args.prompt_cache_options,
             safety_identifier: fn_args.safety_identifier,
         };
-        let model = fn_args.model.as_deref().unwrap_or(&self.decision_model);
-
         let decision = decision_with_options(
             &self.api_hostname,
             &self.api_key,
-            model,
+            &self.decision_model,
             &options,
             &fn_args.input,
             &fn_args.questions,
@@ -116,7 +111,7 @@ impl DecisionTool {
             ),
             parameters: Parameters {
                 r#type: String::from("object"),
-                properties: properties(decision_model),
+                properties: properties(),
                 required: vec![String::from("input"), String::from("questions")],
                 additional_properties: false,
             },
@@ -139,11 +134,8 @@ impl Default for DecisionTool {
 }
 
 /// The JSON schema for the tool's arguments.
-fn properties(decision_model: &str) -> DecisionProps {
+fn properties() -> DecisionProps {
     DecisionProps {
-        model: Schema::string().describe(format!(
-            "The Decisions model to use. Defaults to `{decision_model}`."
-        )),
         input: input_schema(),
         questions: Schema::array(question_schema())
             .min_items(1)
@@ -363,7 +355,7 @@ mod tests {
     use serde_json::{Value, json};
 
     #[test]
-    fn function_json_exposes_every_api_field() {
+    fn function_json_exposes_agent_supplied_fields() {
         let tool = DecisionTool::default();
         let value = serde_json::to_value(&tool.function).unwrap();
 
@@ -375,7 +367,6 @@ mod tests {
 
         let properties = &value["parameters"]["properties"];
         for field in [
-            "model",
             "input",
             "questions",
             "prompt_cache_key",
@@ -387,6 +378,10 @@ mod tests {
                 "missing property '{field}'"
             );
         }
+        assert!(
+            properties.get("model").is_none(),
+            "the model is configured, not agent-supplied"
+        );
 
         let question_types = properties["questions"]["items"]["anyOf"]
             .as_array()
@@ -447,33 +442,6 @@ mod tests {
         let decision: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(decision["answers"][0]["probability"], 0.95);
         assert_eq!(decision["model"], "gpt-6-luna");
-    }
-
-    #[tokio::test]
-    async fn uses_the_supplied_model() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/v1/decisions")
-            .match_body(mockito::Matcher::PartialJson(json!({
-                "model": "local-model"
-            })))
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"model":"local-model","answers":[]}"#)
-            .create();
-
-        let tool = DecisionTool::new(server.url().as_str(), "test-key", DEFAULT_MODEL);
-        tool.call(
-            r#"{
-                "model": "local-model",
-                "input": "evidence",
-                "questions": [{"type": "predicate", "instructions": "Is it true?"}]
-            }"#,
-        )
-        .await
-        .unwrap();
-
-        mock.assert();
     }
 
     #[tokio::test]
