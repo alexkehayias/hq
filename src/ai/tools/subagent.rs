@@ -9,10 +9,6 @@ use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-/// Cap on the output returned to the parent agent so the result never blows up
-/// the parent's context window.
-const MAX_OUTPUT_CHARS: usize = 20_000;
-
 const DEFAULT_TIMEOUT_SECS: u64 = 90;
 
 /// The subagent gets a fresh transcript, so it needs to be told that it is
@@ -138,21 +134,12 @@ impl SubagentTool {
                     }
                     text.push_str(m);
                 }
-                truncate_output(text)
+                text
             }
             Ok(Err(e)) => format!("Subagent errored: {}", e),
             Err(_) => String::from("Subagent timed out."),
         }
     }
-}
-
-fn truncate_output(text: String) -> String {
-    if text.chars().count() <= MAX_OUTPUT_CHARS {
-        return text;
-    }
-    let mut out: String = text.chars().take(MAX_OUTPUT_CHARS).collect();
-    out.push_str("\n\n[Result truncated: exceeded output limit.]");
-    out
 }
 
 impl Default for SubagentTool {
@@ -176,19 +163,5 @@ mod tests {
     fn parse_args_explicit() {
         let args = parse_tool_args::<SubagentArgs>(r#"{"task": "t", "timeout_secs": 10}"#).unwrap();
         assert_eq!(args.timeout_secs, 10);
-    }
-
-    #[test]
-    fn truncates_oversized_output() {
-        let big = "x".repeat(MAX_OUTPUT_CHARS + 100);
-        let out = truncate_output(big);
-        assert!(out.contains("Result truncated"));
-        assert!(out.starts_with("xxx"));
-        assert!(out.chars().count() <= MAX_OUTPUT_CHARS + 64);
-    }
-
-    #[test]
-    fn leaves_small_output_untouched() {
-        assert_eq!(truncate_output("done".to_string()), "done");
     }
 }

@@ -33,6 +33,7 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use hq::ai::chat::workspace::workspace_root;
 use hq::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
@@ -141,6 +142,8 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
     // the same workspace directory. Files written in one turn are visible in
     // later turns even though the LLM transcript is rebuilt fresh each turn.
     let session_id = Uuid::new_v4().to_string();
+    // Oversized tool output is saved here so the agent can inspect it with bash.
+    let workspace_path = workspace_root(storage_path, &session_id);
 
     // Build the tool registry once. The registry owns the context (including the
     // fixed session_id), so tools rebuilt per event stay rooted in the same
@@ -184,6 +187,7 @@ pub async fn run(db: Connection, config: LoopConfig<'_>) -> Result<()> {
 
                 let mut chat = ChatBuilder::new(api_hostname, api_key, model)
                     .transcript(vec![Message::new(Role::System, &system_prompt)])
+                    .workspace_path(&workspace_path)
                     .tools(tools)
                     .middleware(vec![
                         Box::new(InfiniteLoopDetector::new(3)),
