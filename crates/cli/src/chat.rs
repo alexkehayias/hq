@@ -58,7 +58,7 @@ pub async fn run(
     };
 
     let datetime_tool = DateTimeTool::default();
-    let decisions_tool = DecisionTool::new(api_hostname, api_key);
+    let decision_tool = DecisionTool::new(api_hostname, api_key);
     let subagent_tool = SubagentTool::new(api_hostname, api_key, model);
 
     let tools: Vec<BoxedToolCall> = vec![
@@ -68,7 +68,7 @@ pub async fn run(
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
         Box::new(datetime_tool),
-        Box::new(decisions_tool),
+        Box::new(decision_tool),
         Box::new(subagent_tool),
     ];
 
