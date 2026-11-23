@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 use tokio::sync::mpsc;
 
 use anyhow::{Error, Result};
@@ -345,6 +348,123 @@ impl ArrayProperty {
             description: description.to_string(),
             items: Property::new("string", "An item in the array."),
         }
+    }
+}
+
+/// A JSON Schema fragment for a tool parameter.
+///
+/// [`Property`] covers flat scalar parameters and [`ArrayProperty`] covers
+/// arrays of scalars. `Schema` covers the rest: nested objects, arrays of
+/// objects, non-string enums, and `anyOf` unions. Build one with the
+/// constructors below and chain [`Schema::describe`], [`Schema::required`], or
+/// [`Schema::min_items`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Schema {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
+    pub enum_values: Option<Vec<Value>>,
+    #[serde(rename = "anyOf", skip_serializing_if = "Option::is_none")]
+    pub any_of: Option<Vec<Schema>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<Schema>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<BTreeMap<String, Schema>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<Vec<String>>,
+    #[serde(
+        rename = "additionalProperties",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub additional_properties: Option<bool>,
+    #[serde(rename = "minItems", skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<usize>,
+}
+
+impl Schema {
+    fn typed(r#type: &str) -> Self {
+        Self {
+            r#type: Some(r#type.to_string()),
+            ..Self::default()
+        }
+    }
+
+    pub fn string() -> Self {
+        Self::typed("string")
+    }
+
+    pub fn boolean() -> Self {
+        Self::typed("boolean")
+    }
+
+    pub fn integer() -> Self {
+        Self::typed("integer")
+    }
+
+    /// A schema with no type constraint, for arbitrary JSON.
+    pub fn any() -> Self {
+        Self::default()
+    }
+
+    /// A string enum.
+    pub fn enum_strings(values: &[&str]) -> Self {
+        Self {
+            enum_values: Some(
+                values
+                    .iter()
+                    .map(|v| Value::String((*v).to_string()))
+                    .collect(),
+            ),
+            ..Self::typed("string")
+        }
+    }
+
+    /// An array whose items match `items`.
+    pub fn array(items: Schema) -> Self {
+        Self {
+            items: Some(Box::new(items)),
+            ..Self::typed("array")
+        }
+    }
+
+    /// An object with named properties. Disallows additional properties.
+    pub fn object(properties: Vec<(&str, Schema)>) -> Self {
+        Self {
+            properties: Some(
+                properties
+                    .into_iter()
+                    .map(|(name, schema)| (name.to_string(), schema))
+                    .collect(),
+            ),
+            additional_properties: Some(false),
+            ..Self::typed("object")
+        }
+    }
+
+    /// A union of schemas.
+    pub fn any_of(schemas: Vec<Schema>) -> Self {
+        Self {
+            any_of: Some(schemas),
+            ..Self::default()
+        }
+    }
+
+    pub fn describe(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Mark properties as required. Only meaningful on an object schema.
+    pub fn required(mut self, names: &[&str]) -> Self {
+        self.required = Some(names.iter().map(|name| (*name).to_string()).collect());
+        self
+    }
+
+    pub fn min_items(mut self, min_items: usize) -> Self {
+        self.min_items = Some(min_items);
+        self
     }
 }
 
@@ -939,6 +1059,50 @@ mod tests {
         assert_eq!(json["type"], "object");
         assert_eq!(json["required"].as_array().unwrap()[0], "query");
         assert_eq!(json["additionalProperties"], false);
+    }
+
+    #[test]
+    fn test_schema_serialization() {
+        let schema = Schema::object(vec![
+            ("kind", Schema::enum_strings(&["a", "b"])),
+            (
+                "items",
+                Schema::array(Schema::object(vec![("id", Schema::string())]).required(&["id"]))
+                    .min_items(1),
+            ),
+            (
+                "value",
+                Schema::any_of(vec![Schema::string(), Schema::boolean()]),
+            ),
+            ("payload", Schema::any()),
+        ])
+        .required(&["kind"])
+        .describe("An example");
+
+        assert_eq!(
+            serde_json::to_value(&schema).unwrap(),
+            serde_json::json!({
+                "type": "object",
+                "description": "An example",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["a", "b"]},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}},
+                            "required": ["id"],
+                            "additionalProperties": false
+                        },
+                        "minItems": 1
+                    },
+                    "value": {"anyOf": [{"type": "string"}, {"type": "boolean"}]},
+                    "payload": {}
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+            })
+        );
     }
 
     #[test]

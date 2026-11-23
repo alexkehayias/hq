@@ -11,12 +11,11 @@ use crate::openai::decisions::{
     decision_with_options,
 };
 use crate::openai::{
-    Function, Parameters, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
+    Function, Parameters, RecoverableToolError, Schema, ToolCall, ToolType, parse_tool_args,
 };
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 struct DecisionsArgs {
@@ -33,9 +32,19 @@ struct DecisionsArgs {
 }
 
 #[derive(Serialize)]
+pub struct DecisionProps {
+    model: Schema,
+    input: Schema,
+    questions: Schema,
+    prompt_cache_key: Schema,
+    prompt_cache_options: Schema,
+    safety_identifier: Schema,
+}
+
+#[derive(Serialize)]
 pub struct DecisionTool {
     pub r#type: ToolType,
-    pub function: Function<Value>,
+    pub function: Function<DecisionProps>,
     #[serde(skip)]
     api_hostname: String,
     #[serde(skip)]
@@ -122,285 +131,228 @@ impl Default for DecisionTool {
 }
 
 /// The JSON schema for the tool's arguments.
-fn properties() -> Value {
-    json!({
-        "model": {
-            "type": "string",
-            "description": format!(
-                "The Decisions model to use. Defaults to `{DEFAULT_MODEL}`."
-            ),
-        },
-        "input": input_schema(),
-        "questions": {
-            "type": "array",
-            "minItems": 1,
-            "description": "Questions to ask about the input. Answers are returned in the same order.",
-            "items": question_schema(),
-        },
-        "prompt_cache_key": {
-            "type": "string",
-            "description": "Optional key that groups related requests for prompt caching.",
-        },
-        "prompt_cache_options": {
-            "type": "object",
-            "description": "Optional prompt-caching settings.",
-            "properties": {
-                "mode": { "type": "string", "enum": ["implicit", "explicit"] },
-                "ttl": { "type": "string", "enum": ["30m"] },
-            },
-            "additionalProperties": false,
-        },
-        "safety_identifier": {
-            "type": "string",
-            "description": "Optional stable identifier for the end user, used for safety monitoring.",
-        },
-    })
+fn properties() -> DecisionProps {
+    DecisionProps {
+        model: Schema::string().describe(format!(
+            "The Decisions model to use. Defaults to `{DEFAULT_MODEL}`."
+        )),
+        input: input_schema(),
+        questions: Schema::array(question_schema())
+            .min_items(1)
+            .describe("Questions to ask about the input. Answers are returned in the same order."),
+        prompt_cache_key: Schema::string()
+            .describe("Optional key that groups related requests for prompt caching."),
+        prompt_cache_options: Schema::object(vec![
+            ("mode", Schema::enum_strings(&["implicit", "explicit"])),
+            ("ttl", Schema::enum_strings(&["30m"])),
+        ])
+        .describe("Optional prompt-caching settings."),
+        safety_identifier: Schema::string()
+            .describe("Optional stable identifier for the end user, used for safety monitoring."),
+    }
 }
 
 /// Shared evidence: plain text or an ordered conversation.
-fn input_schema() -> Value {
-    json!({
-        "description": "Shared evidence every question is evaluated against: a plain text string, \
-                        or an ordered array of conversation items.",
-        "anyOf": [
-            { "type": "string" },
-            { "type": "array", "items": input_item_schema() },
-        ],
-    })
+fn input_schema() -> Schema {
+    Schema::any_of(vec![Schema::string(), Schema::array(input_item_schema())]).describe(
+        "Shared evidence every question is evaluated against: a plain text string, or an \
+         ordered array of conversation items.",
+    )
 }
 
 /// A conversation item in the `input` evidence array.
-fn input_item_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "A conversation item. `type` selects the shape: `message`, \
-                        `function_call`, `function_call_output`, `custom_tool_call`, or \
-                        `custom_tool_call_output`.",
-        "properties": {
-            "type": {
-                "type": "string",
-                "enum": [
-                    "message",
-                    "function_call",
-                    "function_call_output",
-                    "custom_tool_call",
-                    "custom_tool_call_output"
-                ],
-            },
-            "role": {
-                "type": "string",
-                "enum": ["system", "developer", "user", "assistant", "tool"],
-                "description": "The message role (message items only).",
-            },
-            "content": message_content_schema(),
-            "refusal": {
-                "type": "boolean",
-                "description": "Whether the message is a refusal (message items only).",
-            },
-            "tool_call_id": {
-                "type": "string",
-                "description": "The call id a tool-role message responds to.",
-            },
-            "tool_calls": {
-                "type": "array",
-                "description": "Function calls requested by an assistant message.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string" },
-                        "type": { "type": "string", "enum": ["function"] },
-                        "function": {
-                            "type": "object",
-                            "properties": {
-                                "name": { "type": "string" },
-                                "arguments": { "type": "string" },
-                            },
-                            "required": ["name", "arguments"],
-                            "additionalProperties": false,
-                        },
-                    },
-                    "required": ["id", "type", "function"],
-                    "additionalProperties": false,
-                },
-            },
-            "phase": {
-                "type": "string",
-                "enum": ["commentary", "final_answer"],
-                "description": "The phase of an assistant message.",
-            },
-            "call_id": { "type": "string" },
-            "name": { "type": "string" },
-            "arguments": { "type": "string" },
-            "input": { "type": "string" },
-            "output": {
-                "description": "A tool output: a string or an array of content parts.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "array", "items": content_part_schema() },
-                ],
-            },
-            "id": { "type": "string" },
-            "namespace": { "type": "string" },
-            "status": {
-                "type": "string",
-                "enum": ["in_progress", "completed", "incomplete"],
-            },
-        },
-        "required": ["type"],
-        "additionalProperties": false,
-    })
+fn input_item_schema() -> Schema {
+    Schema::object(vec![
+        (
+            "type",
+            Schema::enum_strings(&[
+                "message",
+                "function_call",
+                "function_call_output",
+                "custom_tool_call",
+                "custom_tool_call_output",
+            ]),
+        ),
+        (
+            "role",
+            Schema::enum_strings(&["system", "developer", "user", "assistant", "tool"])
+                .describe("The message role (message items only)."),
+        ),
+        ("content", message_content_schema()),
+        (
+            "refusal",
+            Schema::boolean().describe("Whether the message is a refusal (message items only)."),
+        ),
+        (
+            "tool_call_id",
+            Schema::string().describe("The call id a tool-role message responds to."),
+        ),
+        (
+            "tool_calls",
+            Schema::array(
+                Schema::object(vec![
+                    ("id", Schema::string()),
+                    ("type", Schema::enum_strings(&["function"])),
+                    (
+                        "function",
+                        Schema::object(vec![
+                            ("name", Schema::string()),
+                            ("arguments", Schema::string()),
+                        ])
+                        .required(&["name", "arguments"]),
+                    ),
+                ])
+                .required(&["id", "type", "function"]),
+            )
+            .describe("Function calls requested by an assistant message."),
+        ),
+        (
+            "phase",
+            Schema::enum_strings(&["commentary", "final_answer"])
+                .describe("The phase of an assistant message."),
+        ),
+        ("call_id", Schema::string()),
+        ("name", Schema::string()),
+        ("arguments", Schema::string()),
+        ("input", Schema::string()),
+        (
+            "output",
+            Schema::any_of(vec![Schema::string(), Schema::array(content_part_schema())])
+                .describe("A tool output: a string or an array of content parts."),
+        ),
+        ("id", Schema::string()),
+        ("namespace", Schema::string()),
+        (
+            "status",
+            Schema::enum_strings(&["in_progress", "completed", "incomplete"]),
+        ),
+    ])
+    .required(&["type"])
+    .describe(
+        "A conversation item. `type` selects the shape: `message`, `function_call`, \
+         `function_call_output`, `custom_tool_call`, or `custom_tool_call_output`.",
+    )
 }
 
 /// Message content: plain text or an array of content parts.
-fn message_content_schema() -> Value {
-    json!({
-        "anyOf": [
-            { "type": "string" },
-            { "type": "array", "items": content_part_schema() },
-        ],
-    })
+fn message_content_schema() -> Schema {
+    Schema::any_of(vec![Schema::string(), Schema::array(content_part_schema())])
 }
 
 /// A content part used in Decisions evidence.
-fn content_part_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "A content part. The `type` field selects the shape.",
-        "properties": {
-            "type": {
-                "type": "string",
-                "enum": ["input_text", "input_image", "input_json", "output_text", "refusal"],
-            },
-            "text": {
-                "type": "string",
-                "description": "Text for input_text and output_text parts.",
-            },
-            "image_url": {
-                "type": "string",
-                "description": "A URL or data URL for an input_image part.",
-            },
-            "detail": {
-                "type": "string",
-                "enum": ["low", "high", "auto", "original"],
-            },
-            "data": {
-                "description": "Arbitrary JSON for an input_json part.",
-            },
-            "refusal": {
-                "type": "string",
-                "description": "Refusal text for a refusal part.",
-            },
-            "prompt_cache_breakpoint": {
-                "type": "object",
-                "properties": {
-                    "mode": { "type": "string", "enum": ["explicit"] },
-                },
-                "required": ["mode"],
-                "additionalProperties": false,
-            },
-        },
-        "required": ["type"],
-        "additionalProperties": false,
-    })
+fn content_part_schema() -> Schema {
+    Schema::object(vec![
+        (
+            "type",
+            Schema::enum_strings(&[
+                "input_text",
+                "input_image",
+                "input_json",
+                "output_text",
+                "refusal",
+            ]),
+        ),
+        (
+            "text",
+            Schema::string().describe("Text for input_text and output_text parts."),
+        ),
+        (
+            "image_url",
+            Schema::string().describe("A URL or data URL for an input_image part."),
+        ),
+        (
+            "detail",
+            Schema::enum_strings(&["low", "high", "auto", "original"]),
+        ),
+        (
+            "data",
+            Schema::any().describe("Arbitrary JSON for an input_json part."),
+        ),
+        (
+            "refusal",
+            Schema::string().describe("Refusal text for a refusal part."),
+        ),
+        (
+            "prompt_cache_breakpoint",
+            Schema::object(vec![("mode", Schema::enum_strings(&["explicit"]))]).required(&["mode"]),
+        ),
+    ])
+    .required(&["type"])
+    .describe("A content part. The `type` field selects the shape.")
 }
 
 /// A question to ask about the input.
-fn question_schema() -> Value {
-    json!({
-        "description": "A question about the input. Answers are returned in the same order.",
-        "anyOf": [
-            {
-                "type": "object",
-                "description": "Estimate the probability that a statement about the input is true.",
-                "properties": {
-                    "type": { "type": "string", "enum": ["predicate"] },
-                    "instructions": instructions_schema(),
-                    "name": {
-                        "type": "string",
-                        "description": "Optional name echoed back on the answer.",
-                    },
-                },
-                "required": ["type", "instructions"],
-                "additionalProperties": false,
-            },
-            {
-                "type": "object",
-                "description": "Choose one of the supplied options based on the input.",
-                "properties": {
-                    "type": { "type": "string", "enum": ["choice"] },
-                    "instructions": instructions_schema(),
-                    "choices": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "value": {
-                                    "anyOf": [
-                                        { "type": "string" },
-                                        { "type": "boolean" },
-                                    ],
-                                },
-                                "description": { "type": "string" },
-                            },
-                            "required": ["value"],
-                            "additionalProperties": false,
-                        },
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Optional name echoed back on the answer.",
-                    },
-                },
-                "required": ["type", "instructions", "choices"],
-                "additionalProperties": false,
-            },
-            {
-                "type": "object",
-                "description": "Rate the input against the supplied ordered levels.",
-                "properties": {
-                    "type": { "type": "string", "enum": ["score"] },
-                    "instructions": instructions_schema(),
-                    "levels": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "label": { "type": "string" },
-                                "description": { "type": "string" },
-                            },
-                            "required": ["label"],
-                            "additionalProperties": false,
-                        },
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Optional name echoed back on the answer.",
-                    },
-                },
-                "required": ["type", "instructions", "levels"],
-                "additionalProperties": false,
-            },
-        ],
-    })
+fn question_schema() -> Schema {
+    Schema::any_of(vec![
+        Schema::object(vec![
+            ("type", Schema::enum_strings(&["predicate"])),
+            ("instructions", instructions_schema()),
+            (
+                "name",
+                Schema::string().describe("Optional name echoed back on the answer."),
+            ),
+        ])
+        .required(&["type", "instructions"])
+        .describe("Estimate the probability that a statement about the input is true."),
+        Schema::object(vec![
+            ("type", Schema::enum_strings(&["choice"])),
+            ("instructions", instructions_schema()),
+            (
+                "choices",
+                Schema::array(
+                    Schema::object(vec![
+                        (
+                            "value",
+                            Schema::any_of(vec![Schema::string(), Schema::boolean()]),
+                        ),
+                        ("description", Schema::string()),
+                    ])
+                    .required(&["value"]),
+                )
+                .min_items(1),
+            ),
+            (
+                "name",
+                Schema::string().describe("Optional name echoed back on the answer."),
+            ),
+        ])
+        .required(&["type", "instructions", "choices"])
+        .describe("Choose one of the supplied options based on the input."),
+        Schema::object(vec![
+            ("type", Schema::enum_strings(&["score"])),
+            ("instructions", instructions_schema()),
+            (
+                "levels",
+                Schema::array(
+                    Schema::object(vec![
+                        ("label", Schema::string()),
+                        ("description", Schema::string()),
+                    ])
+                    .required(&["label"]),
+                )
+                .min_items(1),
+            ),
+            (
+                "name",
+                Schema::string().describe("Optional name echoed back on the answer."),
+            ),
+        ])
+        .required(&["type", "instructions", "levels"])
+        .describe("Rate the input against the supplied ordered levels."),
+    ])
+    .describe("A question about the input. Answers are returned in the same order.")
 }
 
 /// A question's instructions: plain text or an array of content parts.
-fn instructions_schema() -> Value {
-    json!({
-        "description": "The question's instructions, as plain text or an array of content parts.",
-        "anyOf": [
-            { "type": "string" },
-            { "type": "array", "items": content_part_schema() },
-        ],
-    })
+fn instructions_schema() -> Schema {
+    Schema::any_of(vec![Schema::string(), Schema::array(content_part_schema())])
+        .describe("The question's instructions, as plain text or an array of content parts.")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn function_json_exposes_every_api_field() {
