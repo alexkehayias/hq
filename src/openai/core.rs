@@ -13,6 +13,15 @@ use serde_json::{Value, json};
 use std::fmt;
 use tracing;
 
+/// Timeout for establishing a connection to the LLM endpoint.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Idle timeout for reading a streamed response.
+///
+/// Unlike a total request deadline, this resets after every successful read, so
+/// a slow-but-progressing generation is not cut off.
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(600);
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum Role {
     #[serde(rename = "system")]
@@ -702,11 +711,13 @@ pub async fn completion_stream(
     }
     let url = format!("{}/v1/chat/completions", api_hostname.trim_end_matches("/"));
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(STREAM_READ_TIMEOUT)
+        .build()?
         .post(url)
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(60 * 10))
         .json(&payload)
         .send()
         .await?;
@@ -725,7 +736,19 @@ pub async fn completion_stream(
     let mut buffer = String::new();
 
     'outer: while let Some(chunk) = stream.next().await {
-        let chunk = chunk.expect("Invalid chunk");
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                // A read failure means the response is incomplete; surface it
+                // as an error so the chat loop can report it instead of
+                // panicking the worker and leaving the reply hanging.
+                tracing::warn!("model stream read failed: {e}");
+                return Err(anyhow::anyhow!(
+                    "model stream interrupted after {} bytes of content: {e}",
+                    content_buf.len()
+                ));
+            }
+        };
         let chunk_str = match std::str::from_utf8(&chunk) {
             Ok(s) => s,
             Err(e) => {
