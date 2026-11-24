@@ -3,42 +3,13 @@
 use std::sync::{Arc, RwLock};
 use tokio_rusqlite::rusqlite;
 
-use axum::{Router, extract::State, http::StatusCode, response::Json};
+use axum::{Router, extract::State, response::Json};
 use axum_extra::extract::Query;
 
 use super::public;
 use crate::state::AppState;
 
 type SharedState = Arc<RwLock<AppState>>;
-
-/// Record a metric event
-async fn record_metric(
-    State(state): State<SharedState>,
-    Json(payload): Json<public::MetricRequest>,
-) -> Result<StatusCode, crate::public::ApiError> {
-    let db = state.read().unwrap().db.clone();
-
-    // Insert the metric event into the database. name/value stay NULL
-    // for new rows — they only exist on legacy data migrated from the
-    // pre-bucket schema.
-    db.call(move |conn| {
-        conn.execute(
-            "INSERT INTO metric_event (input, output, cache_read, cache_write, reasoning) \
-             VALUES (?, ?, ?, ?, ?)",
-            tokio_rusqlite::params![
-                payload.input,
-                payload.output,
-                payload.cache_read,
-                payload.cache_write,
-                payload.reasoning,
-            ],
-        )?;
-        Ok::<_, rusqlite::Error>(())
-    })
-    .await?;
-
-    Ok(StatusCode::OK)
-}
 
 /// Get metric events for visualization
 async fn get_metrics(
@@ -133,5 +104,5 @@ async fn get_metrics(
 
 /// Create the metrics router
 pub fn router() -> Router<SharedState> {
-    Router::new().route("/", axum::routing::post(record_metric).get(get_metrics))
+    Router::new().route("/", axum::routing::get(get_metrics))
 }

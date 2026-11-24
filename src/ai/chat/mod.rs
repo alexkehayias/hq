@@ -15,4 +15,6 @@ pub mod models;
 pub use models::BACKGROUND_TAG;
 pub mod summarize;
 pub use core::{Chat, ChatBuilder};
+pub mod truncate;
+pub use truncate::truncate_tool_output;
 pub mod workspace;

@@ -212,6 +212,7 @@ This skill has scripts and references.
             google_search_api_key: String::from("test_google_search_key"),
             google_search_cx_id: String::from("test_cx_id"),
             openai_model: String::from("gpt-4o"),
+            openai_decision_model: String::from("gpt-4o"),
             openai_api_hostname: String::from("https://api.openai.com"),
             openai_api_key: String::from("test-api-key"),
             system_message: String::from("You are a helpful assistant."),

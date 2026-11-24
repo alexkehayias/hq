@@ -99,6 +99,7 @@ async fn update_loop(
             openai_api_hostname,
             openai_api_key,
             openai_model,
+            openai_decision_model,
             vapid_key_path,
             ..
         } = &state.config;
@@ -109,6 +110,7 @@ async fn update_loop(
             api_hostname: openai_api_hostname.clone(),
             api_key: openai_api_key.clone(),
             model: openai_model.clone(),
+            decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };

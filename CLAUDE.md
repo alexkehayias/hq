@@ -269,6 +269,7 @@ Subcommands via clap: `init`, `migrate`, `serve`, `index`, `rebuild`, `query`, `
 | `OPENAI_API_KEY` | API key for OpenAI-compatible LLM calls |
 | `HQ_LOCAL_LLM_HOST` | Custom LLM endpoint (default: api.openai.com) |
 | `HQ_LOCAL_LLM_MODEL` | Model name (default: gpt-4.1-mini) |
+| `HQ_LOCAL_DECISION_MODEL` | Decisions API model (default: `HQ_LOCAL_LLM_MODEL`) |
 | `HQ_NOTES_REPO_URL` | Git repo URL for notes |
 | `HQ_GMAIL_CLIENT_ID/SECRET` | Gmail OAuth credentials |
 | `HQ_VAPID_KEY_PATH` | Web push notification keys |

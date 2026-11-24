@@ -47,6 +47,7 @@ pub struct LoopSupervisorConfig {
     pub api_hostname: String,
     pub api_key: String,
     pub model: String,
+    pub decision_model: String,
     pub storage_path: String,
     pub vapid_key_path: String,
 }
@@ -170,6 +171,7 @@ async fn run_loop(
         api_hostname: config.api_hostname.clone(),
         api_key: config.api_key.clone(),
         model: config.model.clone(),
+        decision_model: config.decision_model.clone(),
     };
 
     // Each event is processed with only the system prompt and that event — no
@@ -285,6 +287,7 @@ mod tests {
             api_hostname: "localhost".to_string(),
             api_key: "test-key".to_string(),
             model: "test-model".to_string(),
+            decision_model: "test-model".to_string(),
             storage_path,
             vapid_key_path: dir.path().join("vapid").to_str().unwrap().to_string(),
         };

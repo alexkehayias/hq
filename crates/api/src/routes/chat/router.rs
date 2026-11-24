@@ -37,7 +37,7 @@ use hq::ai::chat::{
 };
 use hq::ai::tools::{
     BashTool, CalendarTool, CodeModeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
-    DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
+    DecisionTool, DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
     MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, Tool, ToolConfig, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
@@ -294,6 +294,7 @@ async fn chat_handler(
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
         datetime_tool,
+        decision_tool,
         bash_tool,
         python_tool,
         notify_tool,
@@ -320,6 +321,7 @@ async fn chat_handler(
             openai_api_hostname,
             openai_api_key,
             openai_model,
+            openai_decision_model,
             vapid_key_path,
             ..
         } = &shared_state.config;
@@ -330,6 +332,7 @@ async fn chat_handler(
             api_hostname: openai_api_hostname.clone(),
             api_key: openai_api_key.clone(),
             model: openai_model.clone(),
+            decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };
@@ -351,6 +354,7 @@ async fn chat_handler(
             api_hostname: openai_api_hostname.clone(),
             api_key: openai_api_key.clone(),
             model: openai_model.clone(),
+            decision_model: openai_decision_model.clone(),
         };
         let code_mode_tool = CodeModeTool::from_config(&tool_config)?;
 
@@ -361,10 +365,11 @@ async fn chat_handler(
             EmailUnreadTool::new(note_search_api_url),
             EmailSearchTool::new(note_search_api_url),
             CalendarTool::new(db.clone(), note_search_api_url),
-            WebsiteViewTool::new(storage_path, &workspace_id),
+            WebsiteViewTool::new(),
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
+            DecisionTool::new(openai_api_hostname, openai_api_key, openai_decision_model),
             BashTool::new(storage_path, &workspace_id),
             PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
@@ -396,6 +401,7 @@ async fn chat_handler(
         Box::new(tasks_due_today_tool),
         Box::new(tasks_scheduled_today_tool),
         Box::new(datetime_tool),
+        Box::new(decision_tool),
         Box::new(bash_tool),
         Box::new(python_tool),
         Box::new(notify_tool),
