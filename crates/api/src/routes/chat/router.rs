@@ -35,9 +35,9 @@ use hq::ai::chat::{
     set_session_mode, user_message_with_attachments,
 };
 use hq::ai::tools::{
-    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DeleteLoopTool,
-    EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool, MeetingSearchTool,
-    NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
+    BashTool, CalendarTool, CreateChannelTool, CreateLoopTool, DateTimeTool, DecisionTool,
+    DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
+    MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
     TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, run_in_sandbox,
 };
 use hq::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
@@ -293,6 +293,7 @@ async fn chat_handler(
         tasks_due_today_tool,
         tasks_scheduled_today_tool,
         datetime_tool,
+        decision_tool,
         bash_tool,
         python_tool,
         notify_tool,
@@ -318,6 +319,7 @@ async fn chat_handler(
             openai_api_hostname,
             openai_api_key,
             openai_model,
+            openai_decision_model,
             vapid_key_path,
             ..
         } = &shared_state.config;
@@ -328,6 +330,7 @@ async fn chat_handler(
             api_hostname: openai_api_hostname.clone(),
             api_key: openai_api_key.clone(),
             model: openai_model.clone(),
+            decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };
@@ -347,6 +350,7 @@ async fn chat_handler(
             TasksDueTodayTool::new(note_search_api_url),
             TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
+            DecisionTool::new(openai_api_hostname, openai_api_key, openai_decision_model),
             BashTool::new(storage_path, &workspace_id),
             PythonTool::new(storage_path, &workspace_id),
             NotifyTool::new(db.clone(), vapid_key_path, Some(&notification_url)),
@@ -377,6 +381,7 @@ async fn chat_handler(
         Box::new(tasks_due_today_tool),
         Box::new(tasks_scheduled_today_tool),
         Box::new(datetime_tool),
+        Box::new(decision_tool),
         Box::new(bash_tool),
         Box::new(python_tool),
         Box::new(notify_tool),

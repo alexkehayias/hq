@@ -106,6 +106,7 @@ docker run -p 2222:2222 -d hq:latest
 - `HQ_LOCAL_LLM_HOST` for the OpenAI API hostname (defaults to "https://api.openai.com" if not set)
 - `HQ_CALENDAR_EMAIL` to us for meeting prep
 - `HQ_LOCAL_LLM_MODEL` for the OpenAI model to use (defaults to "gpt-4.1-mini" if not set)
+- `HQ_LOCAL_DECISION_MODEL` for the Decisions API model (defaults to `HQ_LOCAL_LLM_MODEL` if not set)
 - `HQ_SYSTEM_MESSAGE` to customize the base system message for chat sessions
 - `OPENAI_API_KEY` for OpenAI API authentication (ignored when using a local LLM server)
 - `DOKKU_DOCKERFILE_START_CMD` to `serve --host 0.0.0.0 --port 2222`

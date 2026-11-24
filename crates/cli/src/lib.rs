@@ -362,6 +362,8 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            let decision_model =
+                env::var("HQ_LOCAL_DECISION_MODEL").unwrap_or_else(|_| model.clone());
             let note_search_api_url = env::var("HQ_NOTE_SEARCH_API_URL").ok();
             chat::run(
                 &vec_db_path,
@@ -369,6 +371,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
                 &api_hostname,
                 &api_key,
                 &model,
+                &decision_model,
             )
             .await?;
         }
@@ -388,6 +391,8 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
                 env::var("OPENAI_API_KEY").unwrap_or_else(|_| "thiswontworkforopenai".to_string());
             let model =
                 env::var("HQ_LOCAL_LLM_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+            let decision_model =
+                env::var("HQ_LOCAL_DECISION_MODEL").unwrap_or_else(|_| model.clone());
             let vapid_key_path = env::var("HQ_VAPID_KEY_PATH").unwrap_or_else(|_| String::new());
             let api_base_url = env::var("HQ_NOTE_SEARCH_API_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:2222".to_string());
@@ -399,6 +404,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
                     api_hostname: &api_hostname,
                     api_key: &api_key,
                     model: &model,
+                    decision_model: &decision_model,
                     storage_path,
                     vapid_key_path: &vapid_key_path,
                     title: &title,

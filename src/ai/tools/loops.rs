@@ -24,6 +24,7 @@ fn loop_supervisor_config(conf: &ToolConfig) -> LoopSupervisorConfig {
         api_hostname: conf.api_hostname.clone(),
         api_key: conf.api_key.clone(),
         model: conf.model.clone(),
+        decision_model: conf.decision_model.clone(),
         storage_path: conf.storage_path.clone(),
         vapid_key_path: conf.vapid_key_path.clone(),
     }
@@ -387,6 +388,7 @@ mod tests {
             api_hostname: "localhost".to_string(),
             api_key: "test-key".to_string(),
             model: "test-model".to_string(),
+            decision_model: "test-model".to_string(),
             storage_path,
             vapid_key_path: dir.path().join("vapid").to_str().unwrap().to_string(),
         };
