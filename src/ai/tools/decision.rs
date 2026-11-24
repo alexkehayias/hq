@@ -86,7 +86,7 @@ impl ToolCall for DecisionTool {
 }
 
 impl Tool for DecisionTool {
-    const NAME: &'static str = "decisions";
+    const NAME: &'static str = "decision";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
         Ok(Self::new(
@@ -359,7 +359,7 @@ mod tests {
         let tool = DecisionTool::default();
         let value = serde_json::to_value(&tool.function).unwrap();
 
-        assert_eq!(value["name"], "decisions");
+        assert_eq!(value["name"], "decision");
         assert_eq!(
             value["parameters"]["required"],
             json!(["input", "questions"])
