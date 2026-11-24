@@ -41,6 +41,7 @@ const BRIDGED_TOOLS: &[&str] = &[
     "create_channel",
     "create_loop",
     "datetime",
+    "decision",
     "delete_loop",
     "emit_channel",
     "get_calendar_events",
@@ -664,6 +665,7 @@ results
             api_hostname: "https://api.openai.com".to_string(),
             api_key: "test-key".to_string(),
             model: "gpt-4".to_string(),
+            decision_model: "gpt-4".to_string(),
         })
     }
 

@@ -28,3 +28,19 @@ pub struct Notification {
     pub subtitle: Option<String>,
     pub message: String,
 }
+
+/// Token usage posted by lm-proxy after each proxied request.
+///
+/// Token buckets are normalized by the upstream provider so downstream
+/// cost estimators can apply provider-specific rates (cache reads are
+/// cheaper than fresh input on Anthropic; cache writes are billed at a
+/// premium, etc.).
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LmProxyMetric {
+    pub input: u32,
+    pub output: u32,
+    pub cache_read: u32,
+    pub cache_write: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u32>,
+}

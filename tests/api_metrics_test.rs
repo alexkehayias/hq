@@ -13,65 +13,6 @@ mod tests {
 
     use crate::test_utils::{body_to_string, test_app};
 
-    /// Tests recording a metric via POST
-    #[tokio::test]
-    #[serial]
-    async fn it_records_metric() {
-        let app = test_app().await;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/metrics")
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "input": 100,
-                            "output": 50,
-                            "cache_read": 200,
-                            "cache_write": 80
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    /// Tests that a payload with optional `reasoning` is accepted
-    #[tokio::test]
-    #[serial]
-    async fn it_records_metric_with_reasoning() {
-        let app = test_app().await;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/metrics")
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "input": 100,
-                            "output": 50,
-                            "cache_read": 200,
-                            "cache_write": 80,
-                            "reasoning": 40
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
     /// Tests getting metrics returns empty array initially
     #[tokio::test]
     #[serial]
@@ -100,12 +41,12 @@ mod tests {
     async fn it_gets_recorded_metrics() {
         let app = test_app().await;
 
-        // First record a metric
+        // First record a metric via the lm-proxy webhook
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/metrics")
+                    .uri("/api/webhook/lm-proxy")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -152,12 +93,12 @@ mod tests {
     async fn it_gets_metrics_with_limit_days() {
         let app = test_app().await;
 
-        // First record a metric
+        // First record a metric via the lm-proxy webhook
         let _response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/metrics")
+                    .uri("/api/webhook/lm-proxy")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -238,10 +179,10 @@ mod tests {
         assert!(body.contains("\"value\""));
     }
 
-    /// Tests that a payload missing all required bucket fields returns 422
+    /// Tests that the metrics route rejects POST (ingestion lives on the webhook)
     #[tokio::test]
     #[serial]
-    async fn it_returns_422_for_missing_required_field() {
+    async fn it_returns_405_for_post() {
         let app = test_app().await;
 
         let response = app
@@ -256,37 +197,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Missing all required bucket fields should return 422 (serde deserialization error)
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    /// Tests that a payload with a negative bucket value returns 422
-    #[tokio::test]
-    #[serial]
-    async fn it_returns_422_for_negative_value() {
-        let app = test_app().await;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/metrics")
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "input": -1,
-                            "output": 50,
-                            "cache_read": 200,
-                            "cache_write": 80
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // u32 rejects negative integers — serde deserialization fails with 422
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        // Ingestion moved to the lm-proxy webhook; the metrics route is read-only
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }

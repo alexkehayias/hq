@@ -1,22 +1,6 @@
 //! Public types for the metrics API
 use serde::{Deserialize, Serialize};
 
-/// Request to record a metric event.
-///
-/// Token buckets are normalized by the upstream provider so downstream
-/// cost estimators can apply provider-specific rates (cache reads are
-/// cheaper than fresh input on Anthropic; cache writes are billed at a
-/// premium, etc.).
-#[derive(Deserialize)]
-pub struct MetricRequest {
-    pub input: u32,
-    pub output: u32,
-    pub cache_read: u32,
-    pub cache_write: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<u32>,
-}
-
 /// Query parameters for getting metric events
 #[derive(Deserialize)]
 pub struct MetricsQuery {

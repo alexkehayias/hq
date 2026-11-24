@@ -99,6 +99,7 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
         api_hostname: config.openai_api_hostname.clone(),
         api_key: config.openai_api_key.clone(),
         model: config.openai_model.clone(),
+        decision_model: config.openai_decision_model.clone(),
         storage_path: config.storage_path.clone(),
         vapid_key_path: config.vapid_key_path.clone(),
     };

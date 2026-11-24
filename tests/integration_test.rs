@@ -354,7 +354,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/metrics")
+                    .uri("/api/webhook/lm-proxy")
                     .method("POST")
                     .header("content-type", "application/json")
                     .body(Body::from(

@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::attachments::hydrate_images;
 use super::db::{get_or_create_session, insert_chat_message};
 use super::models::{SessionMode, Transcript};
+use super::truncate::truncate_tool_output;
 use crate::ai::chat::middleware::{MiddlewareAction, ToolCallMiddleware};
 use crate::ai::skills::SkillRegistry;
 use crate::ai::tools::skills::{
@@ -27,6 +28,17 @@ use crate::openai::{
 /// registers tools), and the turn must recover rather than panic.
 const NO_TOOLS_MSG: &str = "Error: no tools are available in this conversation. \
                             Answer the user using the information you already have.";
+
+/// Arguments shared by the streaming and non-streaming completion loops.
+struct CompletionCall<'a> {
+    api_hostname: &'a str,
+    api_key: &'a str,
+    model: &'a str,
+    workspace_path: Option<&'a Path>,
+    middleware: &'a [Box<dyn ToolCallMiddleware>],
+    tools: &'a Option<Vec<BoxedToolCall>>,
+    transcript: &'a Transcript,
+}
 
 /// The core abstraction around interacting with an LLM in a chat
 /// completion style using an OpenAI compatible API.
@@ -60,6 +72,7 @@ pub struct Chat {
 
 impl Chat {
     async fn handle_tool_call(
+        workspace_path: Option<&Path>,
         tools: &[BoxedToolCall],
         tool_call: &FunctionCall,
     ) -> Result<Message, Error> {
@@ -79,7 +92,7 @@ impl Chat {
         // tool name is reported as a recoverable error so a hallucinated
         // tool call doesn't break the loop.
         let call_result = match tools.iter().find(|i| *i.function_name() == *tool_call_name) {
-            Some(tool) => tool.call_with_id(tool_call_id, tool_call_args).await,
+            Some(tool) => tool.call(tool_call_args).await,
             None => {
                 let available = tools
                     .iter()
@@ -100,9 +113,16 @@ impl Chat {
             },
         };
 
-        // TODO: if the tool call result is too large, write it to a
-        // file and change the response text to a summary that points
-        // to the file to use other tools to inspect if needed.
+        // Keep oversized results from filling the context window. The full
+        // output is saved to the session workspace so the agent can inspect it
+        // with the bash tool.
+        let tool_call_result = truncate_tool_output(
+            workspace_path,
+            tool_call_name,
+            tool_call_id,
+            tool_call_result,
+        )
+        .await?;
 
         Ok(Message::new_tool_call_response(
             &tool_call_result,
@@ -113,6 +133,7 @@ impl Chat {
     /// Run each requested tool call concurrently and return the results in
     /// order.
     async fn handle_tool_calls(
+        workspace_path: Option<&Path>,
         tools: &[BoxedToolCall],
         tool_calls: &[FunctionCall],
     ) -> Result<Vec<Message>, Error> {
@@ -125,7 +146,7 @@ impl Chat {
         // around.
         let futures = tool_calls
             .iter()
-            .map(|call| Self::handle_tool_call(tools, call));
+            .map(|call| Self::handle_tool_call(workspace_path, tools, call));
         try_join_all(futures).await
     }
 
@@ -166,23 +187,27 @@ impl Chat {
             let tx = &self.tx.clone().unwrap();
             Self::chat_stream(
                 tx.clone(),
-                &self.tools,
-                &outbound,
-                &self.api_hostname,
-                &self.api_key,
-                &self.model,
-                &self.middleware,
+                CompletionCall {
+                    api_hostname: &self.api_hostname,
+                    api_key: &self.api_key,
+                    model: &self.model,
+                    workspace_path: self.workspace_path.as_deref(),
+                    middleware: &self.middleware,
+                    tools: &self.tools,
+                    transcript: &outbound,
+                },
             )
             .await?
         } else {
-            Self::chat(
-                &self.tools,
-                &outbound,
-                &self.api_hostname,
-                &self.api_key,
-                &self.model,
-                &self.middleware,
-            )
+            Self::chat(CompletionCall {
+                api_hostname: &self.api_hostname,
+                api_key: &self.api_key,
+                model: &self.model,
+                workspace_path: self.workspace_path.as_deref(),
+                middleware: &self.middleware,
+                tools: &self.tools,
+                transcript: &outbound,
+            })
             .await?
         };
 
@@ -263,14 +288,16 @@ impl Chat {
     /// Runs the next turn in chat by passing a transcript to the LLM for
     /// the next response. Can return multiple messages when there are
     /// tool calls.
-    async fn chat(
-        tools: &Option<Vec<BoxedToolCall>>,
-        transcript: &Transcript,
-        api_hostname: &str,
-        api_key: &str,
-        model: &str,
-        middleware: &[Box<dyn ToolCallMiddleware>],
-    ) -> Result<Vec<Message>, Error> {
+    async fn chat(call: CompletionCall<'_>) -> Result<Vec<Message>, Error> {
+        let CompletionCall {
+            api_hostname,
+            api_key,
+            model,
+            workspace_path,
+            middleware,
+            tools,
+            transcript,
+        } = call;
         let history = transcript.messages();
         let mut updated_history = history.to_owned();
         let mut messages = Vec::new();
@@ -298,7 +325,9 @@ impl Chat {
             match Self::run_middleware(middleware, &updated_history).await {
                 MiddlewareAction::Continue => {
                     let tool_call_msgs = match tools.as_deref() {
-                        Some(tools) => Self::handle_tool_calls(tools, &calls).await?,
+                        Some(tools) => {
+                            Self::handle_tool_calls(workspace_path, tools, &calls).await?
+                        }
                         None => calls
                             .iter()
                             .map(|call| Message::new_tool_call_response(NO_TOOLS_MSG, &call.id))
@@ -352,13 +381,17 @@ impl Chat {
     /// further. Can return multiple messages when there are tool calls.
     async fn chat_stream(
         tx: mpsc::UnboundedSender<String>,
-        tools: &Option<Vec<BoxedToolCall>>,
-        transcript: &Transcript,
-        api_hostname: &str,
-        api_key: &str,
-        model: &str,
-        middleware: &[Box<dyn ToolCallMiddleware>],
+        call: CompletionCall<'_>,
     ) -> Result<Vec<Message>, Error> {
+        let CompletionCall {
+            api_hostname,
+            api_key,
+            model,
+            workspace_path,
+            middleware,
+            tools,
+            transcript,
+        } = call;
         let history = transcript.messages();
         let mut updated_history = history.to_owned();
         let mut messages = Vec::new();
@@ -388,7 +421,9 @@ impl Chat {
                 MiddlewareAction::Continue => {
                     // TODO: Update this to be streaming
                     let tool_call_msgs = match tools.as_deref() {
-                        Some(tools) => Self::handle_tool_calls(tools, &calls).await?,
+                        Some(tools) => {
+                            Self::handle_tool_calls(workspace_path, tools, &calls).await?
+                        }
                         None => calls
                             .iter()
                             .map(|call| Message::new_tool_call_response(NO_TOOLS_MSG, &call.id))
@@ -1028,6 +1063,97 @@ Test skill body content."#;
         // 2. Tool call response
         // 3. Assistant's final content
         assert_eq!(messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_chat_truncates_oversized_tool_output() {
+        let mut server = mockito::Server::new_async().await;
+
+        let tool_call_response = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1694268190,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "big_tool",
+                            "arguments": "{}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+
+        let final_response = r#"{
+            "id": "chatcmpl-124",
+            "object": "chat.completion",
+            "created": 1694268191,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Done."
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let _mock1 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(tool_call_response)
+            .create();
+        let _mock2 = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(final_response)
+            .create();
+
+        #[derive(serde::Serialize)]
+        struct BigTool;
+        #[async_trait::async_trait]
+        impl crate::openai::ToolCall for BigTool {
+            async fn call(&self, _args: &str) -> anyhow::Result<String> {
+                Ok("line of filler text\n".repeat(5_000))
+            }
+            fn function_name(&self) -> String {
+                "big_tool".to_string()
+            }
+        }
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let tools = vec![Box::new(BigTool) as crate::openai::BoxedToolCall];
+        let mut chat = ChatBuilder::new(&server.url(), "test-key", "gpt-4")
+            .tools(tools)
+            .workspace_path(temp.path())
+            .build();
+
+        let messages = chat.next_msg(Message::new(Role::User, "go")).await.unwrap();
+
+        let tool_response = messages
+            .iter()
+            .find(|m| *m.role() == Role::Tool)
+            .and_then(|m| m.text())
+            .expect("tool response");
+        assert!(tool_response.contains("big_tool output truncated"));
+        assert!(tool_response.contains("/tool-results/call_abc123.txt"));
+
+        // The full output is saved in the session workspace.
+        let saved = tokio::fs::read_to_string(temp.path().join("tool-results/call_abc123.txt"))
+            .await
+            .unwrap();
+        assert!(saved.starts_with("line of filler text"));
+        assert!(!saved.contains("truncated"));
     }
 
     // Tests for Chat::chat_stream (tested through next_msg with streaming enabled)

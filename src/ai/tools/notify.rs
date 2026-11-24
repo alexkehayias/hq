@@ -201,6 +201,7 @@ mod tests {
             api_hostname: "https://api.openai.com".to_string(),
             api_key: "test-key".to_string(),
             model: "gpt-4".to_string(),
+            decision_model: "gpt-4".to_string(),
         }
     }
 
