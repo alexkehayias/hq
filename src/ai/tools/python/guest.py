@@ -143,7 +143,7 @@ def _set_argv(argv: list[str]) -> None:
 
 # --- Host tools -----------------------------------------------------------
 #
-# Guest code reaches host tools through the `hq` namespace:
+# Guest code reaches host tools through the `tools` namespace:
 #
 #     await tools.search_notes(query="...", limit=10)
 #

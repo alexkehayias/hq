@@ -3,7 +3,7 @@
 //! It is offered alongside the normal tools, so the model can call a tool
 //! directly or compose several calls in Python, whichever fits the task.
 //!
-//! Guest code reaches tools through the `hq` namespace, e.g.
+//! Guest code reaches tools through the `tools` namespace, e.g.
 //! `await tools.search_notes(query="...")`. The Python side builds a typed wrapper per
 //! tool from the JSON schema the host exposes (see `guest.py`), so the model
 //! writes ordinary Python instead of one tool call per step.
@@ -226,7 +226,7 @@ impl CodeModeTool {
                 code: Property {
                     r#type: String::from("string"),
                     description: String::from(
-                        "The Python code to execute. Host tools are async and live on the `hq` \
+                        "The Python code to execute. Host tools are async and live on the `tools` \
                          namespace, e.g. `await tools.search_notes(query=\"...\")`; use \
                          `asyncio.gather(...)` to run several concurrently. Call `tools.help()` \
                          for every tool and signature, or `tools.help(\"name\")` for one tool's \
