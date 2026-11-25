@@ -542,7 +542,7 @@ mod tests {
 
         let result = sandbox
             .exec_with_tools(
-                "await hq.slow()\nsum(range(1000))",
+                "await tools.slow()\nsum(range(1000))",
                 &workspace,
                 b"",
                 &["-c".to_string()],

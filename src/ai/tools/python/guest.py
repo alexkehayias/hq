@@ -145,7 +145,7 @@ def _set_argv(argv: list[str]) -> None:
 #
 # Guest code reaches host tools through the `hq` namespace:
 #
-#     await hq.search_notes(query="...", limit=10)
+#     await tools.search_notes(query="...", limit=10)
 #
 # The wrappers are built from the JSON schemas the host exposes, so adding or
 # removing a tool on the host side needs no guest change. Each call re-reads
@@ -263,7 +263,7 @@ def _describe(definition: dict) -> str:
     return "\n".join(lines)
 
 
-class _Hq:
+class _Tools:
     """Host tools, plus `help()` for discovering their signatures."""
 
     def __init__(self, definitions: list[dict]):
@@ -286,11 +286,16 @@ class _Hq:
         )
 
 
-def _make_hq() -> _Hq:
-    """Build the `hq` namespace for this execution and expose it as a global."""
-    hq = _Hq(json.loads(_host_tools.definitions()))
-    globals()["hq"] = hq
-    return hq
+def _make_tools() -> _Tools:
+    """Build the `tools` namespace for this execution and expose it as a global."""
+    definitions = json.loads(_host_tools.definitions())
+    tools = _Tools(definitions)
+    globals()["tools"] = tools
+    globals()["ALL_TOOLS"] = [
+        {"name": d["name"], "description": d.get("description", "")}
+        for d in definitions
+    ]
+    return tools
 
 
 class WitWorld(wit_world.WitWorld):
@@ -299,10 +304,10 @@ class WitWorld(wit_world.WitWorld):
             _set_argv(argv)
             _register_source("<input>", code)
             # Make the tool namespace visible to the evaluated expression.
-            _make_hq()
+            _make_tools()
             # Dedent so leading whitespace on the first line doesn't trip
             # Python's tokenizer (it raises IndentationError at module level).
-            # Allow top-level `await` so `await hq.foo()` works directly.
+            # Allow top-level `await` so `await tools.foo()` works directly.
             program = compile(
                 textwrap.dedent(code),
                 "<input>",
@@ -344,8 +349,13 @@ class WitWorld(wit_world.WitWorld):
             # Use the same dict for globals and locals so top-level definitions
             # behave like module level (nested function calls can see other
             # top-level names, including for recursion). Seed it with the tool
-            # namespace so code can call `await hq.<tool>(...)`.
-            namespace: dict = {"hq": _make_hq()}
+            # namespace so code can call `await tools.<tool>(...)` and inspect
+            # the available tools through `ALL_TOOLS`.
+            _make_tools()
+            namespace: dict = {
+                "tools": globals()["tools"],
+                "ALL_TOOLS": globals()["ALL_TOOLS"],
+            }
             # `exec()` discards the coroutine it creates for top-level `await`,
             # so evaluate the code object instead; `eval` returns it for both
             # sync and async programs.
@@ -357,7 +367,7 @@ class WitWorld(wit_world.WitWorld):
             value = namespace.get(_RESULT_NAME)
             if inspect.isawaitable(value):
                 raise TypeError(
-                    "a tool call was not awaited; use `await hq.<name>(...)`"
+                    "a tool call was not awaited; use `await tools.<name>(...)`"
                 )
             return json.dumps(value)
         except BaseException as e:
