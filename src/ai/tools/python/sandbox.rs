@@ -517,7 +517,7 @@ mod tests {
         let workspace_clone = workspace.clone();
         let result = tokio::task::spawn_blocking(move || {
             sandbox.exec_with_tools(
-                "hq.slow()\nsum(range(1000))",
+                "tools.slow()\nsum(range(1000))",
                 &workspace_clone,
                 b"",
                 &["-c".to_string()],

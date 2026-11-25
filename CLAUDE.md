@@ -103,7 +103,7 @@ caches it in `OUT_DIR` (keyed by a content hash, so it is not rebuilt on every
 - `sandbox.wit` also imports a `tools` interface (`definitions` + `call`). The
   plain `python` tool runs with no bridge; the `codemode` tool
   (`src/ai/tools/python/code.rs`) installs one and exposes the allowlisted tools
-  to guest code as typed `hq.<name>(...)` wrappers generated in `guest.py`. It
+  to guest code as typed `tools.<name>(...)` wrappers generated in `guest.py`. It
   is offered alongside the normal tools so the model can call tools directly or
   compose them in Python. `bash`, `python`, and `subagent` are deliberately not
   bridged.

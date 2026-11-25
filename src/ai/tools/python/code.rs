@@ -4,7 +4,7 @@
 //! directly or compose several calls in Python, whichever fits the task.
 //!
 //! Guest code reaches tools through the `hq` namespace, e.g.
-//! `hq.search_notes(query="...")`. The Python side builds a typed wrapper per
+//! `tools.search_notes(query="...")`. The Python side builds a typed wrapper per
 //! tool from the JSON schema the host exposes (see `guest.py`), so the model
 //! writes ordinary Python instead of one tool call per step.
 //!
@@ -227,8 +227,8 @@ impl CodeModeTool {
                     r#type: String::from("string"),
                     description: String::from(
                         "The Python code to execute. Host tools are available on the `hq` \
-                         namespace, e.g. `hq.search_notes(query=\"...\")`. Call `hq.help()` for \
-                         every tool and signature, or `hq.help(\"name\")` for one tool's \
+                         namespace, e.g. `tools.search_notes(query=\"...\")`. Call `tools.help()` for \
+                         every tool and signature, or `tools.help(\"name\")` for one tool's \
                          arguments. The value of the last expression is returned. Use print() \
                          to produce stdout output.",
                     ),
@@ -248,11 +248,15 @@ impl CodeModeTool {
             "Execute Python code in an isolated sandbox with typed access to host tools. Use \
              this when a task needs several tool calls, loops, filtering, or joins that would \
              otherwise take many round-trips; the same tools are also available as regular \
-             tool calls. Call tools as `hq.<name>(...)`; use `hq.help()` to list them or \
-             `hq.help(\"name\")` for argument docs. The value of the last expression is \
-             returned. Files are read and written relative to `/`, the session workspace \
+             tool calls. Call tools as `tools.<name>(...)`; use `tools.help()` to list them or \
+             `tools.help(\"name\")` for argument docs. `ALL_TOOLS` is a list of \
+             `{{name, description}}` for every available tool. The value of the last expression \
+             is returned. Files are read and written relative to `/`, the session workspace \
              shared with the bash tool. There is no network or environment access and only a \
-             subset of the standard library is available.\n\nAvailable tools:\n{index}"
+             subset of the standard library is available.\n\n\
+             Limits per execution: 40s of Python time (tool time excluded), 64 tool calls, \
+             120s per call, 5 minutes of total tool time, 4 MB per result.\n\n\
+             Available tools:\n{index}"
         );
 
         let function = Function {
@@ -386,7 +390,7 @@ mod tests {
     async fn calls_bridged_tool_from_guest() {
         let tool = code_tool(vec![echo_tool()]);
         let result = tool
-            .call(r#"{"code": "hq.echo(value=\"hi\")"}"#)
+            .call(r#"{"code": "tools.echo(value=\"hi\")"}"#)
             .await
             .unwrap();
         let output: PythonOutput = serde_json::from_str(&result).unwrap();
@@ -397,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn guest_can_compose_tool_calls() {
         let tool = code_tool(vec![echo_tool()]);
-        let code = "values = [hq.echo(value=str(i)) for i in range(3)]\nvalues";
+        let code = "values = [tools.echo(value=str(i)) for i in range(3)]\nvalues";
         let result = tool
             .call(&serde_json::json!({ "code": code }).to_string())
             .await
@@ -411,7 +415,7 @@ mod tests {
     async fn missing_arguments_raise_python_type_error() {
         let tool = code_tool(vec![echo_tool()]);
         let err = tool
-            .call(r#"{"code": "hq.echo(bogus=\"x\")"}"#)
+            .call(r#"{"code": "tools.echo(bogus=\"x\")"}"#)
             .await
             .unwrap_err();
 
@@ -430,7 +434,7 @@ mod tests {
     async fn unknown_arguments_raise_python_type_error() {
         let tool = code_tool(vec![echo_tool()]);
         let err = tool
-            .call(r#"{"code": "hq.echo(value=\"x\", bogus=\"y\")"}"#)
+            .call(r#"{"code": "tools.echo(value=\"x\", bogus=\"y\")"}"#)
             .await
             .unwrap_err();
 
@@ -443,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn tool_failures_raise_tool_error() {
         let tool = code_tool(vec![fail_tool()]);
-        let err = tool.call(r#"{"code": "hq.fail()"}"#).await.unwrap_err();
+        let err = tool.call(r#"{"code": "tools.fail()"}"#).await.unwrap_err();
 
         assert!(
             err.to_string().contains("boom"),
@@ -454,7 +458,8 @@ mod tests {
     #[tokio::test]
     async fn guest_can_catch_tool_errors() {
         let tool = code_tool(vec![fail_tool()]);
-        let code = "try:\n    hq.fail()\nexcept hq.ToolError as e:\n    caught = str(e)\ncaught";
+        let code =
+            "try:\n    tools.fail()\nexcept tools.ToolError as e:\n    caught = str(e)\ncaught";
         let result = tool
             .call(&serde_json::json!({ "code": code }).to_string())
             .await
@@ -465,9 +470,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn all_tools_lists_names_and_descriptions() {
+        let tool = code_tool(vec![echo_tool()]);
+        let result = tool.call(r#"{"code": "ALL_TOOLS"}"#).await.unwrap();
+        let output: PythonOutput = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(
+            output.value,
+            serde_json::json!([{"name": "echo", "description": "Echo a value."}])
+        );
+    }
+
+    #[tokio::test]
     async fn help_lists_bridged_tools() {
         let tool = code_tool(vec![echo_tool()]);
-        let result = tool.call(r#"{"code": "hq.help()"}"#).await.unwrap();
+        let result = tool.call(r#"{"code": "tools.help()"}"#).await.unwrap();
         let output: PythonOutput = serde_json::from_str(&result).unwrap();
 
         let help = output.value.as_str().unwrap();
@@ -478,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_without_tools_has_empty_namespace() {
         let tool = code_tool(vec![]);
-        let result = tool.call(r#"{"code": "hq.help()"}"#).await.unwrap();
+        let result = tool.call(r#"{"code": "tools.help()"}"#).await.unwrap();
         let output: PythonOutput = serde_json::from_str(&result).unwrap();
 
         assert_eq!(output.value, serde_json::json!(""));
@@ -494,7 +511,7 @@ mod tests {
         let tool = CodeModeTool::build(workspace, vec![named_echo_tool("notify")], used).unwrap();
 
         let err = tool
-            .call(r#"{"code": "hq.notify(value=\"x\")"}"#)
+            .call(r#"{"code": "tools.notify(value=\"x\")"}"#)
             .await
             .unwrap_err();
 
