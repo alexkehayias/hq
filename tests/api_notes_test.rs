@@ -215,8 +215,69 @@ mod tests {
         assert!(body.contains("\"results\""));
     }
 
-    // Note: Empty query test is intentionally omitted - it causes a panic in the AQL parser
-    // which is a known bug. The endpoint should return 400 Bad Request instead.
+    /// Tests that an empty query returns 400 instead of panicking
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_400_for_empty_query() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/notes/search?query=")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("query is empty"), "got: {body}");
+    }
+
+    /// Tests that an unknown AQL field returns a helpful 400
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_400_for_unknown_field() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/notes/search?query=titel%3Arust")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("unknown field `titel`"), "got: {body}");
+        assert!(body.contains("Valid fields"), "got: {body}");
+    }
+
+    /// Tests that a malformed date range returns a helpful 400
+    #[tokio::test]
+    #[serial]
+    async fn it_returns_400_for_bad_date() {
+        let app = test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/notes/search?query=deadline%3A%3Etomorrow")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_to_string(response.into_body()).await;
+        assert!(body.contains("invalid date `tomorrow`"), "got: {body}");
+    }
 
     /// Tests searching for chat messages returns results
     #[tokio::test]

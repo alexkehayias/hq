@@ -124,7 +124,22 @@ Searching the index uses AQL (Alex Query Language) which is roughly `orgql` synt
 |-----------------|----------------------------|--------------------------------------------------------|
 | Fielded Term    | `title:rust`               | Single term                                            |
 | Phrase          | `title:"rust programming"` | Quoted term                                            |
-| Multiple Values | `title:rust,python`        | Multiple values separated by comma are AND-ed together |
-| Default Term    | `hello world`              | Defaults to searching the body and title field         |
-| Negation        | `-title:rust`              | Negates any term                                       |
-| Range           | `date:>2025-01-01`         | Operations supported `>`, `>=`, `<`, `<=`              |
+| Multiple Values | `tags:work,urgent`         | Comma-separated values are OR-ed together              |
+| Repeated Field  | `tags:work tags:urgent`    | Repeating a field is AND-ed                            |
+| Default Term    | `hello world`              | Searches the title and body fields                     |
+| Negation        | `-title:rust` / `NOT title:rust` | Negates any term                                |
+| Boolean         | `status:done OR status:canceled` | `AND` binds tighter than `OR`                   |
+| Field Exists    | `deadline:`                | Matches documents that have a value in the field       |
+| Range           | `date:>2025-01-01`         | Operations supported `>`, `>=`, `<`, `<=` on date fields |
+
+### Fields
+
+`title`, `body`, `tags`, `status` (alias `todo`), `category` (alias
+`project`), `type` (`note`, `task`, `meeting`, `heading`, `chat`), `date`,
+`scheduled`, `deadline`, `closed`, `file_name`, `id`, `chat_role`.
+
+Queries are validated before they run: unknown fields, invalid `type`
+values, ranges on non-date fields, and malformed `YYYY-MM-DD` dates produce
+an error explaining what was expected. The AI `search` tool uses the same
+validation and returns those messages to the model so it can correct the
+query.

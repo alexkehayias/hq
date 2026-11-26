@@ -10,6 +10,9 @@ mod index;
 mod query;
 mod schema;
 
-pub use aql::{Expr, RangeOp, parse_query};
+pub use aql::{
+    DATE_FIELDS, DOCUMENT_TYPES, Expr, FIELD_ALIASES, RangeOp, VALID_FIELDS,
+    parse_and_validate_query, parse_query, validate_query,
+};
 pub use documents::{SearchResult, SearchResults};
 pub use index::{DocumentType, Index, IndexDocument, NewDocument, recreate_index};

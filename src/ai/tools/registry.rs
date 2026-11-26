@@ -10,9 +10,8 @@ use crate::openai::{BoxedToolCall, ToolCall};
 use super::{
     BashTool, CalendarTool, CodeModeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
     DecisionTool, DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
-    ListSkillsTool, LoadSkillTool, MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool,
-    ReadSkillFileTool, SaveSkillTool, SearchSkillsTool, SubagentTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
+    ListSkillsTool, LoadSkillTool, NotifyTool, PythonTool, ReadSkillFileTool, SaveSkillTool,
+    SearchSkillsTool, SearchTool, SubagentTool, WebSearchTool, WebsiteViewTool, WorkOnSkillTool,
 };
 
 /// Shared dependencies needed to construct tools by name.
@@ -21,6 +20,7 @@ pub struct ToolConfig {
     pub db: Connection,
     pub api_base_url: String,
     pub storage_path: String,
+    pub index_path: String,
     pub vapid_key_path: String,
     pub session_id: String,
     pub notification_url: Option<String>,
@@ -91,13 +91,10 @@ impl ToolRegistry {
         registry.register::<DecisionTool>();
         registry.register::<NotifyTool>();
         registry.register::<CalendarTool>();
-        registry.register::<NoteSearchTool>();
-        registry.register::<MeetingSearchTool>();
+        registry.register::<SearchTool>();
         registry.register::<WebSearchTool>();
         registry.register::<EmailUnreadTool>();
         registry.register::<EmailSearchTool>();
-        registry.register::<TasksDueTodayTool>();
-        registry.register::<TasksScheduledTodayTool>();
         registry.register::<SubagentTool>();
         registry.register::<CreateLoopTool>();
         registry.register::<ListLoopsTool>();
@@ -168,6 +165,7 @@ mod tests {
             db,
             api_base_url: "http://localhost:2222".to_string(),
             storage_path: dir.path().to_string_lossy().to_string(),
+            index_path: dir.path().join("index").to_string_lossy().to_string(),
             vapid_key_path: String::new(),
             session_id: "test-session".to_string(),
             notification_url: None,
@@ -208,6 +206,26 @@ mod tests {
         let registry = ToolRegistry::builtin(test_context().await);
         let err = registry.from_str("bogus").err().unwrap().to_string();
         assert!(err.contains("unknown tool 'bogus'"));
+    }
+
+    #[tokio::test]
+    async fn search_replaces_the_per_type_tools() {
+        let registry = ToolRegistry::builtin(test_context().await);
+        assert_eq!(
+            registry.from_str("search").unwrap().function_name(),
+            "search"
+        );
+        for removed in [
+            "search_notes",
+            "search_meetings",
+            "tasks_due_today",
+            "tasks_scheduled_today",
+        ] {
+            assert!(
+                registry.from_str(removed).is_err(),
+                "{removed} should have been consolidated into `search`"
+            );
+        }
     }
 
     #[tokio::test]

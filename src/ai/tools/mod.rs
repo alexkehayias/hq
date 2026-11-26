@@ -9,11 +9,8 @@ pub use datetime::DateTimeTool;
 pub mod decision;
 pub use decision::DecisionTool;
 
-pub mod meeting_search;
-pub use meeting_search::MeetingSearchTool;
-
-pub mod note_search;
-pub use note_search::NoteSearchTool;
+pub mod search;
+pub use search::SearchTool;
 
 pub mod calendar;
 pub use calendar::CalendarTool;
@@ -29,9 +26,6 @@ pub use subagent::SubagentTool;
 
 pub mod web_search;
 pub use web_search::WebSearchTool;
-
-pub mod tasks;
-pub use tasks::{TasksDueTodayTool, TasksScheduledTodayTool};
 
 pub mod notify;
 pub use notify::NotifyTool;

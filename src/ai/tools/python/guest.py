@@ -144,7 +144,7 @@ def _set_argv(argv: list[str]) -> None:
 #
 # Guest code reaches host tools through the `hq` namespace:
 #
-#     tools.search_notes(query="...", limit=10)
+#     tools.search(query="type:task status:todo")
 #
 # The wrappers are built from the JSON schemas the host exposes, so adding or
 # removing a tool on the host side needs no guest change. Each call re-reads

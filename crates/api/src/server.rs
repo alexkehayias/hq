@@ -101,6 +101,7 @@ pub async fn serve(host: String, port: String, config: AppConfig) {
         model: config.openai_model.clone(),
         decision_model: config.openai_decision_model.clone(),
         storage_path: config.storage_path.clone(),
+        index_path: config.index_path.clone(),
         vapid_key_path: config.vapid_key_path.clone(),
     };
     if let Err(e) = loops::respawn_all(loop_config).await {

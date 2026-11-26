@@ -134,8 +134,8 @@ impl ToolCallMiddleware for InfiniteLoopDetector {
 /// `blocked_after` has been called earlier in the same chat session.
 ///
 /// For example, a rule with `target = "view_website"` and
-/// `blocked_after = ["search_notes"]` prevents the `view_website`
-/// tool from running after `search_notes` has been used.
+/// `blocked_after = ["search"]` prevents the `view_website`
+/// tool from running after `search` has been used.
 #[derive(Clone)]
 pub struct ToolCallRule {
     pub target: String,
@@ -195,8 +195,7 @@ fn untrusted_data_tools() -> Vec<String> {
         "web_search",
         "get_unread_emails",
         "search_emails",
-        "search_notes",
-        "search_meetings",
+        "search",
         "get_calendar_events",
     ]
     .iter()
@@ -596,10 +595,10 @@ mod tests {
         }
     }
 
-    fn search_notes_call(id: &str) -> FunctionCall {
+    fn search_call(id: &str) -> FunctionCall {
         FunctionCall {
             function: crate::openai::FunctionCallFn {
-                name: "search_notes".into(),
+                name: "search".into(),
                 arguments: r#"{"query":"test"}"#.into(),
             },
             id: id.into(),
@@ -634,38 +633,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_security_allows_view_website_after_search_notes() {
+    async fn test_security_allows_view_website_after_search() {
         let mw = ToolSecurityMiddleware::default();
-        // Notes are the user's own content, so following a link found
-        // in a note must not be blocked.
+        // Notes, meetings, and tasks are the user's own content, so
+        // following a link found in a search result must not be blocked.
         let transcript = vec![
             Message::new(Role::User, "find my notes about X"),
-            Message::new_tool_call_request(vec![search_notes_call("call_1")]),
+            Message::new_tool_call_request(vec![search_call("call_1")]),
             Message::new_tool_call_response("notes result", "call_1"),
             Message::new_tool_call_request(vec![view_website_call("call_2")]),
         ];
         let action = mw.before_tool_calls(&transcript).await;
         assert!(
             matches!(action, MiddlewareAction::Continue),
-            "Expected Continue for view_website after search_notes, got {action:?}",
-        );
-    }
-
-    #[tokio::test]
-    async fn test_security_allows_view_website_after_search_meetings() {
-        let mw = ToolSecurityMiddleware::default();
-        // Meeting search returns the user's own content, so following a
-        // link found there must not be blocked.
-        let transcript = vec![
-            Message::new(Role::User, "find my meetings about X"),
-            Message::new_tool_call_request(vec![tool_call("search_meetings", "call_1")]),
-            Message::new_tool_call_response("meeting result", "call_1"),
-            Message::new_tool_call_request(vec![view_website_call("call_2")]),
-        ];
-        let action = mw.before_tool_calls(&transcript).await;
-        assert!(
-            matches!(action, MiddlewareAction::Continue),
-            "Expected Continue for view_website after search_meetings, got {action:?}",
+            "Expected Continue for view_website after search, got {action:?}",
         );
     }
 
@@ -694,13 +675,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_security_allows_unrelated_tool_after_search_notes() {
+    async fn test_security_allows_unrelated_tool_after_search() {
         let mw = ToolSecurityMiddleware::default();
-        // search_notes was used, but the pending call is a different
+        // search was used, but the pending call is a different
         // tool that isn't subject to any rule — should be allowed.
         let transcript = vec![
             Message::new(Role::User, "do stuff"),
-            Message::new_tool_call_request(vec![search_notes_call("call_1")]),
+            Message::new_tool_call_request(vec![search_call("call_1")]),
             Message::new_tool_call_response("notes result", "call_1"),
             Message::new_tool_call_request(vec![FunctionCall {
                 function: crate::openai::FunctionCallFn {
@@ -925,18 +906,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_security_rejects_delete_loop_after_search_notes() {
+    async fn test_security_rejects_delete_loop_after_search() {
         let mw = ToolSecurityMiddleware::default();
         let transcript = vec![
             Message::new(Role::User, "find my notes"),
-            Message::new_tool_call_request(vec![search_notes_call("call_1")]),
+            Message::new_tool_call_request(vec![search_call("call_1")]),
             Message::new_tool_call_response("notes result", "call_1"),
             Message::new_tool_call_request(vec![loop_call("delete_loop", "call_2")]),
         ];
         let action = mw.before_tool_calls(&transcript).await;
         assert!(
             matches!(action, MiddlewareAction::Reject(_)),
-            "Expected Reject for delete_loop after search_notes, got {action:?}",
+            "Expected Reject for delete_loop after search, got {action:?}",
         );
     }
 

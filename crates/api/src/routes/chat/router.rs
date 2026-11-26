@@ -38,8 +38,8 @@ use hq::ai::chat::{
 use hq::ai::tools::{
     BashTool, CalendarTool, CodeModeTool, CreateChannelTool, CreateLoopTool, DateTimeTool,
     DecisionTool, DeleteLoopTool, EmailSearchTool, EmailUnreadTool, EmitChannelTool, ListLoopsTool,
-    MeetingSearchTool, NoteSearchTool, NotifyTool, PythonTool, SubagentTool, TasksDueTodayTool,
-    TasksScheduledTodayTool, Tool, ToolConfig, WebSearchTool, WebsiteViewTool, run_in_sandbox,
+    NotifyTool, PythonTool, SearchTool, SubagentTool, Tool, ToolConfig, WebSearchTool,
+    WebsiteViewTool, run_in_sandbox,
 };
 use hq::anthropic::claude::{ClaudeCodeSession, Delta, StreamEvent};
 use hq::channels::prompt::system_prompt_section;
@@ -284,15 +284,12 @@ async fn chat_handler(
     let workspace_id = workspace_id_for_session(&db, &session_id).await?;
 
     let (
-        note_search_tool,
-        meeting_search_tool,
+        search_tool,
         web_search_tool,
         email_unread_tool,
         email_search_tool,
         calendar_tool,
         website_view_tool,
-        tasks_due_today_tool,
-        tasks_scheduled_today_tool,
         datetime_tool,
         decision_tool,
         bash_tool,
@@ -334,6 +331,7 @@ async fn chat_handler(
             model: openai_model.clone(),
             decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
+            index_path: index_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };
 
@@ -347,6 +345,7 @@ async fn chat_handler(
             db: db.clone(),
             api_base_url: note_search_api_url.clone(),
             storage_path: storage_path.clone(),
+            index_path: index_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
             session_id: workspace_id.clone(),
             notification_url: Some(notification_url.clone()),
@@ -359,15 +358,12 @@ async fn chat_handler(
         let code_mode_tool = CodeModeTool::from_config(&tool_config)?;
 
         (
-            NoteSearchTool::new(note_search_api_url),
-            MeetingSearchTool::new(note_search_api_url),
+            SearchTool::new(db.clone(), index_path),
             WebSearchTool::new(note_search_api_url),
             EmailUnreadTool::new(note_search_api_url),
             EmailSearchTool::new(note_search_api_url),
             CalendarTool::new(db.clone(), note_search_api_url),
             WebsiteViewTool::new(),
-            TasksDueTodayTool::new(note_search_api_url),
-            TasksScheduledTodayTool::new(note_search_api_url),
             DateTimeTool::new(),
             DecisionTool::new(openai_api_hostname, openai_api_key, openai_decision_model),
             BashTool::new(storage_path, &workspace_id),
@@ -391,15 +387,12 @@ async fn chat_handler(
     };
 
     let mut all_tools: Vec<BoxedToolCall> = vec![
-        Box::new(note_search_tool),
-        Box::new(meeting_search_tool),
+        Box::new(search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(email_search_tool),
         Box::new(calendar_tool),
         Box::new(website_view_tool),
-        Box::new(tasks_due_today_tool),
-        Box::new(tasks_scheduled_today_tool),
         Box::new(datetime_tool),
         Box::new(decision_tool),
         Box::new(bash_tool),
