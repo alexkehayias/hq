@@ -1,6 +1,8 @@
 import wit_world
 from componentize_py_types import Err
+from wit_world.imports import tools as _host_tools
 import ast
+import inspect
 import json
 import linecache
 import textwrap
@@ -138,11 +140,170 @@ def _set_argv(argv: list[str]) -> None:
     sys.argv = list(argv)
 
 
+# --- Host tools -----------------------------------------------------------
+#
+# Guest code reaches host tools through the `hq` namespace:
+#
+#     tools.search_notes(query="...", limit=10)
+#
+# The wrappers are built from the JSON schemas the host exposes, so adding or
+# removing a tool on the host side needs no guest change. Each call re-reads
+# the definitions because a sandbox instance may be reused for a different
+# tool set (the plain `python` tool exposes none).
+
+_PY_TYPES = {
+    "string": str,
+    "number": float,
+    "integer": int,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+class ToolError(RuntimeError):
+    """A host tool failed. The message is the tool's error text."""
+
+
+def _annotation(prop: dict):
+    kind = prop.get("type")
+    if kind == "array":
+        return list[_PY_TYPES.get(prop.get("items", {}).get("type"), object)]
+    return _PY_TYPES.get(kind, object)
+
+
+def _signature(schema: dict) -> inspect.Signature:
+    required = set(schema.get("required", ()))
+    parameters = []
+    for name, prop in schema.get("properties", {}).items():
+        # Optional parameters default to None so `bind` accepts omission; only
+        # the arguments the caller actually passed are forwarded to the host.
+        default = inspect.Parameter.empty if name in required else None
+        parameters.append(
+            inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=_annotation(prop),
+            )
+        )
+    return inspect.Signature(parameters)
+
+
+def _decode(raw: str):
+    """Decode a tool result, falling back to the raw string for non-JSON."""
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
+def _make_tool(definition: dict):
+    name = definition["name"]
+    signature = _signature(definition.get("parameters", {}))
+
+    def invoke(*args, **kwargs):
+        # `bind` enforces required arguments and rejects unknown ones, so the
+        # model gets ordinary Python TypeErrors instead of host-side surprises.
+        # Re-raise without the inspect.py frames to keep tracebacks short.
+        try:
+            bound = signature.bind(*args, **kwargs)
+        except TypeError as exc:
+            raise TypeError(str(exc)) from None
+        try:
+            raw = _host_tools.call(name, json.dumps(bound.arguments))
+        except Exception as exc:  # wit_world.types.Err
+            raise ToolError(getattr(exc, "value", str(exc))) from None
+        return _decode(raw)
+
+    invoke.__name__ = name
+    invoke.__doc__ = definition.get("description", "")
+    invoke.__signature__ = signature
+    return invoke
+
+
+def _format_signature(definition: dict) -> str:
+    schema = definition.get("parameters", {})
+    required = set(schema.get("required", ()))
+    parts = [
+        name if name in required else f"{name}=..."
+        for name in schema.get("properties", {})
+    ]
+    if not parts:
+        return f"{definition['name']}()"
+    # Every parameter is keyword-only; show the `*` so the model doesn't try
+    # to call positionally.
+    return f"{definition['name']}(*, {', '.join(parts)})"
+
+
+def _first_line(text: str) -> str:
+    stripped = text.strip()
+    line = stripped.splitlines()[0] if stripped else ""
+    return line if len(line) <= 120 else line[:117] + "..."
+
+
+def _describe(definition: dict) -> str:
+    schema = definition.get("parameters", {})
+    required = set(schema.get("required", ()))
+    lines = [
+        _format_signature(definition),
+        "",
+        definition.get("description", ""),
+    ]
+    properties = schema.get("properties", {})
+    if properties:
+        lines.extend(["", "Arguments:"])
+        for name, prop in properties.items():
+            suffix = "" if name in required else " (optional)"
+            lines.append(
+                f"  {name}: {prop.get('type', 'any')}{suffix} - "
+                f"{prop.get('description', '')}"
+            )
+    return "\n".join(lines)
+
+
+class _Tools:
+    """Host tools, plus `help()` for discovering their signatures."""
+
+    def __init__(self, definitions: list[dict]):
+        self._definitions = definitions
+        self.ToolError = ToolError
+        for definition in definitions:
+            setattr(self, definition["name"], _make_tool(definition))
+
+    def help(self, name: str | None = None) -> str:
+        """Describe one tool, or list every tool and its signature."""
+        if name is not None:
+            for definition in self._definitions:
+                if definition["name"] == name:
+                    return _describe(definition)
+            raise ToolError(f"unknown tool '{name}'")
+
+        return "\n".join(
+            f"{_format_signature(d)}\n    {_first_line(d.get('description', ''))}"
+            for d in self._definitions
+        )
+
+
+def _make_tools() -> _Tools:
+    """Build the `tools` namespace for this execution and expose it as a global."""
+    definitions = json.loads(_host_tools.definitions())
+    tools = _Tools(definitions)
+    globals()["tools"] = tools
+    globals()["ALL_TOOLS"] = [
+        {"name": d["name"], "description": d.get("description", "")}
+        for d in definitions
+    ]
+    return tools
+
+
 class WitWorld(wit_world.WitWorld):
     def eval(self, code: str, argv: list[str]) -> str:
         try:
             _set_argv(argv)
             _register_source("<input>", code)
+            # Make the tool namespace visible to the evaluated expression.
+            _make_tools()
             # Dedent so leading whitespace on the first line doesn't trip
             # Python's tokenizer (it raises IndentationError at module level).
             program = compile(textwrap.dedent(code), "<input>", "eval")
@@ -172,8 +333,14 @@ class WitWorld(wit_world.WitWorld):
             compiled = compile(tree, "<input>", "exec")
             # Use the same dict for globals and locals so top-level definitions
             # behave like module level (nested function calls can see other
-            # top-level names, including for recursion).
-            namespace: dict = {}
+            # top-level names, including for recursion). Seed it with the tool
+            # namespace so code can call `tools.<tool>(...)` and inspect the
+            # available tools through `ALL_TOOLS`.
+            _make_tools()
+            namespace: dict = {
+                "tools": globals()["tools"],
+                "ALL_TOOLS": globals()["ALL_TOOLS"],
+            }
             exec(compiled, namespace, namespace)
 
             return json.dumps(namespace.get(_RESULT_NAME))
