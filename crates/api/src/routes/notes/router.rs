@@ -24,9 +24,21 @@ type SharedState = Arc<RwLock<AppState>>;
 async fn note_search(
     State(state): State<SharedState>,
     Query(params): Query<public::SearchRequest>,
-) -> Result<axum::Json<public::SearchResponse>, crate::public::ApiError> {
+) -> Result<axum::response::Response, crate::public::ApiError> {
     let raw_query = params.query;
-    let query = aql::parse_query(&raw_query).expect("Parsing AQL failed");
+    // A malformed query is a client error, not a server failure: return the
+    // parser/validator message so the caller (including the `search` tool)
+    // can correct it.
+    let query = match aql::parse_and_validate_query(&raw_query) {
+        Ok(query) => query,
+        Err(e) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid search query: {e}"),
+            )
+                .into_response());
+        }
+    };
     let (db, index_path) = {
         let shared_state = state.read().unwrap();
         (
@@ -51,7 +63,7 @@ async fn note_search(
         results,
     };
 
-    Ok(axum::Json(resp))
+    Ok(axum::Json(resp).into_response())
 }
 
 // View note endpoint

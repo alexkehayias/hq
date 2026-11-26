@@ -6,9 +6,15 @@ use tantivy::query::{AllQuery, BooleanQuery, FuzzyTermQuery, PhraseQuery, RegexQ
 use tantivy::query::{Occur, Query};
 use tantivy::schema::{Field, IndexRecordOption, Schema};
 
-fn parse_date_to_timestamp(date_str: &str) -> u64 {
-    let parts: Vec<u32> = date_str.split('-').map(|s| s.parse().unwrap()).collect();
-    let (year, month, day) = (parts[0], parts[1], parts[2]);
+fn parse_date_to_timestamp(date_str: &str) -> Option<u64> {
+    let parts: Vec<u32> = date_str
+        .split('-')
+        .map(|s| s.parse().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let [year, month, day] = parts.as_slice() else {
+        return None;
+    };
+    let (year, month, day) = (*year, *month, *day);
 
     // Calculate days since UNIX_EPOCH
     let days = (year as i64 - 1970) * 365 + ((year as i64 - 1969) / 4)
@@ -32,7 +38,7 @@ fn parse_date_to_timestamp(date_str: &str) -> u64 {
         + day as i64
         - 1;
 
-    (days * 24 * 60 * 60) as u64
+    Some((days * 24 * 60 * 60) as u64)
 }
 
 const DEFAULT_FIELD_NAME: &str = "__default";
@@ -175,11 +181,13 @@ pub(crate) fn aql_to_index_query(
             let field_name = field.clone().unwrap_or_else(|| "__default".into());
             let fields: Vec<(String, Field)> = if field_name == DEFAULT_FIELD_NAME {
                 vec![
-                    (String::from("title"), schema.get_field("title").unwrap()),
-                    (String::from("body"), schema.get_field("body").unwrap()),
+                    (String::from("title"), schema.get_field("title").ok()?),
+                    (String::from("body"), schema.get_field("body").ok()?),
                 ]
             } else {
-                vec![(field_name.clone(), schema.get_field(&field_name).unwrap())]
+                // Validation rejects unknown fields at the API boundary; this
+                // keeps direct callers from panicking on one.
+                vec![(field_name.clone(), schema.get_field(&field_name).ok()?)]
             };
 
             let terms: Vec<Box<dyn Query>> = fields
@@ -215,8 +223,8 @@ pub(crate) fn aql_to_index_query(
             value,
             negated,
         } => {
-            let field = schema.get_field(field).unwrap();
-            let value = parse_date_to_timestamp(value);
+            let field = schema.get_field(field).ok()?;
+            let value = parse_date_to_timestamp(value)?;
             let (lower_bound, upper_bound) = match op {
                 RangeOp::Lt => (
                     Bound::Unbounded,
@@ -253,7 +261,7 @@ pub(crate) fn aql_to_index_query(
             // non-null value in the field. Tantivy's `ExistsQuery` requires
             // fast fields, which our TEXT | STORED schema doesn't have, so
             // we match any token in the inverted index via a `.*` regex.
-            let tantivy_field = schema.get_field(field).unwrap();
+            let tantivy_field = schema.get_field(field).ok()?;
             let regex_query = RegexQuery::from_pattern(".*", tantivy_field)
                 .expect("wildcard regex should compile");
             if *negated {

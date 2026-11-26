@@ -4,7 +4,7 @@
 //! directly or compose several calls in Python, whichever fits the task.
 //!
 //! Guest code reaches tools through the `hq` namespace, e.g.
-//! `tools.search_notes(query="...")`. The Python side builds a typed wrapper per
+//! `tools.search(query="...")`. The Python side builds a typed wrapper per
 //! tool from the JSON schema the host exposes (see `guest.py`), so the model
 //! writes ordinary Python instead of one tool call per step.
 //!
@@ -52,12 +52,9 @@ const BRIDGED_TOOLS: &[&str] = &[
     "notify",
     "read_skill_file",
     "save_skill",
+    "search",
     "search_emails",
-    "search_meetings",
-    "search_notes",
     "search_skills",
-    "tasks_due_today",
-    "tasks_scheduled_today",
     "view_website",
     "web_search",
     "work_on_skill",
@@ -227,7 +224,7 @@ impl CodeModeTool {
                     r#type: String::from("string"),
                     description: String::from(
                         "The Python code to execute. Host tools are available on the `hq` \
-                         namespace, e.g. `tools.search_notes(query=\"...\")`. Call `tools.help()` for \
+                         namespace, e.g. `tools.search(query=\"...\")`. Call `tools.help()` for \
                          every tool and signature, or `tools.help(\"name\")` for one tool's \
                          arguments. The value of the last expression is returned. Use print() \
                          to produce stdout output.",

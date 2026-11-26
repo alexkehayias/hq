@@ -6,8 +6,8 @@ use hq::ai::chat::{
     ChatBuilder, InfiniteLoopDetector, InvisibleCharFilter, ToolSecurityMiddleware,
 };
 use hq::ai::tools::{
-    CalendarTool, DateTimeTool, DecisionTool, EmailUnreadTool, MeetingSearchTool, NoteSearchTool,
-    SubagentTool, WebSearchTool,
+    CalendarTool, DateTimeTool, DecisionTool, EmailUnreadTool, SearchTool, SubagentTool,
+    WebSearchTool,
 };
 use hq::core::db::async_db;
 use hq::core::markdown_render;
@@ -27,16 +27,10 @@ pub async fn run(
     let mut rl = DefaultEditor::new().expect("Editor failed");
 
     // Create tools
-    let note_search_tool = if let Some(url) = note_search_api_url {
-        NoteSearchTool::new(url)
+    let search_tool = if let Some(url) = note_search_api_url {
+        SearchTool::new(url)
     } else {
-        NoteSearchTool::default()
-    };
-
-    let meeting_search_tool = if let Some(url) = note_search_api_url {
-        MeetingSearchTool::new(url)
-    } else {
-        MeetingSearchTool::default()
+        SearchTool::default()
     };
 
     let email_unread_tool = if let Some(url) = note_search_api_url {
@@ -63,8 +57,7 @@ pub async fn run(
     let subagent_tool = SubagentTool::new(api_hostname, api_key, model);
 
     let tools: Vec<BoxedToolCall> = vec![
-        Box::new(note_search_tool),
-        Box::new(meeting_search_tool),
+        Box::new(search_tool),
         Box::new(web_search_tool),
         Box::new(email_unread_tool),
         Box::new(calendar_tool),
