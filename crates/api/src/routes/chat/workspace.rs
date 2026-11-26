@@ -125,7 +125,17 @@ async fn write_unique(dir: &Path, filename: &str, bytes: &[u8]) -> std::io::Resu
             .await
         {
             Ok(mut file) => {
-                if let Err(e) = file.write_all(bytes).await {
+                // Tokio's `File` buffers writes in a background task, so
+                // `write_all` can return before the bytes reach the file.
+                // Flush before responding so a caller that reads the file
+                // immediately doesn't see it empty.
+                let result = async {
+                    file.write_all(bytes).await?;
+                    file.flush().await
+                }
+                .await;
+
+                if let Err(e) = result {
                     // Don't leave a partial file behind for the panel to list.
                     drop(file);
                     let _ = tokio::fs::remove_file(&target).await;
