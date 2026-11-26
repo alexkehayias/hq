@@ -181,6 +181,13 @@
                     class="flex size-7 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
               <hq-icon name="expand" size="sm"></hq-icon>
             </button>
+            <button id="workspace-upload"
+                    type="button"
+                    title="Upload files"
+                    aria-label="Upload files"
+                    class="flex size-7 items-center justify-center rounded-full text-muted hover:bg-mist hover:text-ink">
+              <hq-icon name="upload" size="sm"></hq-icon>
+            </button>
             <button id="workspace-refresh"
                     type="button"
                     title="Refresh files"
@@ -223,6 +230,10 @@
              class="flex min-h-0 flex-1 flex-col"
              role="tabpanel"
              aria-labelledby="workspace-tab-files">
+          <p id="workspace-upload-status"
+             class="hidden shrink-0 px-3 py-2 text-xs"
+             role="status"
+             aria-live="polite"></p>
           <div id="workspace-tree-view" class="flex min-h-0 flex-1 flex-col">
             <div class="min-h-0 flex-1 overflow-y-auto p-2">
               <hq-file-tree id="workspace-file-tree"
@@ -258,6 +269,7 @@
               <span>Files created in this session will appear here.</span>
             </hq-empty-state>
           </div>
+          <input type="file" id="workspace-file-input" class="hidden" multiple>
         </div>
 
         <div id="workspace-terminal-pane"

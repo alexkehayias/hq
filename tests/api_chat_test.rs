@@ -826,6 +826,39 @@ mod tests {
             .join(session_id)
     }
 
+    const UPLOAD_BOUNDARY: &str = "----hqworkspaceupload";
+
+    /// Build a `multipart/form-data` body with one `file` part per entry.
+    fn workspace_upload_body(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (filename, data) in files {
+            body.extend_from_slice(
+                format!(
+                    "--{UPLOAD_BOUNDARY}\r\n\
+                     Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+                     Content-Type: text/plain\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(data);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{UPLOAD_BOUNDARY}--\r\n").as_bytes());
+        body
+    }
+
+    fn workspace_upload_request(session_id: &str, body: Vec<u8>) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/chat/{session_id}/workspace"))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={UPLOAD_BOUNDARY}"),
+            )
+            .body(Body::from(body))
+            .unwrap()
+    }
+
     /// Runs a command through the session terminal endpoint and returns the
     /// decoded JSON response.
     async fn run_terminal(
@@ -984,6 +1017,130 @@ mod tests {
         assert_eq!(body["path"], "notes/todo.txt");
         assert_eq!(body["content"], "hello\n");
         assert_eq!(body["truncated"], false);
+    }
+
+    /// Uploading a text file stores it under the workspace `files/` dir and
+    /// it shows up in the file listing and preview.
+    #[tokio::test]
+    #[serial]
+    async fn it_uploads_text_files_to_the_workspace() {
+        let (app, state) = test_app_with_state().await;
+        let session_id = "workspace-upload";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
+
+        let body = workspace_upload_body(&[("notes.md", b"# hello\n")]);
+        let response = app
+            .clone()
+            .oneshot(workspace_upload_request(session_id, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let json: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        assert_eq!(json["files"][0]["path"], "files/notes.md");
+        assert_eq!(json["files"][0]["sandbox_path"], "/files/notes.md");
+        assert_eq!(json["files"][0]["size"], 8);
+
+        let stored = workspace_path(&state, session_id)
+            .join("files")
+            .join("notes.md");
+        assert_eq!(std::fs::read_to_string(stored).unwrap(), "# hello\n");
+
+        // The existing listing and preview endpoints see the upload.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/workspace"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_to_string(response.into_body()).await;
+        assert!(
+            body.contains("\"path\":\"files/notes.md\""),
+            "body was: {body}"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/chat/{session_id}/workspace/files/notes.md"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        assert_eq!(json["content"], "# hello\n");
+    }
+
+    /// Binary uploads are rejected before anything is written.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_binary_workspace_uploads() {
+        let (app, state) = test_app_with_state().await;
+        let session_id = "workspace-upload-binary";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
+
+        let body = workspace_upload_body(&[("image.png", b"\x89PNG\r\n\x1a\n\x00")]);
+        let response = app
+            .oneshot(workspace_upload_request(session_id, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        assert!(
+            !workspace_path(&state, session_id)
+                .join("files")
+                .join("image.png")
+                .exists()
+        );
+    }
+
+    /// A second upload with the same name is stored beside the first instead
+    /// of overwriting it.
+    #[tokio::test]
+    #[serial]
+    async fn it_renames_colliding_workspace_uploads() {
+        let (app, state) = test_app_with_state().await;
+        let session_id = "workspace-upload-collision";
+        create_session(&state, session_id).await;
+        create_workspace(&state, session_id);
+
+        let body = workspace_upload_body(&[("notes.md", b"first\n")]);
+        let response = app
+            .clone()
+            .oneshot(workspace_upload_request(session_id, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = workspace_upload_body(&[("notes.md", b"second\n")]);
+        let response = app
+            .oneshot(workspace_upload_request(session_id, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        assert_eq!(json["files"][0]["path"], "files/notes-1.md");
+
+        let files = workspace_path(&state, session_id).join("files");
+        assert_eq!(
+            std::fs::read_to_string(files.join("notes.md")).unwrap(),
+            "first\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(files.join("notes-1.md")).unwrap(),
+            "second\n"
+        );
     }
 
     /// A loop run's transcript session is keyed by the run id, but its

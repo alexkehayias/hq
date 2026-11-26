@@ -8,7 +8,7 @@ use axum::Json;
 use axum::response::Response;
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, sse::Event, sse::KeepAlive, sse::Sse},
     routing::{get, post},
@@ -23,7 +23,9 @@ use uuid::Uuid;
 use super::db::{chat_session_count, chat_session_list};
 use super::stream::{self, SessionStream};
 use super::terminal::{terminal_cwd_handler, terminal_handler};
-use super::workspace::{list_workspace_files, read_workspace_file};
+use super::workspace::{
+    MAX_UPLOAD_BYTES, list_workspace_files, read_workspace_file, upload_workspace_files,
+};
 use crate::state::AppState;
 use crate::utils::DetectDisconnect;
 use hq::ai::chat::commands::{SlashCommand, get_help_text};
@@ -879,7 +881,12 @@ pub fn router() -> Router<SharedState> {
             "/{id}/terminal",
             get(terminal_cwd_handler).post(terminal_handler),
         )
-        .route("/{id}/workspace", get(list_workspace_files))
+        .route(
+            "/{id}/workspace",
+            get(list_workspace_files)
+                .post(upload_workspace_files)
+                .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
         .route("/{id}/workspace/{*path}", get(read_workspace_file))
         .route("/sessions", get(chat_list))
 }

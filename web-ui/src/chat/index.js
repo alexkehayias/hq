@@ -185,6 +185,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const workspacePreviewTruncated = document.getElementById(
     'workspace-preview-truncated',
   );
+  const workspaceUpload = document.getElementById('workspace-upload');
+  const workspaceFileInput = document.getElementById('workspace-file-input');
+  const workspaceUploadStatus = document.getElementById(
+    'workspace-upload-status',
+  );
 
   let workspaceIsFullscreen = false;
   let workspaceHasFiles = false;
@@ -234,8 +239,9 @@ document.addEventListener('DOMContentLoaded', () => {
     workspaceTabTerminal.setAttribute('aria-selected', String(!filesActive));
     workspaceFilesPane.classList.toggle('hidden', !filesActive);
     workspaceTerminalPane.classList.toggle('hidden', filesActive);
-    // Refreshing only applies to the file browser.
+    // Refreshing and uploading only apply to the file browser.
     workspaceRefresh.classList.toggle('hidden', !filesActive);
+    workspaceUpload.classList.toggle('hidden', !filesActive);
     if (filesActive) {
       loadWorkspaceFiles();
       // The editor was display:none while the terminal tab was active.
@@ -535,6 +541,171 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   workspacePreviewBack.addEventListener('click', showWorkspaceTree);
+
+  // ---- Uploads ----
+
+  // Extensions offered by the workspace file picker. Uploads land in the
+  // workspace's `files/` directory, alongside the composer's image attachments.
+  // The server verifies the content is text,
+  // so this list only shapes the picker and rejects obviously wrong picks
+  // before they are sent.
+  const WORKSPACE_UPLOAD_EXTENSIONS = new Set([
+    'txt',
+    'md',
+    'markdown',
+    'org',
+    'rst',
+    'tex',
+    'log',
+    'csv',
+    'tsv',
+    'json',
+    'jsonl',
+    'yaml',
+    'yml',
+    'toml',
+    'ini',
+    'cfg',
+    'conf',
+    'env',
+    'js',
+    'mjs',
+    'cjs',
+    'jsx',
+    'ts',
+    'tsx',
+    'py',
+    'rs',
+    'go',
+    'java',
+    'kt',
+    'c',
+    'h',
+    'cpp',
+    'hpp',
+    'cc',
+    'cs',
+    'rb',
+    'php',
+    'swift',
+    'scala',
+    'lua',
+    'pl',
+    'r',
+    'sh',
+    'bash',
+    'zsh',
+    'fish',
+    'ps1',
+    'html',
+    'htm',
+    'xml',
+    'svg',
+    'css',
+    'scss',
+    'sass',
+    'less',
+    'sql',
+    'graphql',
+    'gql',
+    'proto',
+    'diff',
+    'patch',
+  ]);
+
+  workspaceFileInput.accept = [...WORKSPACE_UPLOAD_EXTENSIONS]
+    .map((extension) => `.${extension}`)
+    .join(',');
+
+  const workspaceFileExtension = (name) => {
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? '' : name.slice(dot + 1).toLowerCase();
+  };
+
+  const setWorkspaceUploadStatus = (message, tone) => {
+    workspaceUploadStatus.textContent = message || '';
+    workspaceUploadStatus.classList.toggle('hidden', !message);
+    workspaceUploadStatus.classList.toggle('text-rust', tone === 'error');
+    workspaceUploadStatus.classList.toggle('text-muted', tone !== 'error');
+  };
+
+  let workspaceUploadInFlight = false;
+
+  const uploadWorkspaceFiles = async (files) => {
+    if (!files.length || workspaceUploadInFlight) return;
+
+    const unsupported = files.find((file) => {
+      const extension = workspaceFileExtension(file.name);
+      // Extensionless files (README, Makefile) are fine; the server decides
+      // whether the content is text.
+      return extension !== '' && !WORKSPACE_UPLOAD_EXTENSIONS.has(extension);
+    });
+    if (unsupported) {
+      setWorkspaceUploadStatus(
+        `Unsupported file type: ${unsupported.name}`,
+        'error',
+      );
+      return;
+    }
+
+    // The file listing hides dotfiles, so an upload under a hidden name would
+    // silently disappear from the panel.
+    const hidden = files.find((file) => file.name.startsWith('.'));
+    if (hidden) {
+      setWorkspaceUploadStatus(
+        `Hidden filenames aren't supported: ${hidden.name}`,
+        'error',
+      );
+      return;
+    }
+
+    workspaceUploadInFlight = true;
+    workspaceUpload.disabled = true;
+    workspaceUpload.classList.add('opacity-50');
+    setWorkspaceUploadStatus(
+      files.length === 1
+        ? `Uploading ${files[0].name}…`
+        : `Uploading ${files.length} files…`,
+      'muted',
+    );
+
+    try {
+      const formData = new FormData();
+      for (const file of files) {
+        formData.append('file', file, file.name);
+      }
+
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(sessionId)}/workspace`,
+        { method: 'POST', body: formData },
+      );
+      if (!response.ok) {
+        throw new Error(
+          (await response.text()) || `Upload failed (${response.status})`,
+        );
+      }
+
+      const result = await response.json();
+      setWorkspaceUploadStatus('');
+      await loadWorkspaceFiles();
+      const uploadedPath = result.files?.[0]?.path;
+      if (uploadedPath) openWorkspaceFile(uploadedPath);
+    } catch (error) {
+      setWorkspaceUploadStatus(error.message || String(error), 'error');
+    } finally {
+      workspaceUploadInFlight = false;
+      workspaceUpload.disabled = false;
+      workspaceUpload.classList.remove('opacity-50');
+    }
+  };
+
+  workspaceUpload.addEventListener('click', () => workspaceFileInput.click());
+  workspaceFileInput.addEventListener('change', () => {
+    const files = [...workspaceFileInput.files];
+    // Clear the picker so choosing the same file again still fires `change`.
+    workspaceFileInput.value = '';
+    uploadWorkspaceFiles(files);
+  });
 
   window.addEventListener('resize', () => {
     if (workspaceWidth) applyWorkspaceWidth(workspaceWidth);
