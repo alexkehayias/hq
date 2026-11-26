@@ -2,6 +2,7 @@ import wit_world
 from componentize_py_types import Err
 from wit_world.imports import tools as _host_tools
 import ast
+import asyncio
 import inspect
 import json
 import linecache
@@ -142,9 +143,9 @@ def _set_argv(argv: list[str]) -> None:
 
 # --- Host tools -----------------------------------------------------------
 #
-# Guest code reaches host tools through the `hq` namespace:
+# Guest code reaches host tools through the `tools` namespace:
 #
-#     tools.search_notes(query="...", limit=10)
+#     await tools.search_notes(query="...", limit=10)
 #
 # The wrappers are built from the JSON schemas the host exposes, so adding or
 # removing a tool on the host side needs no guest change. Each call re-reads
@@ -202,7 +203,7 @@ def _make_tool(definition: dict):
     name = definition["name"]
     signature = _signature(definition.get("parameters", {}))
 
-    def invoke(*args, **kwargs):
+    async def invoke(*args, **kwargs):
         # `bind` enforces required arguments and rejects unknown ones, so the
         # model gets ordinary Python TypeErrors instead of host-side surprises.
         # Re-raise without the inspect.py frames to keep tracebacks short.
@@ -211,7 +212,7 @@ def _make_tool(definition: dict):
         except TypeError as exc:
             raise TypeError(str(exc)) from None
         try:
-            raw = _host_tools.call(name, json.dumps(bound.arguments))
+            raw = await _host_tools.call(name, json.dumps(bound.arguments))
         except Exception as exc:  # wit_world.types.Err
             raise ToolError(getattr(exc, "value", str(exc))) from None
         return _decode(raw)
@@ -298,7 +299,7 @@ def _make_tools() -> _Tools:
 
 
 class WitWorld(wit_world.WitWorld):
-    def eval(self, code: str, argv: list[str]) -> str:
+    async def eval(self, code: str, argv: list[str]) -> str:
         try:
             _set_argv(argv)
             _register_source("<input>", code)
@@ -306,12 +307,21 @@ class WitWorld(wit_world.WitWorld):
             _make_tools()
             # Dedent so leading whitespace on the first line doesn't trip
             # Python's tokenizer (it raises IndentationError at module level).
-            program = compile(textwrap.dedent(code), "<input>", "eval")
-            return json.dumps(eval(program))
+            # Allow top-level `await` so `await tools.foo()` works directly.
+            program = compile(
+                textwrap.dedent(code),
+                "<input>",
+                "eval",
+                flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
+            )
+            value = eval(program)
+            if inspect.isawaitable(value):
+                value = await value
+            return json.dumps(value)
         except BaseException as e:
             raise handle(e)
 
-    def exec(self, code: str, argv: list[str]) -> str:
+    async def exec(self, code: str, argv: list[str]) -> str:
         try:
             _set_argv(argv)
             _register_source("<input>", code)
@@ -330,19 +340,35 @@ class WitWorld(wit_world.WitWorld):
                     tree.body[-1] = assign
                     ast.fix_missing_locations(tree)
 
-            compiled = compile(tree, "<input>", "exec")
+            compiled = compile(
+                tree,
+                "<input>",
+                "exec",
+                flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
+            )
             # Use the same dict for globals and locals so top-level definitions
             # behave like module level (nested function calls can see other
             # top-level names, including for recursion). Seed it with the tool
-            # namespace so code can call `tools.<tool>(...)` and inspect the
-            # available tools through `ALL_TOOLS`.
+            # namespace so code can call `await tools.<tool>(...)` and inspect
+            # the available tools through `ALL_TOOLS`.
             _make_tools()
             namespace: dict = {
                 "tools": globals()["tools"],
                 "ALL_TOOLS": globals()["ALL_TOOLS"],
             }
-            exec(compiled, namespace, namespace)
+            # `exec()` discards the coroutine it creates for top-level `await`,
+            # so evaluate the code object instead; `eval` returns it for both
+            # sync and async programs.
+            result = eval(compiled, namespace, namespace)
+            if inspect.isawaitable(result):
+                # The program contains top-level `await`; run it to completion.
+                await result
 
-            return json.dumps(namespace.get(_RESULT_NAME))
+            value = namespace.get(_RESULT_NAME)
+            if inspect.isawaitable(value):
+                raise TypeError(
+                    "a tool call was not awaited; use `await tools.<name>(...)`"
+                )
+            return json.dumps(value)
         except BaseException as e:
             raise handle(e)

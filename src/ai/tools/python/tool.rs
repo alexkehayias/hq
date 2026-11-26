@@ -66,12 +66,13 @@ impl ToolCall for PythonTool {
             .chain(fn_args.argv)
             .collect::<Vec<_>>();
         let workspace = self.workspace_path.clone();
+        let runtime = tokio::runtime::Handle::current();
         let exec =
             tokio::task::spawn_blocking(move || -> Result<ExecResult, RecoverableToolError> {
                 let sandbox =
                     shared_sandbox().map_err(|e| RecoverableToolError::new(&e.to_string()))?;
-                sandbox
-                    .exec(&code, &workspace, b"", &argv)
+                runtime
+                    .block_on(sandbox.exec(&code, &workspace, b"", &argv))
                     .map_err(|e| RecoverableToolError::new(&e.to_string()))
             })
             .await??;

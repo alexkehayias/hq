@@ -14,9 +14,10 @@ pub async fn run(command: Option<String>, script: Vec<String>) -> Result<()> {
 
     // The sandbox is CPU-bound and can run up to the timeout, so keep it off
     // the async runtime's worker threads.
+    let runtime = tokio::runtime::Handle::current();
     let result = tokio::task::spawn_blocking(move || {
         let sandbox = shared_sandbox()?;
-        sandbox.exec(&code, &workspace, b"", &argv)
+        runtime.block_on(sandbox.exec(&code, &workspace, b"", &argv))
     })
     .await?;
 

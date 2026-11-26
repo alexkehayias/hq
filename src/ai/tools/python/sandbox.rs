@@ -12,12 +12,12 @@ use anyhow::{Context, Result, anyhow};
 use once_cell::sync::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use wasmtime::component::{Component, HasSelf, Linker};
+use wasmtime::component::{Accessor, Component, HasSelf, Linker};
 use wasmtime::{Cache, Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Strategy};
 
 use crate::ai::chat::middleware::{ToolCallRule, default_tool_security_rules};
@@ -53,20 +53,21 @@ const MAX_TOOL_RESULT_BYTES: usize = 4 * 1024 * 1024;
 // committed.
 const SANDBOX_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sandbox.wasm"));
 
-/// Host tools exposed to guest code, plus the async runtime used to call them.
+/// Host tools exposed to guest code.
 ///
 /// One bridge is built per execution, so the call budget is scoped to a single
-/// `exec`. The runtime handle must belong to a multi-threaded runtime and the
-/// execution must run on a blocking thread (the tool call blocks the guest).
+/// `exec`. It is held in an `Arc` because the async host function clones it out
+/// of the store between await points.
 pub struct ToolBridge {
     tools: Arc<HashMap<String, BoxedToolCall>>,
     definitions: String,
-    runtime: tokio::runtime::Handle,
     max_calls: usize,
     calls: AtomicUsize,
     call_timeout: Duration,
     max_host_time: Duration,
-    host_time: Duration,
+    /// Total time spent inside host tools, in milliseconds. Atomics so the
+    /// async host function can update it through a shared `&ToolBridge`.
+    host_time_ms: AtomicU64,
     /// Prompt-injection rules, shared with the chat middleware.
     security_rules: Vec<ToolCallRule>,
     /// Tools already used in this session, including nested calls from earlier
@@ -78,21 +79,28 @@ impl ToolBridge {
     pub fn new(
         tools: Arc<HashMap<String, BoxedToolCall>>,
         definitions: String,
-        runtime: tokio::runtime::Handle,
         used_tools: Arc<Mutex<HashSet<String>>>,
     ) -> Self {
         Self {
             tools,
             definitions,
-            runtime,
             max_calls: MAX_TOOL_CALLS,
             calls: AtomicUsize::new(0),
             call_timeout: Duration::from_secs(TOOL_CALL_TIMEOUT_SECONDS),
             max_host_time: Duration::from_secs(MAX_TOOL_HOST_TIME_SECONDS),
-            host_time: Duration::ZERO,
+            host_time_ms: AtomicU64::new(0),
             security_rules: default_tool_security_rules(),
             used_tools,
         }
+    }
+
+    fn host_time(&self) -> Duration {
+        Duration::from_millis(self.host_time_ms.load(Ordering::SeqCst))
+    }
+
+    fn add_host_time(&self, elapsed: Duration) {
+        self.host_time_ms
+            .fetch_add(elapsed.as_millis() as u64, Ordering::SeqCst);
     }
 }
 
@@ -101,9 +109,9 @@ struct SandboxState {
     table: ResourceTable,
     limits: StoreLimits,
     timed_out: bool,
-    tools: Option<ToolBridge>,
-    /// Wall-clock deadline for guest code only. Time spent blocked in a host
-    /// tool call is added back so a slow tool does not consume the budget.
+    tools: Option<Arc<ToolBridge>>,
+    /// Wall-clock deadline for guest code only. Time spent awaiting a host tool
+    /// call is added back so a slow tool does not consume the budget.
     guest_deadline: Instant,
 }
 
@@ -130,66 +138,68 @@ impl local::sandbox::tools::Host for SandboxState {
             .map(|bridge| bridge.definitions.clone())
             .unwrap_or_else(|| "[]".to_string())
     }
+}
 
-    fn call(&mut self, name: String, args: String) -> std::result::Result<String, String> {
-        let (result, elapsed) = {
-            let Some(bridge) = self.tools.as_mut() else {
-                return Err("no tools are available in this sandbox".to_string());
-            };
-
-            if bridge.calls.fetch_add(1, Ordering::SeqCst) >= bridge.max_calls {
-                return Err(format!(
-                    "tool call budget exceeded (max {})",
-                    bridge.max_calls
-                ));
-            }
-            if bridge.host_time >= bridge.max_host_time {
-                return Err(format!(
-                    "tool time budget exceeded (max {}s)",
-                    bridge.max_host_time.as_secs()
-                ));
-            }
-
-            let Some(tool) = bridge.tools.get(&name) else {
-                return Err(format!("unknown tool '{name}'"));
-            };
-
-            // Nested calls bypass the chat's tool-call middleware, so enforce
-            // the same prompt-injection rules here. The set is shared across
-            // executions in a turn, and seeded from the transcript.
-            {
-                let mut used = bridge
-                    .used_tools
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                for rule in &bridge.security_rules {
-                    if let Some(reason) = rule.rejection(&used, &name) {
-                        return Err(reason);
-                    }
-                }
-                used.insert(name.clone());
-            }
-
-            let started = Instant::now();
-            // `exec` always runs on a blocking thread, so blocking on the
-            // runtime here is safe. The timeout keeps a hung tool from pinning
-            // that thread forever.
-            let result = bridge.runtime.block_on(async {
-                match tokio::time::timeout(bridge.call_timeout, tool.call(&args)).await {
-                    Ok(Ok(value)) => Ok(value),
-                    Ok(Err(error)) => Err(error.to_string()),
-                    Err(_) => Err(format!("tool '{name}' timed out")),
-                }
-            });
-            let elapsed = started.elapsed();
-            bridge.host_time += elapsed;
-            (result, elapsed)
+impl local::sandbox::tools::HostWithStore<SandboxState> for HasSelf<SandboxState> {
+    async fn call(
+        accessor: &Accessor<SandboxState, Self>,
+        name: String,
+        args: String,
+    ) -> std::result::Result<String, String> {
+        // `Accessor::with` is synchronous and cannot be held across an await,
+        // so clone the shared bridge out first.
+        let Some(bridge) = accessor.with(|mut access| access.get().tools.clone()) else {
+            return Err("no tools are available in this sandbox".to_string());
         };
 
-        // Host time must not consume the guest's execution budget: the epoch
-        // deadline is wall-clock based, and the guest is not executing while
-        // we block here.
-        self.guest_deadline += elapsed;
+        if bridge.calls.fetch_add(1, Ordering::SeqCst) >= bridge.max_calls {
+            return Err(format!(
+                "tool call budget exceeded (max {})",
+                bridge.max_calls
+            ));
+        }
+        if bridge.host_time() >= bridge.max_host_time {
+            return Err(format!(
+                "tool time budget exceeded (max {}s)",
+                bridge.max_host_time.as_secs()
+            ));
+        }
+
+        let Some(tool) = bridge.tools.get(&name) else {
+            return Err(format!("unknown tool '{name}'"));
+        };
+
+        // Nested calls bypass the chat's tool-call middleware, so enforce
+        // the same prompt-injection rules here. The set is shared across
+        // executions in a turn, and seeded from the transcript.
+        {
+            let mut used = bridge
+                .used_tools
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for rule in &bridge.security_rules {
+                if let Some(reason) = rule.rejection(&used, &name) {
+                    return Err(reason);
+                }
+            }
+            used.insert(name.clone());
+        }
+
+        let started = Instant::now();
+        let result = match tokio::time::timeout(bridge.call_timeout, tool.call(&args)).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => Err(format!("tool '{name}' timed out")),
+        };
+        let elapsed = started.elapsed();
+        bridge.add_host_time(elapsed);
+
+        // Host time must not consume the guest's execution budget: the
+        // epoch deadline is wall-clock based, and the guest is suspended
+        // while the host future runs.
+        accessor.with(|mut access| {
+            access.get().guest_deadline += elapsed;
+        });
 
         match result {
             Ok(value) if value.len() > MAX_TOOL_RESULT_BYTES => Err(format!(
@@ -228,7 +238,7 @@ pub fn shared_sandbox() -> Result<&'static PySandbox> {
     static SANDBOX: OnceCell<PySandbox> = OnceCell::new();
     SANDBOX.get_or_try_init(|| {
         if cfg!(test) {
-            // Winch compiles the ~40 MB component far faster, which keeps the
+            // Winch compiles the ~20 MB component far faster, which keeps the
             // test suite quick. Production uses the Cranelift default.
             PySandbox::new_for_test(None)
         } else {
@@ -320,7 +330,7 @@ impl PySandbox {
     /// Execute Python code in the sandbox without host tools.
     ///
     /// See [`PySandbox::exec_with_tools`] for the full contract.
-    pub fn exec(
+    pub async fn exec(
         &self,
         code: &str,
         workspace: &Path,
@@ -328,6 +338,7 @@ impl PySandbox {
         argv: &[String],
     ) -> Result<ExecResult> {
         self.exec_with_tools(code, workspace, stdin, argv, None)
+            .await
     }
 
     /// Execute Python code in the sandbox.
@@ -343,13 +354,13 @@ impl PySandbox {
     /// host tools; `None` leaves the guest with no host access beyond the
     /// workspace. The caller must ensure `workspace` already exists on the host;
     /// the preopen fails otherwise.
-    pub fn exec_with_tools(
+    pub async fn exec_with_tools(
         &self,
         code: &str,
         workspace: &Path,
         stdin: &[u8],
         argv: &[String],
-        tools: Option<ToolBridge>,
+        tools: Option<Arc<ToolBridge>>,
     ) -> Result<ExecResult> {
         let stdout_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
         let stderr_pipe = MemoryOutputPipe::new(MAX_OUTPUT_BYTES);
@@ -396,41 +407,57 @@ impl PySandbox {
                 }
             };
             Ok(match remaining_ticks {
-                Some(ticks) => wasmtime::UpdateDeadline::Continue(ticks),
+                // `Yield` lets the async executor run other tasks before the
+                // guest resumes; `Interrupt` traps when the budget is gone.
+                Some(ticks) => wasmtime::UpdateDeadline::Yield(ticks),
                 None => wasmtime::UpdateDeadline::Interrupt,
             })
         });
 
-        // Set up linker with WASI and the host tool interface.
+        // Set up linker with WASI and the host tool interface. The async
+        // linker is required because the guest exports are async.
         let mut linker = Linker::new(&self.engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         Sandbox::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         // Instantiate the component
-        let wasm_sandbox = Sandbox::instantiate(&mut store, &self.component, &linker)?;
+        let wasm_sandbox = Sandbox::instantiate_async(&mut store, &self.component, &linker).await?;
 
         // Give the guest a fresh budget: instantiation above may have consumed
         // part of the deadline, which should only bound user code.
         store.data_mut().guest_deadline = Instant::now() + timeout;
         store.set_epoch_deadline(deadline);
 
-        // Execute the code
-        let result = wasm_sandbox.call_exec(&mut store, code, argv);
+        // Execute the code through the concurrent (async) entry point. The
+        // guest's async exports need an `Accessor`, which `run_concurrent`
+        // provides.
+        let code_owned = code.to_string();
+        let argv_owned = argv.to_vec();
+        let result = store
+            .run_concurrent(async move |accessor| {
+                wasm_sandbox
+                    .call_exec(accessor, code_owned, argv_owned)
+                    .await
+            })
+            .await;
         let timed_out = store.data().timed_out;
 
         match result {
-            Ok(Ok(value)) => Ok(ExecResult {
+            Ok(Ok(Ok(value))) => Ok(ExecResult {
                 value,
                 stdout: decode_pipe(&stdout_pipe),
                 stderr: decode_pipe(&stderr_pipe),
             }),
             // Guest-level error: a Python traceback from the wrapper, safe to
             // surface to the caller.
-            Ok(Err(e)) => Err(anyhow!("{}", e)),
-            // Host-level trap. Surface a clean message rather than the raw
-            // wasmtime trap, which leaks internal symbols and addresses.
-            Err(_) if timed_out => Err(anyhow!("Execution timed out")),
-            Err(_) => Err(anyhow!("sandbox execution failed (resource limit or trap)")),
+            Ok(Ok(Err(e))) => Err(anyhow!("{}", e)),
+            // Host-level trap or concurrent-execution failure. Surface a clean
+            // message rather than the raw wasmtime trap, which leaks internal
+            // symbols and addresses.
+            Ok(Err(_)) | Err(_) if timed_out => Err(anyhow!("Execution timed out")),
+            Ok(Err(_)) | Err(_) => {
+                Err(anyhow!("sandbox execution failed (resource limit or trap)"))
+            }
         }
     }
 }
@@ -477,7 +504,7 @@ mod tests {
     impl crate::openai::ToolCall for SlowTool {
         async fn call(&self, _args: &str) -> Result<String, anyhow::Error> {
             // Longer than the sandbox's guest budget below.
-            std::thread::sleep(Duration::from_secs(3));
+            tokio::time::sleep(Duration::from_secs(3)).await;
             Ok("null".to_string())
         }
 
@@ -486,7 +513,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn host_tool_time_does_not_consume_guest_budget() {
         // Two seconds of guest budget, three seconds of host tool time. If the
         // host call were counted, the guest would trap on the next instruction.
@@ -507,38 +534,35 @@ mod tests {
             }
         }])
         .to_string();
-        let bridge = ToolBridge::new(
+        let bridge = Arc::new(ToolBridge::new(
             Arc::new(tools),
             definitions,
-            tokio::runtime::Handle::current(),
             Arc::new(Mutex::new(HashSet::new())),
-        );
+        ));
 
-        let workspace_clone = workspace.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            sandbox.exec_with_tools(
-                "tools.slow()\nsum(range(1000))",
-                &workspace_clone,
+        let result = sandbox
+            .exec_with_tools(
+                "await tools.slow()\nsum(range(1000))",
+                &workspace,
                 b"",
                 &["-c".to_string()],
                 Some(bridge),
             )
-        })
-        .await
-        .unwrap()
-        .unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(result.value, "499500");
     }
 
-    #[test]
-    fn test_sandbox_exposes_argv() {
+    #[tokio::test]
+    async fn test_sandbox_exposes_argv() {
         let sandbox = PySandbox::new_for_test(None).expect("Failed to create sandbox");
         let workspace = std::env::temp_dir();
         let argv = vec!["-c".to_string(), "first".to_string(), "second".to_string()];
 
         let result = sandbox
             .exec("import sys\nsys.argv", &workspace, b"", &argv)
+            .await
             .unwrap();
 
         assert_eq!(result.value, r#"["-c", "first", "second"]"#);

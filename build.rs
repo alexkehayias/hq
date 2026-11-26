@@ -13,7 +13,7 @@
 //! # Python sandbox
 //!
 //! `src/ai/tools/python/sandbox.rs` embeds the compiled component with
-//! `include_bytes!`. The ~40 MB artifact is not committed; this script builds
+//! `include_bytes!`. The ~20 MB artifact is not committed; this script builds
 //! it with `componentize-py` whenever `guest.py` or `sandbox.wit` changes, and
 //! reuses the previous build otherwise (keyed by a content hash in `OUT_DIR`).
 //!
@@ -42,7 +42,7 @@ const SANDBOX_STAMP: &str = "sandbox.wasm.stamp";
 
 /// Pinned so a rebuild is reproducible and does not pick up a new release
 /// between checkouts. Override with `HQ_COMPONENTIZE_PY_VERSION`.
-const COMPONENTIZE_PY_VERSION: &str = "0.19.3";
+const COMPONENTIZE_PY_VERSION: &str = "0.25.1";
 /// Exact patch so a new 3.13.x release cannot silently change the component.
 const PYTHON_VERSION: &str = "3.13.17";
 

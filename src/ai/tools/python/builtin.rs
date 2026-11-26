@@ -37,9 +37,10 @@ impl Builtin for PythonBuiltin {
         // The sandbox is CPU-bound and can run up to its timeout, so keep it
         // off the async runtime's worker threads.
         let workspace = self.workspace.clone();
+        let runtime = tokio::runtime::Handle::current();
         let result = tokio::task::spawn_blocking(move || {
             let sandbox = shared_sandbox()?;
-            sandbox.exec(&program.code, &workspace, &program.stdin, &program.argv)
+            runtime.block_on(sandbox.exec(&program.code, &workspace, &program.stdin, &program.argv))
         })
         .await;
 
