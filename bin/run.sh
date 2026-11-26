@@ -29,7 +29,8 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-TIMEOUT=30
+# Allow a cold build to finish before giving up on the port.
+TIMEOUT=300
 start=$(date +%s)
 while ! nc -z "${HOST}" "${PORT}"; do
     (( $(date +%s) - start > TIMEOUT )) && { kill $PID 2>/dev/null || true; exit 1; }

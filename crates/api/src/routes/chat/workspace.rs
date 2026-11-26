@@ -3,7 +3,8 @@
 //! The terminal and the agent's bash tool both operate on
 //! `{storage}/workspace/{workspace_id}`, where a loop run's transcript session
 //! resolves to its loop's workspace id. These handlers expose that directory to
-//! the chat UI's workspace panel without letting a request escape it.
+//! the chat UI's workspace panel without letting a request escape it. Uploads
+//! live in the files API, which shares the same `files/` directory.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
