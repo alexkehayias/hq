@@ -2,11 +2,18 @@ use super::registry::{Tool, ToolConfig};
 use crate::openai::{
     Function, Parameters, Property, RecoverableToolError, ToolCall, ToolType, parse_tool_args,
 };
-use crate::search::aql;
-use crate::types::notes::{SearchResponse, SearchResult};
+use crate::search::{aql, search_notes};
+use crate::types::notes::SearchResult;
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio_rusqlite::Connection;
+
+/// The search tool searches the index directly rather than looping back
+/// through the HTTP API. These mirror the API defaults.
+const INCLUDE_SIMILARITY: bool = false;
+const TRUNCATE: bool = true;
+const DEFAULT_LIMIT: usize = 20;
 
 #[derive(Serialize)]
 pub struct SearchProps {
@@ -18,14 +25,17 @@ pub struct SearchArgs {
     pub query: String,
 }
 
-/// Searches notes, meetings, tasks, and chat history through the notes API
-/// using AQL. This replaces the separate note/meeting/task tools: the model
-/// composes a query, and skills provide the specialized recipes.
+/// Searches notes, meetings, tasks, and chat history using AQL. This
+/// replaces the separate note/meeting/task tools: the model composes a
+/// query, and skills provide the specialized recipes.
 #[derive(Serialize)]
 pub struct SearchTool {
     pub r#type: ToolType,
     pub function: Function<SearchProps>,
-    api_base_url: String,
+    #[serde(skip)]
+    db: Connection,
+    #[serde(skip)]
+    index_path: String,
 }
 
 #[async_trait]
@@ -33,38 +43,24 @@ impl ToolCall for SearchTool {
     async fn call(&self, args: &str) -> Result<String, Error> {
         let fn_args: SearchArgs = parse_tool_args(args)?;
 
-        // Validate locally so the model gets a precise, actionable error
-        // without a round trip. The API validates again for direct callers.
-        let _query = aql::parse_and_validate_query(&fn_args.query).map_err(|e| {
+        let query = aql::parse_and_validate_query(&fn_args.query).map_err(|e| {
             Error::from(RecoverableToolError::new(&format!(
                 "Invalid AQL query: {e}"
             )))
         })?;
 
-        let mut url = reqwest::Url::parse(&format!("{}/api/notes/search", self.api_base_url))
-            .expect("Invalid URL");
-        url.query_pairs_mut()
-            .append_pair("query", &fn_args.query)
-            .append_pair("include_similarity", "false");
+        let results = search_notes(
+            &self.index_path,
+            &self.db,
+            INCLUDE_SIMILARITY,
+            TRUNCATE,
+            &query,
+            DEFAULT_LIMIT,
+        )
+        .await
+        .map_err(|e| Error::from(RecoverableToolError::new(&format!("Search failed: {e}"))))?;
 
-        let resp = reqwest::Client::new()
-            .get(url.as_str())
-            .header("Content-Type", "application/json")
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let body = resp.text().await?;
-        if !status.is_success() {
-            return Err(Error::from(RecoverableToolError::new(&format!(
-                "Search failed ({}): {}",
-                status,
-                body.trim()
-            ))));
-        }
-
-        let search_resp: SearchResponse = serde_json::from_str(&body)?;
-        Ok(format_results(&search_resp.results))
+        Ok(format_results(&results))
     }
 
     fn function_name(&self) -> String {
@@ -76,12 +72,12 @@ impl Tool for SearchTool {
     const NAME: &'static str = "search";
 
     fn from_config(conf: &ToolConfig) -> Result<Self> {
-        Ok(Self::new(&conf.api_base_url))
+        Ok(Self::new(conf.db.clone(), &conf.index_path))
     }
 }
 
 impl SearchTool {
-    pub fn new(api_base_url: &str) -> Self {
+    pub fn new(db: Connection, index_path: &str) -> Self {
         let function = Function {
             name: Self::NAME.to_string(),
             description: String::from(
@@ -118,14 +114,9 @@ impl SearchTool {
         Self {
             r#type: ToolType::Function,
             function,
-            api_base_url: api_base_url.to_string(),
+            db,
+            index_path: index_path.to_string(),
         }
-    }
-}
-
-impl Default for SearchTool {
-    fn default() -> Self {
-        Self::new("http://localhost:2222")
     }
 }
 
@@ -180,63 +171,97 @@ fn format_result(result: &SearchResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use crate::core::db::{async_db, initialize_db};
+    use hq_search::{DocumentType, Index, IndexDocument, recreate_index};
+    use tokio_rusqlite::rusqlite;
+
+    /// A tool backed by a migrated, empty database. Enough to exercise
+    /// argument parsing and query validation.
+    async fn test_tool() -> (tempfile::TempDir, SearchTool) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = async_db(dir.path().to_str().unwrap()).await.unwrap();
+        db.call(|conn| {
+            initialize_db(conn).expect("Failed to migrate db");
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await
+        .unwrap();
+
+        let tool = SearchTool::new(db, dir.path().join("index").to_str().unwrap());
+        (dir, tool)
+    }
+
+    /// A tool backed by a database and a full-text index containing one task.
+    async fn indexed_tool() -> (tempfile::TempDir, SearchTool) {
+        let (dir, tool) = test_tool().await;
+
+        std::fs::create_dir_all(&tool.index_path).unwrap();
+        recreate_index(&tool.index_path).await;
+
+        let index = Index::open(
+            tool.db.clone(),
+            &tool.index_path,
+            dir.path().join("embeddings"),
+        );
+        index
+            .upsert(
+                &[IndexDocument {
+                    id: "note-123".to_string(),
+                    document_type: DocumentType::Task,
+                    title: "Complete project report".to_string(),
+                    category: "work".to_string(),
+                    body: "Write the final report for the quarterly project review".to_string(),
+                    tags: Some("urgent,priority".to_string()),
+                    status: Some("todo".to_string()),
+                    scheduled: None,
+                    deadline: Some("2026-02-06".to_string()),
+                    closed: None,
+                    date: None,
+                    file_name: "work.org".to_string(),
+                    chat_role: None,
+                    embed: false,
+                }],
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+
+        (dir, tool)
+    }
 
     #[tokio::test]
-    async fn it_searches_with_aql() -> Result<()> {
-        let mut server = mockito::Server::new_async().await;
-        let url = server.url();
+    async fn it_searches_with_aql() {
+        let (_dir, tool) = indexed_tool().await;
 
-        let mock_resp = fs::read_to_string("./tests/data/tasks_search_response.json").unwrap();
-        let _mock = server
-            .mock(
-                "GET",
-                mockito::Matcher::Regex(r"/api/notes/search\?query=.*".into()),
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(mock_resp)
-            .create();
+        let output = tool
+            .call(r#"{"query":"type:task status:todo deadline:<=2026-02-06"}"#)
+            .await
+            .expect("search should succeed");
 
-        let tool = SearchTool::new(&url);
-        let result = tool
-            .call(r#"{"query":"type:task status:todo deadline:<=2025-01-31"}"#)
-            .await;
-
-        let output = result.expect("search should succeed");
         assert!(output.contains("## Complete project report"));
         assert!(output.contains("id: note-123"));
         assert!(output.contains("type: task"));
         assert!(output.contains("status: todo"));
-
-        Ok(())
+        assert!(output.contains("deadline: 2026-02-06"));
     }
 
     #[tokio::test]
-    async fn it_reports_no_results() -> Result<()> {
-        let mut server = mockito::Server::new_async().await;
-        let url = server.url();
+    async fn it_reports_no_results() {
+        let (_dir, tool) = indexed_tool().await;
 
-        let _mock = server
-            .mock(
-                "GET",
-                mockito::Matcher::Regex(r"/api/notes/search\?query=.*".into()),
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"raw_query": "", "parsed_query": "", "results": []}"#)
-            .create();
+        let output = tool
+            .call(r#"{"query":"nonexistentterm123"}"#)
+            .await
+            .expect("search should succeed");
 
-        let tool = SearchTool::new(&url);
-        let output = tool.call(r#"{"query":"nothing-matches"}"#).await?;
         assert_eq!(output, "No results found.");
-
-        Ok(())
     }
 
     #[tokio::test]
     async fn it_returns_recoverable_error_for_unknown_field() {
-        let tool = SearchTool::default();
+        let (_dir, tool) = test_tool().await;
+
         let err = tool
             .call(r#"{"query":"titel:rust"}"#)
             .await
@@ -251,7 +276,8 @@ mod tests {
 
     #[tokio::test]
     async fn it_returns_recoverable_error_for_bad_date() {
-        let tool = SearchTool::default();
+        let (_dir, tool) = test_tool().await;
+
         let err = tool
             .call(r#"{"query":"deadline:>tomorrow"}"#)
             .await
@@ -263,38 +289,8 @@ mod tests {
         assert!(recoverable.message.contains("invalid date `tomorrow`"));
     }
 
-    #[tokio::test]
-    async fn it_returns_recoverable_error_for_server_rejection() -> Result<()> {
-        let mut server = mockito::Server::new_async().await;
-        let url = server.url();
-
-        let _mock = server
-            .mock(
-                "GET",
-                mockito::Matcher::Regex(r"/api/notes/search\?query=.*".into()),
-            )
-            .with_status(400)
-            .with_body("invalid query")
-            .create();
-
-        let tool = SearchTool::new(&url);
-        let err = tool
-            .call(r#"{"query":"meeting"}"#)
-            .await
-            .expect_err("400 should fail");
-
-        let recoverable = err
-            .downcast_ref::<RecoverableToolError>()
-            .expect("error should be recoverable");
-        assert!(recoverable.message.contains("invalid query"));
-
-        Ok(())
-    }
-
     #[test]
-    fn test_search_default() {
-        let tool = SearchTool::default();
-        assert_eq!(tool.api_base_url, "http://localhost:2222");
-        assert_eq!(tool.function_name(), "search");
+    fn test_search_name() {
+        assert_eq!(SearchTool::NAME, "search");
     }
 }

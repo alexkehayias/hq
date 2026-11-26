@@ -26,6 +26,7 @@ fn loop_supervisor_config(conf: &ToolConfig) -> LoopSupervisorConfig {
         model: conf.model.clone(),
         decision_model: conf.decision_model.clone(),
         storage_path: conf.storage_path.clone(),
+        index_path: conf.index_path.clone(),
         vapid_key_path: conf.vapid_key_path.clone(),
     }
 }
@@ -382,6 +383,7 @@ mod tests {
         .unwrap();
 
         let storage_path = dir.path().to_str().unwrap().to_string();
+        let index_path = dir.path().join("index").to_str().unwrap().to_string();
         let config = LoopSupervisorConfig {
             db,
             api_base_url: "http://localhost".to_string(),
@@ -390,6 +392,7 @@ mod tests {
             model: "test-model".to_string(),
             decision_model: "test-model".to_string(),
             storage_path,
+            index_path,
             vapid_key_path: dir.path().join("vapid").to_str().unwrap().to_string(),
         };
         (dir, config)

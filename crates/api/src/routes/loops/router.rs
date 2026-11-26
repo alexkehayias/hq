@@ -96,6 +96,7 @@ async fn update_loop(
         let AppConfig {
             note_search_api_url,
             storage_path,
+            index_path,
             openai_api_hostname,
             openai_api_key,
             openai_model,
@@ -112,6 +113,7 @@ async fn update_loop(
             model: openai_model.clone(),
             decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
+            index_path: index_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };
         (state.db.clone(), config)

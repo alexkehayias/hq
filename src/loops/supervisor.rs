@@ -49,6 +49,7 @@ pub struct LoopSupervisorConfig {
     pub model: String,
     pub decision_model: String,
     pub storage_path: String,
+    pub index_path: String,
     pub vapid_key_path: String,
 }
 
@@ -164,6 +165,7 @@ async fn run_loop(
         db: config.db.clone(),
         api_base_url: config.api_base_url.clone(),
         storage_path: config.storage_path.clone(),
+        index_path: config.index_path.clone(),
         vapid_key_path: config.vapid_key_path.clone(),
         session_id: record.id.clone(),
         notification_url: None,
@@ -281,6 +283,7 @@ mod tests {
         .unwrap();
 
         let storage_path = dir.path().to_str().unwrap().to_string();
+        let index_path = dir.path().join("index").to_str().unwrap().to_string();
         let config = LoopSupervisorConfig {
             db,
             api_base_url: "http://localhost".to_string(),
@@ -289,6 +292,7 @@ mod tests {
             model: "test-model".to_string(),
             decision_model: "test-model".to_string(),
             storage_path,
+            index_path,
             vapid_key_path: dir.path().join("vapid").to_str().unwrap().to_string(),
         };
         (dir, config)

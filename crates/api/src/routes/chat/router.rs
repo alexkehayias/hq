@@ -331,6 +331,7 @@ async fn chat_handler(
             model: openai_model.clone(),
             decision_model: openai_decision_model.clone(),
             storage_path: storage_path.clone(),
+            index_path: index_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
         };
 
@@ -344,6 +345,7 @@ async fn chat_handler(
             db: db.clone(),
             api_base_url: note_search_api_url.clone(),
             storage_path: storage_path.clone(),
+            index_path: index_path.clone(),
             vapid_key_path: vapid_key_path.clone(),
             session_id: workspace_id.clone(),
             notification_url: Some(notification_url.clone()),
@@ -356,7 +358,7 @@ async fn chat_handler(
         let code_mode_tool = CodeModeTool::from_config(&tool_config)?;
 
         (
-            SearchTool::new(note_search_api_url),
+            SearchTool::new(db.clone(), index_path),
             WebSearchTool::new(note_search_api_url),
             EmailUnreadTool::new(note_search_api_url),
             EmailSearchTool::new(note_search_api_url),

@@ -548,6 +548,7 @@ mod tests {
             db,
             api_base_url: "http://localhost:2222".to_string(),
             storage_path: dir.path().to_string_lossy().to_string(),
+            index_path: dir.path().join("index").to_string_lossy().to_string(),
             vapid_key_path: String::new(),
             session_id: "test-session".to_string(),
             notification_url: None,

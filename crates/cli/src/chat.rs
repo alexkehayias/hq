@@ -15,6 +15,7 @@ use hq::openai::{BoxedToolCall, Message, Role};
 
 pub async fn run(
     vec_db_path: &str,
+    index_path: &str,
     note_search_api_url: Option<&str>,
     api_hostname: &str,
     api_key: &str,
@@ -27,11 +28,7 @@ pub async fn run(
     let mut rl = DefaultEditor::new().expect("Editor failed");
 
     // Create tools
-    let search_tool = if let Some(url) = note_search_api_url {
-        SearchTool::new(url)
-    } else {
-        SearchTool::default()
-    };
+    let search_tool = SearchTool::new(db.clone(), index_path);
 
     let email_unread_tool = if let Some(url) = note_search_api_url {
         EmailUnreadTool::new(url)

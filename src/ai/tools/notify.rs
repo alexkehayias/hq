@@ -194,6 +194,7 @@ mod tests {
             db,
             api_base_url: "http://localhost:2222".to_string(),
             storage_path: "/tmp".to_string(),
+            index_path: "/tmp/index".to_string(),
             vapid_key_path: "/tmp/fake-vapid.pem".to_string(),
             session_id: "loop-workspace".to_string(),
             notification_url: notification_url.map(str::to_string),

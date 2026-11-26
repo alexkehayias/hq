@@ -367,6 +367,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
             let note_search_api_url = env::var("HQ_NOTE_SEARCH_API_URL").ok();
             chat::run(
                 &vec_db_path,
+                &index_path,
                 note_search_api_url.as_deref(),
                 &api_hostname,
                 &api_key,
@@ -406,6 +407,7 @@ async fn run_dispatch(cli: Cli, storage_path: &str) -> Result<()> {
                     model: &model,
                     decision_model: &decision_model,
                     storage_path,
+                    index_path: &index_path,
                     vapid_key_path: &vapid_key_path,
                     title: &title,
                     channels: &channel,
