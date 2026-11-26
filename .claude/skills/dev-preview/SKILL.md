@@ -17,11 +17,17 @@ Starts the hq development server via `run.sh` bound to the machine's Tailscale I
 
 ## Steps
 
-1. **Run `./bin/run.sh`** — that's all that's needed. The script handles the Tailscale IP, port selection, Tailwind CSS build, Biome checks, server startup, and readiness polling.
+1. **Run `./bin/run.sh` in the background.** The script handles the Tailscale IP, port selection, Tailwind CSS build, Biome checks, server startup, and readiness polling.
 
-   Run it in the background so Claude can continue working.
+2. **Wait for the readiness line before reporting anything.** The script prints
+   ```
+   Server ready: http://<host>:<port>
+   ```
+   only after the server accepts connections. Do not report a URL while the log still shows `Compiling` or only `Starting server on ...` — that URL is not live yet.
 
-2. **Report the preview URL** — check `$HQ_HOST` and `$HQ_PORT` (defaults: `localhost`, `2222`) and report:
+   `run.sh` waits up to 5 minutes for the port to open, which covers a cold build of the workspace. If the output ends without `Server ready` anyway, run `./bin/run.sh` again — the build is now warm and the server starts well inside the timeout.
+
+3. **Report the preview URL** from the `Server ready:` line (or from `$HQ_HOST` and `$HQ_PORT`, defaults: `localhost`, `2222`):
    ```
    Preview URL: http://<host>:<port>
    ```
