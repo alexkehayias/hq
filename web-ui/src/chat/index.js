@@ -671,14 +671,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       const formData = new FormData();
+      formData.append('session_id', sessionId);
       for (const file of files) {
         formData.append('file', file, file.name);
       }
 
-      const response = await fetch(
-        `/api/chat/${encodeURIComponent(sessionId)}/workspace`,
-        { method: 'POST', body: formData },
-      );
+      const response = await fetch('/api/files/workspace', {
+        method: 'POST',
+        body: formData,
+      });
       if (!response.ok) {
         throw new Error(
           (await response.text()) || `Upload failed (${response.status})`,

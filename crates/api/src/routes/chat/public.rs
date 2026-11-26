@@ -117,17 +117,3 @@ pub struct WorkspaceFileResponse {
     /// True when the file was larger than the preview limit.
     pub truncated: bool,
 }
-
-#[derive(Serialize)]
-pub struct WorkspaceUploadResponse {
-    pub files: Vec<WorkspaceUploadedFile>,
-}
-
-#[derive(Serialize)]
-pub struct WorkspaceUploadedFile {
-    /// Path relative to the session workspace, e.g. `files/notes.md`.
-    pub path: String,
-    /// Path as seen by the agent's bash sandbox, e.g. `/files/notes.md`.
-    pub sandbox_path: String,
-    pub size: u64,
-}

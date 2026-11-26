@@ -59,6 +59,18 @@ mod tests {
             .unwrap()
     }
 
+    fn workspace_upload_request(body: Vec<u8>) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/files/workspace")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .body(Body::from(body))
+            .unwrap()
+    }
+
     fn delete_request(session_id: &str, filename: &str) -> Request<Body> {
         Request::builder()
             .method("DELETE")
@@ -202,6 +214,133 @@ mod tests {
         let response = app.oneshot(upload_request(body)).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(!files_dir(&storage, session_id).join("notes.txt").exists());
+    }
+
+    /// Text/code files uploaded from the workspace panel are stored in the
+    /// same `files/` directory as image attachments.
+    #[tokio::test]
+    #[serial]
+    async fn it_stores_uploaded_text_file() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let session_id = "session-text";
+
+        let body = multipart_body(&[
+            ("session_id", None, session_id.as_bytes()),
+            ("file", Some("notes.md"), b"# hello\n"),
+        ]);
+
+        let response = app.oneshot(workspace_upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = files_dir(&storage, session_id).join("notes.md");
+        assert_eq!(std::fs::read_to_string(stored).unwrap(), "# hello\n");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+        let file = &json["files"][0];
+        assert_eq!(file["filename"], "notes.md");
+        assert_eq!(file["path"], "files/notes.md");
+        assert_eq!(file["sandbox_path"], "/files/notes.md");
+        assert_eq!(file["content_type"], "text/plain; charset=utf-8");
+        assert_eq!(file["size"], 8);
+    }
+
+    /// Extensionless text files (README, Makefile) are accepted by the
+    /// workspace upload endpoint.
+    #[tokio::test]
+    #[serial]
+    async fn it_accepts_extensionless_text_file() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let session_id = "session-text-no-ext";
+
+        let body = multipart_body(&[
+            ("session_id", None, session_id.as_bytes()),
+            ("file", Some("README"), b"hello\n"),
+        ]);
+
+        let response = app.oneshot(workspace_upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = files_dir(&storage, session_id).join("README");
+        assert_eq!(std::fs::read_to_string(stored).unwrap(), "hello\n");
+    }
+
+    /// Binary workspace uploads are rejected before anything is written.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_binary_workspace_upload() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let session_id = "session-workspace-binary";
+
+        let body = multipart_body(&[
+            ("session_id", None, session_id.as_bytes()),
+            ("file", Some("blob.bin"), b"\x00\x01\x02"),
+        ]);
+
+        let response = app.oneshot(workspace_upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert!(!files_dir(&storage, session_id).join("blob.bin").exists());
+    }
+
+    /// Hidden filenames are rejected because the workspace listing hides
+    /// dotfiles, so the upload would silently disappear from the panel.
+    #[tokio::test]
+    #[serial]
+    async fn it_rejects_hidden_workspace_upload() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let session_id = "session-workspace-hidden";
+
+        let body = multipart_body(&[
+            ("session_id", None, session_id.as_bytes()),
+            ("file", Some(".env"), b"SECRET=1\n"),
+        ]);
+
+        let response = app.oneshot(workspace_upload_request(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!files_dir(&storage, session_id).join(".env").exists());
+    }
+
+    /// A second workspace upload with the same name is stored beside the first
+    /// instead of overwriting it.
+    #[tokio::test]
+    #[serial]
+    async fn it_renames_colliding_workspace_uploads() {
+        let (app, state) = test_app_with_state().await;
+        let storage = state.config.storage_path.clone();
+        let session_id = "session-workspace-collision";
+
+        for (content, expected_path) in [
+            ("first\n", "files/notes.md"),
+            ("second\n", "files/notes-1.md"),
+        ] {
+            let body = multipart_body(&[
+                ("session_id", None, session_id.as_bytes()),
+                ("file", Some("notes.md"), content.as_bytes()),
+            ]);
+            let response = app
+                .clone()
+                .oneshot(workspace_upload_request(body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let json: serde_json::Value =
+                serde_json::from_str(&body_to_string(response.into_body()).await).unwrap();
+            assert_eq!(json["files"][0]["path"], expected_path);
+        }
+
+        let dir = files_dir(&storage, session_id);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("notes.md")).unwrap(),
+            "first\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("notes-1.md")).unwrap(),
+            "second\n"
+        );
     }
 
     /// Directory components in the filename are stripped so the upload cannot
